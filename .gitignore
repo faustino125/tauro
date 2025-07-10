@@ -1,0 +1,12 @@
+# Ignorar archivos de log
+*.log
+
+# Ignorar directorios de compilación
+/build/
+/dist/
+
+__pycache__/
+
+# Ignorar archivos de configuración de IDE
+.idea/
+*.sublime-workspace

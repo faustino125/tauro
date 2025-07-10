@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  tauro-container:
+    image: tauro:latest
+    container_name: tauro-container
+    ports:
+      - "8888:8888"  # Jupyter
+      - "8080:8080"  # General web apps
+      - "4040:4040"  # Spark UI
+      - "8000:8000"  # API (nuevo puerto)
+    volumes:
+      - .:/tauro
+    environment:
+      - API_PORT=8000
+      - PYTHONUNBUFFERED=1  # Mejora logging de Python
+    working_dir: /tauro
+    tty: true
+    stdin_open: true
+    networks:
+      - tauro-network
+
+networks:
+  tauro-network:
+    driver: bridge
