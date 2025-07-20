@@ -211,9 +211,9 @@ class PipelineExecutor:
                 "context_type": type(self.context).__name__,
                 "has_path_manager": self.path_manager is not None,
                 "available_pipelines": self.list_pipelines(),
-                "config_dir": str(self.path_manager.config_dir)
-                if self.path_manager
-                else None,
+                "config_dir": (
+                    str(self.path_manager.config_dir) if self.path_manager else None
+                ),
             }
 
             if hasattr(self.context, "global_settings"):

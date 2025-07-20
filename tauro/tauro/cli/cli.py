@@ -1,3 +1,14 @@
+"""Copyright (c) 2025 Tauro. All rights reserved.
+
+This software is the proprietary intellectual property of Tauro and is
+protected by copyright laws and international treaties. Any unauthorized
+reproduction, distribution, modification, or other use of this software
+is strictly prohibited without the express prior written consent of Tauro.
+
+Licensed under a proprietary license with restricted commercial use. See
+the license agreement for details.
+"""
+
 import argparse
 import sys
 import traceback

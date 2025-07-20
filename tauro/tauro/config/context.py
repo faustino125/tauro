@@ -10,7 +10,7 @@ from tauro.config.validators import ConfigValidator
 
 
 class Context:
-    """Context for managing configuration-based pipelines."""
+    """Context for managing configuration-based pipelines with enhanced ML support."""
 
     REQUIRED_GLOBAL_SETTINGS = ["input_path", "output_path", "mode"]
 
@@ -35,8 +35,9 @@ class Context:
             output_config,
         )
 
-        self.spark = SparkSessionFactory.create_session(self.execution_mode)
-
+        self.spark = SparkSessionFactory.create_session(
+            self.execution_mode, ml_config=self._get_spark_ml_config()
+        )
         self._process_configurations()
 
         self._pipeline_manager = PipelineManager(
@@ -78,7 +79,8 @@ class Context:
             self._validator.validate_type(config, dict, config_name)
             return config
         except Exception as e:
-            logger.error(f"Error loading {config_name}: {str(e)}")
+            source_info = source if isinstance(source, str) else type(source).__name__
+            logger.error(f"Error loading {config_name} from {source_info}: {str(e)}")
             raise
 
     def _process_configurations(self) -> None:
@@ -87,12 +89,23 @@ class Context:
         self.input_path = self.global_settings.get("input_path", "")
         self.output_path = self.global_settings.get("output_path", "")
 
+        self.project_name = self.global_settings.get("project_name", "")
+        self.default_model_version = self.global_settings.get(
+            "default_model_version", "latest"
+        )
+        self.default_hyperparams = self.global_settings.get("default_hyperparams", {})
+
         self._interpolate_input_paths()
+
+    def _get_spark_ml_config(self) -> Dict[str, Any]:
+        """Extract Spark ML configuration from global settings."""
+        return self.global_settings.get("spark_config", {})
 
     def _interpolate_input_paths(self) -> None:
         """Interpolate variables in input data paths."""
-        variables = {"input_path": self.input_path}
+        variables = {"input_path": self.input_path, "output_path": self.output_path}
         self._interpolator.interpolate_config_paths(self.input_config, variables)
+        self._interpolator.interpolate_config_paths(self.output_config, variables)
 
     @property
     def pipelines(self) -> Dict[str, Dict[str, Any]]:
@@ -106,6 +119,37 @@ class Context:
     def list_pipeline_names(self) -> List[str]:
         """Get a list of all pipeline names."""
         return self._pipeline_manager.list_pipeline_names()
+
+    def get_pipeline_ml_config(self, pipeline_name: str) -> Dict[str, Any]:
+        """Get ML-specific configuration for a pipeline."""
+        pipeline = self.pipelines_config.get(pipeline_name, {})
+        return {
+            "model_version": pipeline.get("model_version", self.default_model_version),
+            "hyperparams": self._merge_hyperparams(pipeline.get("hyperparams", {})),
+            "description": pipeline.get("description", ""),
+        }
+
+    def get_node_ml_config(self, node_name: str) -> Dict[str, Any]:
+        """Get ML-specific configuration for a node."""
+        node = self.nodes_config.get(node_name, {})
+        return {
+            "hyperparams": node.get("hyperparams", {}),
+            "metrics": node.get("metrics", []),
+            "description": node.get("description", ""),
+        }
+
+    def _merge_hyperparams(
+        self, pipeline_hyperparams: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Merge default hyperparams with pipeline-specific ones."""
+        merged = self.default_hyperparams.copy()
+        merged.update(pipeline_hyperparams)
+        return merged
+
+    @property
+    def is_ml_layer(self) -> bool:
+        """Check if this is an ML layer."""
+        return self.layer == "ml"
 
     @classmethod
     def from_json_config(

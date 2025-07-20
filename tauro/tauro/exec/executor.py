@@ -11,14 +11,14 @@ from tauro.io.output import OutputManager
 
 
 class PipelineExecutor:
-    """Executes data pipelines based on the layer type (ML or standard)."""
+    """Enhanced executor for data pipelines with advanced ML capabilities."""
 
     def __init__(self, context: Context):
         """Initialize the pipeline executor with application context."""
         self.context = context
         self.input_loader = InputLoader(context)
         self.output_manager = OutputManager(context)
-        self.is_ml_layer = context.layer == "ml"
+        self.is_ml_layer = context.is_ml_layer
         self.max_workers = context.global_settings.get("max_parallel_nodes", 4)
 
         self.node_executor = NodeExecutor(
@@ -35,7 +35,7 @@ class PipelineExecutor:
         model_version: Optional[str] = None,
         hyperparams: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Main entry point for executing pipelines of any type."""
+        """Main entry point for executing pipelines with enhanced ML support."""
         PipelineValidator.validate_required_params(
             pipeline_name,
             start_date,
@@ -50,7 +50,9 @@ class PipelineExecutor:
         start_date = start_date or self.context.global_settings.get("start_date")
         end_date = end_date or self.context.global_settings.get("end_date")
 
-        ml_info = self._prepare_ml_info(model_version, hyperparams)
+        ml_info = self._prepare_enhanced_ml_info(
+            pipeline_name, model_version, hyperparams
+        )
 
         self._log_pipeline_start(pipeline_name, ml_info)
 
@@ -63,32 +65,68 @@ class PipelineExecutor:
             raise ValueError(f"Pipeline '{pipeline_name}' not found")
         return pipeline
 
-    def _prepare_ml_info(
-        self, model_version: Optional[str], hyperparams: Optional[Dict[str, Any]]
+    def _prepare_enhanced_ml_info(
+        self,
+        pipeline_name: str,
+        model_version: Optional[str],
+        hyperparams: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Prepare ML-specific information if this is an ML layer."""
+        """Prepare enhanced ML-specific information."""
         ml_info = {}
 
         if self.is_ml_layer:
-            model_version = model_version or self.context.global_settings.get(
-                "default_model_version", "latest"
+            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
+
+            final_model_version = (
+                model_version
+                or pipeline_ml_config.get("model_version")
+                or self.context.default_model_version
             )
-            hyperparams = hyperparams or {}
 
-            if not hyperparams:
+            final_hyperparams = {}
+            final_hyperparams.update(self.context.default_hyperparams)
+            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
+            if hyperparams:
+                final_hyperparams.update(hyperparams)
+
+            ml_info = {
+                "model_version": final_model_version,
+                "hyperparams": final_hyperparams,
+                "pipeline_config": pipeline_ml_config,
+                "project_name": self.context.project_name,
+                "is_experiment": self._is_experiment_pipeline(pipeline_name),
+            }
+
+            if not final_hyperparams:
                 logger.warning("Executing ML pipeline without hyperparameters")
-
-            ml_info = {"model_version": model_version, "hyperparams": hyperparams}
+            else:
+                logger.info(f"ML hyperparameters: {final_hyperparams}")
 
         return ml_info
 
+    def _is_experiment_pipeline(self, pipeline_name: str) -> bool:
+        """Check if this is an experimentation pipeline."""
+        pipeline_config = self.context.pipelines_config.get(pipeline_name, {})
+        return (
+            "experiment" in pipeline_name.lower() or "tuning" in pipeline_name.lower()
+        )
+
     def _log_pipeline_start(self, pipeline_name: str, ml_info: Dict[str, Any]) -> None:
-        """Log the start of pipeline execution."""
+        """Log the start of pipeline execution with enhanced ML information."""
         if self.is_ml_layer:
-            logger.info(
-                f"Running ML pipeline '{pipeline_name}' with model version: "
-                f"{ml_info['model_version']}"
-            )
+            logger.info("=" * 60)
+            logger.info(f"🚀 Starting ML Pipeline: '{pipeline_name}'")
+            logger.info(f"📦 Project: {ml_info.get('project_name', 'Unknown')}")
+            logger.info(f"🏷️  Model Version: {ml_info['model_version']}")
+
+            if ml_info.get("is_experiment"):
+                logger.info("🧪 Experiment Mode: ENABLED")
+
+            pipeline_desc = ml_info.get("pipeline_config", {}).get("description", "")
+            if pipeline_desc:
+                logger.info(f"📋 Description: {pipeline_desc}")
+
+            logger.info("=" * 60)
         else:
             logger.info(f"Running standard pipeline '{pipeline_name}'")
 

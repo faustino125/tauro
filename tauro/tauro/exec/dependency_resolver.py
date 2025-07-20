@@ -66,7 +66,9 @@ class DependencyResolver:
         if len(sorted_nodes) != len(all_nodes):
             remaining = all_nodes - set(sorted_nodes)
             logger.error(f"Circular dependency detected involving nodes: {remaining}")
-            return []
+            raise ValueError(
+                f"Circular dependency detected in the pipeline. Involved nodes: {remaining}"
+            )
 
         return sorted_nodes
 

@@ -2,6 +2,7 @@ import importlib.util
 import json
 import sys
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Union
 
@@ -64,12 +65,14 @@ class PythonConfigLoader(ConfigLoader):
     """Loader for Python module configuration files."""
 
     def can_load(self, source: Union[str, Path]) -> bool:
+        """Check if this loader can handle the given source."""
         if isinstance(source, str):
             source = Path(source)
         return source.suffix.lower() == ".py"
 
-    def load(self, source: Union[str, Path]) -> Dict[str, Any]:
-        path = Path(source)
+    @lru_cache(maxsize=32)
+    def _load_module(self, path: Path):
+        """Cached module loader."""
         module_name = path.stem
         spec = importlib.util.spec_from_file_location(module_name, path)
 
@@ -83,6 +86,12 @@ class PythonConfigLoader(ConfigLoader):
             spec.loader.exec_module(module)
         except Exception as e:
             raise ConfigLoadError(f"Error executing module {path}: {str(e)}") from e
+
+        return module
+
+    def load(self, source: Union[str, Path]) -> Dict[str, Any]:
+        path = Path(source)
+        module = self._load_module(path)
 
         if not hasattr(module, "config"):
             raise ConfigLoadError(f"Python module {path} must define 'config' variable")

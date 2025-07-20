@@ -55,6 +55,8 @@ class PipelineValidator:
         if hasattr(result_df, "schema") and hasattr(result_df.schema, "fields"):
             if not result_df.schema.fields:
                 raise ValueError("Spark DataFrame schema is empty - no fields defined")
+            if result_df.rdd.isEmpty():
+                logger.warning("Spark DataFrame has no rows")
             return
 
         if hasattr(result_df, "columns") and hasattr(result_df, "empty"):

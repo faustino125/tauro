@@ -1,19 +1,32 @@
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0 # Usa la última versión estable
     hooks:
-    -   id: check-added-large-files
-    -   id: end-of-file-fixer
-    -   id: trailing-whitespace
--   repo: https://github.com/PyCQA/isort
-    rev: 5.13.2 # Usa la versión más reciente
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: debug-statements
+      - id: requirements-txt-fixer
+      - id: detect-private-key
+      - id: check-added-large-files
+  - repo: https://github.com/psf/black
+    rev: 24.4.2 # Usa la última versión estable
     hooks:
-    -   id: isort
--   repo: https://github.com/psf/black
-    rev: 24.4.2 # Usa la versión más reciente
+      - id: black
+        language_version: python3
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.0.0 # Usa la última versión estable
     hooks:
-    -   id: black
--   repo: https://github.com/PyCQA/flake8
-    rev: 7.1.0 # Usa la versión más reciente
+      - id: flake8
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2 # Usa la última versión estable
     hooks:
-    -   id: flake8
+      - id: isort
+        name: isort (python)
+        args: ["--profile", "black"] # Opcional: para que isort sea compatible con black
+  # Opcional: Si usas typings y quieres un linter para ello
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0 # Usa la última versión estable
+    hooks:
+      - id: mypy
+        args: [] # Puedes añadir argumentos específicos si los necesitas, como --ignore-missing-imports

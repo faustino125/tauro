@@ -15,8 +15,11 @@ class ConfigValidator:
         """Validate that all required keys are present in the configuration."""
         missing_keys = [key for key in required_keys if key not in config]
         if missing_keys:
+            available_keys = list(config.keys())[:10]
             raise ConfigValidationError(
-                f"Missing required keys in {config_name}: {', '.join(missing_keys)}"
+                f"Missing required keys in {config_name}: {', '.join(missing_keys)}\n"
+                f"Available keys: {', '.join(available_keys)}"
+                f"{'...' if len(config) > 10 else ''}"
             )
 
     @staticmethod
