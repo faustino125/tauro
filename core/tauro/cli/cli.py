@@ -27,6 +27,7 @@ from tauro.cli.core import (
     ValidationError,
 )
 from tauro.cli.execution import ContextInitializer, PipelineExecutor
+from tauro.cli.template import handle_template_command
 
 
 class ArgumentParser:
@@ -39,14 +40,14 @@ class ArgumentParser:
             prog="tauro",
             description="Tauro - Scalable Data Pipeline Execution Framework",
             epilog="""
-Examples:
-  tauro --env dev --pipeline data_processing
-  tauro --env prod --pipeline etl --node transform_data
-  tauro --env dev --pipeline test --layer-name golden_layer
-  tauro --env dev --pipeline clustering --use-case clustering_analysis
-  tauro --list-configs
-  tauro --env dev --pipeline demo --interactive
-  tauro --env dev --pipeline test --config-type yaml --dry-run
+            Examples:
+            # Pipeline execution
+            tauro --env dev --pipeline data_processing
+            
+            # Template generation
+            tauro --template medallion_basic --project-name my_project
+            tauro --template-interactive
+            tauro --list-templates
             """,
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
@@ -99,7 +100,6 @@ Examples:
         )
         parser.add_argument("-q", "--quiet", action="store_true", help="Quiet mode")
 
-        # Execution modes
         parser.add_argument(
             "--validate-only", action="store_true", help="Validate config only"
         )
@@ -110,8 +110,35 @@ Examples:
             "--clear-cache", action="store_true", help="Clear config cache"
         )
 
-        # Version
         parser.add_argument("--version", action="version", version="Tauro CLI v2.1.0")
+
+        template_group = parser.add_argument_group("Template Generation")
+        template_group.add_argument(
+            "--template",
+            choices=["medallion_basic", "medallion_ml", "ml_training"],
+            help="Generate project template",
+        )
+        template_group.add_argument("--project-name", help="Project name for template")
+        template_group.add_argument(
+            "--output-path", help="Output directory for generated project"
+        )
+        template_group.add_argument(
+            "--format",
+            choices=["yaml", "json", "dsl"],
+            default="yaml",
+            help="Configuration file format",
+        )
+        template_group.add_argument(
+            "--no-sample-code", action="store_true", help="Skip sample code generation"
+        )
+        template_group.add_argument(
+            "--list-templates", action="store_true", help="List available templates"
+        )
+        template_group.add_argument(
+            "--template-interactive",
+            action="store_true",
+            help="Interactive template generation",
+        )
 
         return parser
 
@@ -280,11 +307,18 @@ class TauroCLI:
             parsed_args = parser.parse_args(args)
 
             LoggerManager.setup(
-                level=getattr(parsed_args, "log_level", "INFO"),
-                log_file=getattr(parsed_args, "log_file", None),
-                verbose=getattr(parsed_args, "verbose", False),
-                quiet=getattr(parsed_args, "quiet", False),
+                level=parsed_args.log_level,
+                log_file=parsed_args.log_file,
+                verbose=parsed_args.verbose,
+                quiet=parsed_args.quiet,
             )
+
+            if (
+                parsed_args.template
+                or parsed_args.list_templates
+                or parsed_args.template_interactive
+            ):
+                return handle_template_command(parsed_args)
 
             # Handle special modes first
             special_handler = SpecialModeHandler()

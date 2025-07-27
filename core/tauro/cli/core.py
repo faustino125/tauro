@@ -95,6 +95,13 @@ class CLIConfig:
     dry_run: bool = False
     verbose: bool = False
     quiet: bool = False
+    template: Optional[str] = None
+    project_name: Optional[str] = None
+    output_path: Optional[str] = None
+    format: str = "yaml"
+    no_sample_code: bool = False
+    list_templates: bool = False
+    template_interactive: bool = False
 
 
 class ConfigLoaderProtocol(Protocol):
@@ -119,13 +126,17 @@ class SecurityValidator:
             resolved_base = base_path.resolve().absolute()
             resolved_target = target_path.resolve().absolute()
 
-            if not resolved_target.is_relative_to(resolved_base):
+            try:
+                resolved_target.relative_to(resolved_base)
+            except ValueError:
                 raise SecurityError(
                     f"Path traversal attempt blocked: {resolved_target}"
                 )
 
             return resolved_target
         except Exception as e:
+            if isinstance(e, SecurityError):
+                raise
             raise SecurityError(f"Path validation failed: {e}") from e
 
 
@@ -170,7 +181,6 @@ class LoggerManager:
 
         console_level = "ERROR" if quiet else "DEBUG" if verbose else level.upper()
 
-        # Console handler
         logger.add(
             sys.stderr,
             format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>tauro</cyan> | <level>{message}</level>",
@@ -178,7 +188,6 @@ class LoggerManager:
             level=console_level,
         )
 
-        # File handler
         log_path = Path(log_file) if log_file else Path("logs/tauro.log")
         log_path.parent.mkdir(parents=True, exist_ok=True)
 

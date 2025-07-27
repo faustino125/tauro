@@ -59,13 +59,13 @@ graph TD
     F --> G[Execution Planning]
     G --> H[Parallel Node Execution]
     H --> I[Output Management]
-    
+
     subgraph "Configuration Loading"
         B --> B1[Auto-discovery]
         C --> C1[Multi-format Support]
         C --> C2[Security Validation]
     end
-    
+
     subgraph "Execution Engine"
         F --> F1[Topological Sort]
         G --> G1[Thread Pool Management]
@@ -309,13 +309,13 @@ extract_data:
   module: "pipelines.extraction.extractors"
   function: "extract_customer_data"
   dependencies: []
-  
+
 transform_data:
   module: "pipelines.transformation.transformers"
   function: "transform_customer_features"
   dependencies:
     - extract_data
-    
+
 model_training:
   module: "ml.training.trainers"
   function: "train_classification_model"
@@ -383,29 +383,29 @@ def transform_customer_features(
 ) -> pd.DataFrame:
     """
     Transforma características de clientes.
-    
+
     Args:
         raw_df: DataFrame con datos crudos
         start_date: Fecha de inicio del rango
         end_date: Fecha de fin del rango
-        
+
     Returns:
         DataFrame transformado
     """
     # Filtrar por rango de fechas
     df_filtered = raw_df[
-        (raw_df['date'] >= start_date) & 
+        (raw_df['date'] >= start_date) &
         (raw_df['date'] <= end_date)
     ]
-    
+
     # Aplicar transformaciones
     df_transformed = df_filtered.copy()
     df_transformed['age_group'] = pd.cut(
-        df_transformed['age'], 
-        bins=[0, 25, 45, 65, 100], 
+        df_transformed['age'],
+        bins=[0, 25, 45, 65, 100],
         labels=['young', 'adult', 'middle_age', 'senior']
     )
-    
+
     return df_transformed
 ```
 
@@ -429,11 +429,11 @@ def train_classification_model(
         spark = SparkSession.getActiveSession()
         learning_rate = float(spark.conf.get("ml.hyperparams.learning_rate", "0.01"))
         max_depth = int(spark.conf.get("ml.hyperparams.max_depth", "10"))
-        
+
         # Preparar datos
         X = features_df.drop(['target'], axis=1)
         y = features_df['target']
-        
+
         # Entrenar modelo
         model = RandomForestClassifier(
             max_depth=max_depth,
@@ -441,17 +441,17 @@ def train_classification_model(
             random_state=42
         )
         model.fit(X, y)
-        
+
         # Log métricas
         score = model.score(X, y)
         mlflow.log_metric("accuracy", score)
         mlflow.log_param("max_depth", max_depth)
-        
+
         # Retornar resultados
         predictions = model.predict(X)
         result_df = features_df.copy()
         result_df['predictions'] = predictions
-        
+
         return result_df
 ```
 
@@ -493,17 +493,17 @@ class Context:
         input_config: Union[str, Dict],
         output_config: Union[str, Dict],
     )
-    
+
     @property
     def pipelines(self) -> Dict[str, Dict[str, Any]]
-    
+
     def get_pipeline(self, name: str) -> Optional[Dict[str, Any]]
-    
+
     def list_pipeline_names(self) -> List[str]
-    
+
     @classmethod
     def from_json_config(cls, ...) -> "Context"
-    
+
     @classmethod
     def from_python_dsl(cls, python_module_path: str) -> "Context"
 ```
@@ -521,7 +521,7 @@ class NodeCommand(Command):
         end_date: str,
         node_name: str,
     )
-    
+
     def execute(self) -> Any
 ```
 
@@ -570,12 +570,12 @@ from tauro.config.loaders import ConfigLoader
 class CustomConfigLoader(ConfigLoader):
     def can_load(self, source: Union[str, Path]) -> bool:
         return Path(source).suffix.lower() == ".custom"
-    
+
     def load(self, source: Union[str, Path]) -> Dict[str, Any]:
         # Implementar lógica de carga personalizada
         with open(source, 'r') as f:
             return self.parse_custom_format(f.read())
-    
+
     def parse_custom_format(self, content: str) -> Dict[str, Any]:
         # Lógica de parsing específica
         pass
@@ -610,7 +610,7 @@ class BatchCommand(Command):
     def __init__(self, batch_size: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.batch_size = batch_size
-    
+
     def execute(self) -> Any:
         # Lógica de procesamiento por lotes
         results = []
@@ -662,7 +662,7 @@ from loguru import logger
 def my_transform_function(df, start_date, end_date):
     logger.info(f"Processing {len(df)} records")
     logger.debug(f"Date range: {start_date} to {end_date}")
-    
+
     try:
         result = process_data(df)
         logger.success("Transformation completed successfully")
@@ -679,19 +679,19 @@ def my_transform_function(df, start_date, end_date):
 nodes:
   load_customers:
     dependencies: []
-    
+
   load_transactions:
     dependencies: []
-    
+
   join_customer_transactions:
     dependencies:
       - load_customers
       - load_transactions
-      
+
   calculate_metrics:
     dependencies:
       - join_customer_transactions
-      
+
   generate_report:
     dependencies:
       - calculate_metrics
@@ -710,10 +710,10 @@ def test_dependency_resolution():
         "B": {"dependencies": ["A"]},
         "C": {"dependencies": ["A", "B"]}
     }
-    
+
     dag = DependencyResolver.build_dependency_graph(nodes, configs)
     execution_order = DependencyResolver.topological_sort(dag)
-    
+
     assert execution_order == ["A", "B", "C"]
 
 def test_circular_dependency_detection():
@@ -722,10 +722,10 @@ def test_circular_dependency_detection():
         "A": {"dependencies": ["B"]},
         "B": {"dependencies": ["A"]}
     }
-    
+
     dag = DependencyResolver.build_dependency_graph(nodes, configs)
     execution_order = DependencyResolver.topological_sort(dag)
-    
+
     assert execution_order == []  # Circular dependency detected
 ```
 
@@ -761,7 +761,7 @@ ValueError: Pipeline has circular dependencies - cannot execute
 # Asegurarse de que no hay ciclos en el grafo
 node_A:
   dependencies: [node_B]  # ❌ Si node_B depende de node_A
-  
+
 node_B:
   dependencies: []        # ✅ Corrección
 ```

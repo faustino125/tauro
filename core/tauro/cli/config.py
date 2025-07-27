@@ -136,7 +136,10 @@ class ConfigDiscovery:
             return cached
 
         self.discovered_configs = []
-        self._search_recursive(self.base_path, 0, max_depth)
+        try:
+            self._search_recursive(self.base_path, 0, max_depth)
+        except Exception as e:
+            logger.warning(f"Error during config discovery: {e}")
 
         ConfigCache.set(cache_key, self.discovered_configs)
         logger.info(f"Discovered {len(self.discovered_configs)} configurations")
@@ -149,20 +152,18 @@ class ConfigDiscovery:
             return
 
         try:
-            # Check for config files in current directory
             for pattern in self.CONFIG_PATTERNS:
                 config_file = path / pattern
                 if config_file.is_file():
                     self.discovered_configs.append((path, pattern))
                     break  # Only one config per directory
 
-            # Recurse into subdirectories
             for item in path.iterdir():
                 if item.is_dir() and not item.name.startswith("."):
                     self._search_recursive(item, depth + 1, max_depth)
 
-        except (PermissionError, OSError):
-            logger.debug(f"Skipping inaccessible directory: {path}")
+        except (PermissionError, OSError) as e:
+            logger.debug(f"Skipping inaccessible directory: {path} - {e}")
 
     def find_best_match(
         self,
@@ -177,7 +178,6 @@ class ConfigDiscovery:
         if not self.discovered_configs:
             return None
 
-        # Score each configuration
         scored = []
         for config_dir, config_file in self.discovered_configs:
             score = 0
@@ -191,12 +191,10 @@ class ConfigDiscovery:
             if config_type and f"settings_{config_type}.json" == config_file:
                 score += 10
 
-            # Prefer deeper paths (more specific)
             score += len(config_dir.parts)
 
             scored.append((score, config_dir, config_file))
 
-        # Return highest scoring match
         scored.sort(key=lambda x: x[0], reverse=True)
         best = scored[0]
         logger.info(f"Best match: {best[1] / best[2]} (score: {best[0]})")
@@ -342,7 +340,7 @@ class ConfigManager:
 
     def _detect_format_from_filename(self, filename: str) -> None:
         """Detect configuration format from filename."""
-        if "yml" in filename:
+        if "yml" in filename or "yaml" in filename:
             self.active_format = ConfigFormat.YAML
         elif "json" in filename:
             self.active_format = ConfigFormat.JSON
@@ -436,12 +434,10 @@ class AppConfigManager:
                 f"Environment '{env}' not found. Available: {available}"
             )
 
-        # Merge base config with environment-specific config
         base_config = env_configs.get("base", {})
         env_config = env_configs.get(env, {})
         merged = {**base_config, **env_config}
 
-        # Resolve relative paths
         result = {}
         for key, path in merged.items():
             if path:

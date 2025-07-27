@@ -17,6 +17,12 @@ from .core import (
 )
 from .execution import ContextInitializer
 from .execution import PipelineExecutor as CLIPipelineExecutor
+from .template import (
+    TemplateCommand,
+    TemplateGenerator,
+    TemplateType,
+)  # Nuevas importaciones
+
 
 __all__ = [
     "ConfigFormat",
@@ -38,4 +44,7 @@ __all__ = [
     "CLIPipelineExecutor",
     "TauroCLI",
     "main",
+    "TemplateCommand",
+    "TemplateGenerator",
+    "TemplateType",
 ]
