@@ -1,8 +1,10 @@
 import json
+import random
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
+from skopt import gp_minimize
 
 from loguru import logger  # type: ignore
 
@@ -241,33 +243,106 @@ class MLNodeCommand(NodeCommand):
 
 
 class ExperimentCommand(MLNodeCommand):
-    """Specialized command for ML experimentation and hyperparameter tuning."""
+    """Specialized command for ML experimentation with multiple search strategies."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.experiment_config = self.node_config.get("experiment", {})
         self.is_experiment = bool(self.experiment_config)
-
-    def execute(self) -> Any:
-        """Execute with experimentation tracking."""
-        if self.is_experiment:
-            logger.info(f"Running ML experiment for node '{self.node_name}'")
-            return self._execute_experiment()
-        else:
-            return super().execute()
+        self.search_strategy = self.experiment_config.get("strategy", "grid")
+        self.n_samples = self.experiment_config.get("n_samples", 10)
+        self.random_seed = self.experiment_config.get("random_seed", 42)
 
     def _execute_experiment(self) -> Any:
-        """Execute with experiment tracking and multiple runs."""
+        """Execute with experiment tracking using selected search strategy."""
+        if self.search_strategy == "random":
+            param_samples = self._random_search()
+        elif self.search_strategy == "bayesian":
+            param_samples = self._bayesian_optimization()
+        else:  # Default to grid search
+            param_samples = self._grid_search()
+
+        logger.info(f"Running {len(param_samples)} experiment configurations")
+        return self._execute_parameter_samples(param_samples)
+
+    def _random_search(self) -> List[Dict[str, Any]]:
+        """Generate random parameter samples."""
+        random.seed(self.random_seed)
+        samples = []
+        param_space = self._get_parameter_space()
+
+        for _ in range(self.n_samples):
+            sample = {}
+            for param, config in param_space.items():
+                if config["type"] == "float":
+                    sample[param] = random.uniform(config["min"], config["max"])
+                elif config["type"] == "int":
+                    sample[param] = random.randint(config["min"], config["max"])
+                elif config["type"] == "categorical":
+                    sample[param] = random.choice(config["values"])
+            samples.append(sample)
+        return samples
+
+    def _bayesian_optimization(self) -> List[Dict[str, Any]]:
+        """Bayesian optimization using Gaussian Processes."""
+        param_space = self._get_parameter_space()
+        dimensions = []
+        param_names = []
+
+        for param, config in param_space.items():
+            param_names.append(param)
+            if config["type"] == "float":
+                dimensions.append((config["min"], config["max"]))
+            elif config["type"] == "int":
+                dimensions.append((config["min"], config["max"]))
+            elif config["type"] == "categorical":
+                dimensions.append(config["values"])
+
+        def objective(params):
+            sample = dict(zip(param_names, params))
+            original_params = self.merged_hyperparams.copy()
+            self.merged_hyperparams.update(sample)
+
+            try:
+                result = super().execute()
+                # Maximize accuracy (customize for your metric)
+                return -result["accuracy"]
+            except Exception:
+                return float("inf")
+            finally:
+                self.merged_hyperparams = original_params
+
+        result = gp_minimize(
+            objective,
+            dimensions,
+            n_calls=self.n_samples,
+            random_state=self.random_seed,
+            n_initial_points=5,
+        )
+
+        # Return best parameters found
+        best_params = dict(zip(param_names, result.x))
+        return [best_params]
+
+    def _get_parameter_space(self) -> Dict[str, Dict[str, Any]]:
+        """Extract parameter space configuration."""
+        param_space = {}
+        for param, value in self.merged_hyperparams.items():
+            if isinstance(value, dict) and "type" in value:
+                param_space[param] = value
+            elif isinstance(value, list):
+                param_space[param] = {"type": "categorical", "values": value}
+        return param_space
+
+    def _execute_parameter_samples(
+        self, samples: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Execute all parameter samples and collect results."""
         experiment_results = []
 
-        param_grid = self._generate_parameter_grid()
-
-        logger.info(f"Running {len(param_grid)} experiment configurations")
-
-        for i, params in enumerate(param_grid):
-            logger.info(f"Experiment run {i+1}/{len(param_grid)}")
-
-            original_hyperparams = self.merged_hyperparams.copy()
+        for i, params in enumerate(samples):
+            logger.info(f"Experiment run {i+1}/{len(samples)}: {params}")
+            original_params = self.merged_hyperparams.copy()
             self.merged_hyperparams.update(params)
 
             try:
@@ -281,7 +356,6 @@ class ExperimentCommand(MLNodeCommand):
                     }
                 )
             except Exception as e:
-                logger.error(f"Experiment run {i+1} failed: {e}")
                 experiment_results.append(
                     {
                         "run_id": i + 1,
@@ -291,37 +365,9 @@ class ExperimentCommand(MLNodeCommand):
                     }
                 )
             finally:
-                self.merged_hyperparams = original_hyperparams
+                self.merged_hyperparams = original_params
 
         return {
             "experiment_results": experiment_results,
             "best_run": self._find_best_run(experiment_results),
         }
-
-    def _generate_parameter_grid(self) -> List[Dict[str, Any]]:
-        """Generate parameter grid for experimentation."""
-        grid_params = {}
-
-        for key, value in self.merged_hyperparams.items():
-            if isinstance(value, list):
-                grid_params[key] = value
-
-        if not grid_params:
-            return [{}]
-
-        import itertools
-
-        keys = grid_params.keys()
-        values = grid_params.values()
-        combinations = list(itertools.product(*values))
-
-        return [dict(zip(keys, combo)) for combo in combinations]
-
-    def _find_best_run(self, results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Find the best performing run based on configured criteria."""
-        successful_runs = [r for r in results if "error" not in r]
-
-        if not successful_runs:
-            return None
-
-        return successful_runs[0]

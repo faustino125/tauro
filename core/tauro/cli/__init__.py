@@ -21,8 +21,8 @@ from .template import (
     TemplateCommand,
     TemplateGenerator,
     TemplateType,
-)  # Nuevas importaciones
-
+)
+from .streaming_cli import streaming_commands
 
 __all__ = [
     "ConfigFormat",
@@ -47,4 +47,5 @@ __all__ = [
     "TemplateCommand",
     "TemplateGenerator",
     "TemplateType",
+    "streaming_commands",
 ]

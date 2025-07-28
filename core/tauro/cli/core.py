@@ -103,6 +103,15 @@ class CLIConfig:
     list_templates: bool = False
     template_interactive: bool = False
 
+    streaming: bool = False
+    streaming_command: Optional[str] = None
+    streaming_config: Optional[str] = None
+    streaming_pipeline: Optional[str] = None
+    execution_id: Optional[str] = None
+    streaming_mode: str = "async"
+    model_version: Optional[str] = None
+    hyperparams: Optional[str] = None
+
 
 class ConfigLoaderProtocol(Protocol):
     """Protocol for configuration loaders."""

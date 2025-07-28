@@ -1,0 +1,460 @@
+import time
+import threading
+from collections import defaultdict
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set
+from loguru import logger  # type: ignore
+
+
+class NodeStatus(Enum):
+    """Status of a node in the pipeline execution."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    RETRYING = "retrying"
+    CANCELLED = "cancelled"
+
+
+class NodeType(Enum):
+    """Type of pipeline node."""
+
+    BATCH = "batch"
+    STREAMING = "streaming"
+
+
+@dataclass
+class NodeExecutionInfo:
+    """Information about a node's execution state."""
+
+    node_name: str
+    node_type: NodeType
+    status: NodeStatus = NodeStatus.PENDING
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    output_path: Optional[str] = None
+    error: Optional[str] = None
+    dependencies: List[str] = field(default_factory=list)
+    dependents: Set[str] = field(default_factory=set)
+    retry_count: int = 0
+    max_retries: int = 3
+    retry_delay: float = 5.0  # seconds
+    execution_metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+class UnifiedPipelineState:
+    """Unified state for coordinating batch and streaming pipeline execution."""
+
+    def __init__(self, circuit_breaker_threshold: int = 3):
+        """
+        Initialize the unified pipeline state.
+
+        Args:
+            circuit_breaker_threshold: Number of failures before circuit breaker opens
+        """
+        self._lock = threading.RLock()
+        self._nodes: Dict[str, NodeExecutionInfo] = {}
+        self._circuit_breaker_threshold = circuit_breaker_threshold
+        self._failure_counts: Dict[str, int] = defaultdict(int)
+        self._circuit_open: bool = False
+
+        # State tracking
+        self._pipeline_status: str = "initializing"
+        self._batch_outputs: Dict[str, str] = {}
+        self._streaming_queries: Dict[str, Any] = {}
+        self._cross_dependencies: Dict[str, Set[str]] = {}
+
+    def register_node(
+        self,
+        node_name: str,
+        node_type: NodeType,
+        dependencies: Optional[List[str]] = None,
+    ) -> None:
+        """
+        Register a node in the unified state.
+
+        Args:
+            node_name: Name of the node
+            node_type: Type of the node (batch or streaming)
+            dependencies: List of dependency node names
+        """
+        with self._lock:
+            if node_name in self._nodes:
+                raise ValueError(f"Node '{node_name}' already registered")
+
+            self._nodes[node_name] = NodeExecutionInfo(
+                node_name=node_name,
+                node_type=node_type,
+                dependencies=dependencies or [],
+            )
+
+            # Register reverse dependencies
+            for dep in dependencies or []:
+                if dep in self._nodes:
+                    self._nodes[dep].dependents.add(node_name)
+
+            # Identify cross-dependencies (streaming -> batch)
+            if node_type == NodeType.STREAMING:
+                batch_deps = [
+                    dep
+                    for dep in (dependencies or [])
+                    if dep in self._nodes
+                    and self._nodes[dep].node_type == NodeType.BATCH
+                ]
+                if batch_deps:
+                    self._cross_dependencies[node_name] = set(batch_deps)
+
+            logger.debug(
+                f"Registered {node_type.value} node '{node_name}' with dependencies: {dependencies}"
+            )
+
+    def start_node_execution(self, node_name: str) -> bool:
+        """
+        Start execution of a node if dependencies are ready.
+
+        Args:
+            node_name: Name of the node to start
+
+        Returns:
+            True if node was started, False if dependencies not ready
+        """
+        with self._lock:
+            if node_name not in self._nodes:
+                raise ValueError(f"Node '{node_name}' not registered")
+
+            node = self._nodes[node_name]
+
+            # Check if dependencies are ready
+            if not self._are_dependencies_ready(node_name):
+                return False
+
+            node.status = NodeStatus.RUNNING
+            node.start_time = time.time()
+
+            logger.info(
+                f"Started execution of {node.node_type.value} node '{node_name}'"
+            )
+            return True
+
+    def complete_node_execution(
+        self,
+        node_name: str,
+        output_path: Optional[str] = None,
+        execution_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Mark a node as completed successfully.
+
+        Args:
+            node_name: Name of the completed node
+            output_path: Path to node's output (for batch nodes)
+            execution_metadata: Additional execution metadata
+        """
+        with self._lock:
+            if node_name not in self._nodes:
+                raise ValueError(f"Node '{node_name}' not registered")
+
+            node = self._nodes[node_name]
+            node.status = NodeStatus.COMPLETED
+            node.end_time = time.time()
+            node.output_path = output_path
+            node.execution_metadata = execution_metadata or {}
+
+            # Register output for batch nodes
+            if node.node_type == NodeType.BATCH and output_path:
+                self._batch_outputs[node_name] = output_path
+
+            execution_time = node.end_time - (node.start_time or node.end_time)
+            logger.info(
+                f"Completed {node.node_type.value} node '{node_name}' in {execution_time:.2f}s"
+            )
+
+            # Notify dependents
+            self._notify_dependents(node_name)
+
+    def fail_node_execution(self, node_name: str, error: str) -> None:
+        """
+        Handle node failure with retry logic and circuit breaker.
+
+        Args:
+            node_name: Name of the failed node
+            error: Error message
+        """
+        with self._lock:
+            if node_name not in self._nodes:
+                raise ValueError(f"Node '{node_name}' not registered")
+
+            node = self._nodes[node_name]
+            self._failure_counts[node_name] += 1
+
+            # Circuit breaker check
+            if self._failure_counts[node_name] > self._circuit_breaker_threshold:
+                logger.critical(f"Circuit breaker triggered for node '{node_name}'")
+                self._circuit_open = True
+                node.status = NodeStatus.FAILED
+                node.error = "Circuit breaker triggered"
+                node.end_time = time.time()
+                self._propagate_failure(node_name)
+                return
+
+            # Retry logic
+            if node.retry_count < node.max_retries:
+                node.retry_count += 1
+                node.status = NodeStatus.RETRYING
+                logger.warning(
+                    f"Node '{node_name}' failed (attempt {node.retry_count}/"
+                    f"{node.max_retries}). Retrying in {node.retry_delay}s"
+                )
+                threading.Timer(
+                    node.retry_delay, self._retry_node, args=[node_name]
+                ).start()
+            else:
+                node.status = NodeStatus.FAILED
+                node.error = error
+                node.end_time = time.time()
+                self._propagate_failure(node_name)
+
+    def _retry_node(self, node_name: str) -> None:
+        """Retry node execution after failure."""
+        with self._lock:
+            if node_name not in self._nodes:
+                return
+
+            node = self._nodes[node_name]
+            if node.status == NodeStatus.RETRYING:
+                node.status = NodeStatus.PENDING
+                logger.info(f"Retrying node '{node_name}'")
+
+    def register_streaming_query(self, node_name: str, query: Any) -> None:
+        """
+        Register a streaming query for tracking.
+
+        Args:
+            node_name: Name of the node
+            query: Streaming query object
+        """
+        with self._lock:
+            self._streaming_queries[node_name] = query
+            logger.debug(f"Registered streaming query for node '{node_name}'")
+
+    def get_batch_output_path(self, node_name: str) -> Optional[str]:
+        """
+        Get the output path of a batch node.
+
+        Args:
+            node_name: Name of the batch node
+
+        Returns:
+            Output path if available, None otherwise
+        """
+        with self._lock:
+            return self._batch_outputs.get(node_name)
+
+    def is_node_ready(self, node_name: str) -> bool:
+        """
+        Check if a node is ready to execute.
+
+        Args:
+            node_name: Name of the node
+
+        Returns:
+            True if node is ready, False otherwise
+        """
+        with self._lock:
+            return self._are_dependencies_ready(node_name)
+
+    def get_node_status(self, node_name: str) -> Optional[NodeStatus]:
+        """
+        Get the status of a node.
+
+        Args:
+            node_name: Name of the node
+
+        Returns:
+            Node status if node exists, None otherwise
+        """
+        with self._lock:
+            node = self._nodes.get(node_name)
+            return node.status if node else None
+
+    def get_ready_nodes(self) -> List[str]:
+        """
+        Get list of nodes ready for execution.
+
+        Returns:
+            List of node names that are ready to execute
+        """
+        with self._lock:
+            ready_nodes = []
+            for node_name, node in self._nodes.items():
+                if node.status == NodeStatus.PENDING and self._are_dependencies_ready(
+                    node_name
+                ):
+                    ready_nodes.append(node_name)
+            return ready_nodes
+
+    def get_pipeline_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of the pipeline state.
+
+        Returns:
+            Dictionary with pipeline summary information
+        """
+        with self._lock:
+            summary = {
+                "total_nodes": len(self._nodes),
+                "batch_nodes": len(
+                    [n for n in self._nodes.values() if n.node_type == NodeType.BATCH]
+                ),
+                "streaming_nodes": len(
+                    [
+                        n
+                        for n in self._nodes.values()
+                        if n.node_type == NodeType.STREAMING
+                    ]
+                ),
+                "status_breakdown": {},
+                "cross_dependencies": len(self._cross_dependencies),
+                "pipeline_status": self._pipeline_status,
+                "circuit_breaker_open": self._circuit_open,
+            }
+
+            for status in NodeStatus:
+                count = len([n for n in self._nodes.values() if n.status == status])
+                summary["status_breakdown"][status.value] = count
+
+            return summary
+
+    def validate_cross_dependencies(self) -> List[str]:
+        """
+        Validate cross-dependencies between batch and streaming nodes.
+
+        Returns:
+            List of validation warnings
+        """
+        warnings = []
+
+        with self._lock:
+            for streaming_node, batch_deps in self._cross_dependencies.items():
+                for batch_dep in batch_deps:
+                    batch_node = self._nodes.get(batch_dep)
+                    if not batch_node:
+                        warnings.append(
+                            f"Streaming node '{streaming_node}' depends on "
+                            f"non-existent batch node '{batch_dep}'"
+                        )
+                    elif batch_node.node_type != NodeType.BATCH:
+                        warnings.append(
+                            f"Cross-dependency error: '{streaming_node}' -> '{batch_dep}' "
+                            f"but '{batch_dep}' is not a batch node"
+                        )
+
+        return warnings
+
+    def stop_dependent_streaming_nodes(self, failed_batch_node: str) -> List[str]:
+        """
+        Stop streaming nodes that depend on a failed batch node.
+
+        Args:
+            failed_batch_node: Name of the failed batch node
+
+        Returns:
+            List of stopped streaming node names
+        """
+        stopped_nodes = []
+
+        with self._lock:
+            for streaming_node, batch_deps in self._cross_dependencies.items():
+                if failed_batch_node in batch_deps:
+                    streaming_query = self._streaming_queries.get(streaming_node)
+                    if streaming_query and hasattr(streaming_query, "stop"):
+                        try:
+                            streaming_query.stop()
+                            self._nodes[streaming_node].status = NodeStatus.CANCELLED
+                            stopped_nodes.append(streaming_node)
+                            logger.warning(
+                                f"Stopped streaming node '{streaming_node}' due to "
+                                f"failed dependency '{failed_batch_node}'"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to stop streaming node '{streaming_node}': {e}"
+                            )
+
+        return stopped_nodes
+
+    def _are_dependencies_ready(self, node_name: str) -> bool:
+        """Check if all dependencies of a node are completed."""
+        node = self._nodes.get(node_name)
+        if not node:
+            return False
+
+        for dep in node.dependencies:
+            dep_node = self._nodes.get(dep)
+            if not dep_node or dep_node.status != NodeStatus.COMPLETED:
+                return False
+
+        return True
+
+    def _notify_dependents(self, completed_node: str) -> None:
+        """Notify dependent nodes that a node has completed."""
+        node = self._nodes.get(completed_node)
+        if not node:
+            return
+
+        for dependent in node.dependents:
+            if self._are_dependencies_ready(dependent):
+                logger.debug(
+                    f"Node '{dependent}' is now ready (dependency '{completed_node}' completed)"
+                )
+
+    def _propagate_failure(self, failed_node: str) -> None:
+        """
+        Propagate failure to dependent nodes with circuit breaker awareness.
+
+        Args:
+            failed_node: Name of the failed node
+        """
+        if self._circuit_open:
+            logger.error("Circuit open - propagating failure to all dependent nodes")
+
+        # Stop dependent streaming nodes if it's a batch node failure
+        node = self._nodes.get(failed_node)
+        if node and node.node_type == NodeType.BATCH:
+            self.stop_dependent_streaming_nodes(failed_node)
+
+    def set_pipeline_status(self, status: str) -> None:
+        """
+        Set the overall pipeline status.
+
+        Args:
+            status: New pipeline status
+        """
+        with self._lock:
+            self._pipeline_status = status
+            logger.info(f"Pipeline status changed to: {status}")
+
+    def cleanup(self) -> None:
+        """Clean up resources and stop active streaming queries."""
+        with self._lock:
+            # Stop active streaming queries
+            for node_name, query in self._streaming_queries.items():
+                if hasattr(query, "isActive") and query.isActive:
+                    try:
+                        query.stop()
+                        logger.info(f"Stopped streaming query for node '{node_name}'")
+                    except Exception as e:
+                        logger.warning(
+                            f"Error stopping streaming query for '{node_name}': {e}"
+                        )
+
+            # Clear all state
+            self._streaming_queries.clear()
+            self._nodes.clear()
+            self._batch_outputs.clear()
+            self._cross_dependencies.clear()
+            self._failure_counts.clear()
+
+            logger.info("Unified pipeline state cleaned up")
