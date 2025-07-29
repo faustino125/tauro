@@ -1,8 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger  # type: ignore
 
-# Remove the problematic import that causes circular dependency
-# from tauro.streaming.constants import StreamingFormat
 
 class PipelineValidator:
     """Enhanced validator supporting hybrid batch/streaming pipelines."""
@@ -10,12 +8,12 @@ class PipelineValidator:
     # Define streaming formats directly here to avoid circular import
     STREAMING_INPUT_FORMATS = {
         "kafka",
-        "kinesis", 
+        "kinesis",
         "delta_stream",
         "file_stream",
         "socket",
         "rate",
-        "memory"
+        "memory",
     }
 
     COMPATIBLE_FORMATS = {

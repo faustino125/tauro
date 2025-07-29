@@ -1,3 +1,5 @@
+import os
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -136,11 +138,27 @@ class SecurityValidator:
             resolved_target = target_path.resolve().absolute()
 
             try:
-                resolved_target.relative_to(resolved_base)
+                relative = resolved_target.relative_to(resolved_base)
             except ValueError:
                 raise SecurityError(
                     f"Path traversal attempt blocked: {resolved_target}"
                 )
+
+            if resolved_target.is_symlink():
+                raise SecurityError(f"Symbolic links not allowed: {resolved_target}")
+
+            if resolved_target.exists():
+                stat_info = os.stat(resolved_target)
+
+                if stat_info.st_mode & stat.S_IWOTH:  # World-writable
+                    raise SecurityError(
+                        f"World-writable file detected: {resolved_target}"
+                    )
+
+                if stat_info.st_uid != os.getuid():
+                    raise SecurityError(
+                        f"File not owned by current user: {resolved_target}"
+                    )
 
             return resolved_target
         except Exception as e:
@@ -227,7 +245,6 @@ class PathManager:
                 self.original_cwd, self.config_dir
             )
 
-            # Add common Python source directories
             paths_to_add = [
                 validated_dir,
                 validated_dir / "src",

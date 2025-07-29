@@ -115,7 +115,7 @@ class ArgumentParser:
             "--clear-cache", action="store_true", help="Clear config cache"
         )
 
-        parser.add_argument("--version", action="version", version="Tauro CLI v2.1.0")
+        parser.add_argument("--version", action="version", version="Tauro CLI v 0.1.0")
 
         # Template generation group
         template_group = parser.add_argument_group("Template Generation")
