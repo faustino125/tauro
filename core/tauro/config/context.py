@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
+from core.tauro.config.exceptions import ConfigLoadError, ConfigValidationError
 from loguru import logger  # type: ignore
 
 from tauro.config.configuration import PipelineManager
@@ -78,10 +79,27 @@ class Context:
             config = self._config_loader.load_config(source)
             self._validator.validate_type(config, dict, config_name)
             return config
+        except ConfigLoadError as e:
+            source_info = source if isinstance(source, str) else type(source).__name__
+            logger.error(
+                f"Error loading {config_name} from {source_info}: "
+                f"{type(e).__name__} - {str(e)}"
+            )
+            raise
+        except ConfigValidationError as e:
+            source_info = source if isinstance(source, str) else type(source).__name__
+            logger.error(
+                f"Validation error in {config_name} from {source_info}: "
+                f"{type(e).__name__} - {str(e)}"
+            )
+            raise
         except Exception as e:
             source_info = source if isinstance(source, str) else type(source).__name__
-            logger.error(f"Error loading {config_name} from {source_info}: {str(e)}")
-            raise
+            logger.exception(
+                f"Unexpected error loading {config_name} from {source_info}: "
+                f"{type(e).__name__} - {str(e)}"
+            )
+            raise ConfigLoadError(f"Unexpected error: {str(e)}") from e
 
     def _process_configurations(self) -> None:
         """Process and prepare configurations after loading."""
@@ -121,7 +139,7 @@ class Context:
         return self._pipeline_manager.list_pipeline_names()
 
     def get_pipeline_ml_config(self, pipeline_name: str) -> Dict[str, Any]:
-        """Get ML-specific configuration for a pipeline."""
+        """Get ML-specific configuration for a pipeline (base implementation)."""
         pipeline = self.pipelines_config.get(pipeline_name, {})
         return {
             "model_version": pipeline.get("model_version", self.default_model_version),

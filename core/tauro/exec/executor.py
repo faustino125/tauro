@@ -15,6 +15,8 @@ from tauro.io.output import OutputManager
 from tauro.streaming.constants import PipelineType
 from tauro.streaming.pipeline_manager import StreamingPipelineManager
 from tauro.streaming.validators import StreamingValidator
+from tauro.config.context_factory import ContextFactory
+from tauro.config.ml_context import MLContext
 
 
 class PipelineExecutor:
@@ -22,16 +24,7 @@ class PipelineExecutor:
 
     def __init__(self, context: Context):
         """Inicializa el executor mejorado."""
-        self.context = context
-        self.input_loader = InputLoader(context)
-        self.output_manager = OutputManager(context)
-        self.is_ml_layer = context.is_ml_layer
-        self.max_workers = context.global_settings.get("max_parallel_nodes", 4)
-
-        self.node_executor = NodeExecutor(
-            context, self.input_loader, self.output_manager, self.max_workers
-        )
-
+        self.context = ContextFactory.create_context(context)
         max_streaming_pipelines = context.global_settings.get(
             "max_streaming_pipelines", 5
         )
@@ -41,6 +34,18 @@ class PipelineExecutor:
         self.streaming_validator = StreamingValidator()
 
         self.unified_state = None
+
+        ctx_type = type(self.context).__name__
+        logger.info(f"Using context type: {ctx_type}")
+
+        self.input_loader = InputLoader(self.context)
+        self.output_manager = OutputManager(self.context)
+        self.is_ml_layer = self.context.is_ml_layer
+        self.max_workers = self.context.global_settings.get("max_parallel_nodes", 4)
+
+        self.node_executor = NodeExecutor(
+            self.context, self.input_loader, self.output_manager, self.max_workers
+        )
 
         logger.info("PipelineExecutor initialized with unified batch/streaming support")
 
@@ -121,8 +126,10 @@ class PipelineExecutor:
         hyperparams: Optional[Dict[str, Any]],
     ) -> None:
         """Ejecuta pipeline batch usando la lógica existente."""
-
         logger.info(f"Executing batch pipeline: {pipeline_name}")
+
+        if isinstance(self.context, MLContext):
+            self.context._validate_ml_configurations()
 
         start_date = start_date or self.context.global_settings.get("start_date")
         end_date = end_date or self.context.global_settings.get("end_date")
@@ -150,10 +157,14 @@ class PipelineExecutor:
         execution_mode: Optional[str] = "async",
     ) -> str:
         """Ejecuta pipeline streaming puro."""
-
         logger.info(f"Executing streaming pipeline: {pipeline_name}")
 
-        self.streaming_validator.validate_streaming_pipeline_config(pipeline)
+        if hasattr(self.context, "streaming_validator"):
+            self.context.streaming_validator.validate_streaming_pipeline_config(
+                self.context.pipelines_config, self.context.nodes_config
+            )
+        else:
+            self.streaming_validator.validate_streaming_pipeline_config(pipeline)
 
         running_pipelines = self.streaming_manager.list_running_pipelines()
         conflicts = self._check_resource_conflicts(pipeline, running_pipelines)
@@ -185,19 +196,18 @@ class PipelineExecutor:
         execution_mode: Optional[str] = "async",
     ) -> Dict[str, Any]:
         """Ejecuta pipeline híbrido con coordinación mejorada."""
-
         logger.info(f"Executing hybrid pipeline: {pipeline_name}")
 
-        start_date = start_date or self.context.global_settings.get("start_date")
-        end_date = end_date or self.context.global_settings.get("end_date")
-        ml_info = self._prepare_ml_info(pipeline_name, model_version, hyperparams)
-
-        pipeline_nodes = self._extract_pipeline_nodes(pipeline)
-        node_configs = self._get_node_configs(pipeline_nodes)
-
-        validation_result = PipelineValidator.validate_hybrid_pipeline(
-            pipeline, node_configs
-        )
+        # Usar validación especializada si está disponible en el contexto
+        if hasattr(self.context, "validate_hybrid_pipeline"):
+            validation_result = self.context.validate_hybrid_pipeline(pipeline)
+        else:
+            # Mantener validación existente como fallback
+            pipeline_nodes = self._extract_pipeline_nodes(pipeline)
+            node_configs = self._get_node_configs(pipeline_nodes)
+            validation_result = PipelineValidator.validate_hybrid_pipeline(
+                pipeline, node_configs
+            )
 
         if not validation_result["is_valid"]:
             error_msg = "Hybrid pipeline validation failed:\n" + "\n".join(
@@ -212,6 +222,8 @@ class PipelineExecutor:
         self.unified_state = UnifiedPipelineState()
         self.unified_state.set_pipeline_status("initializing")
 
+        ml_info = self._prepare_ml_info(pipeline_name, model_version, hyperparams)
+
         try:
             self._register_nodes_in_unified_state(
                 validation_result["batch_nodes"],
@@ -224,6 +236,8 @@ class PipelineExecutor:
                 logger.warning(f"Cross-dependency warning: {warning}")
 
             self.unified_state.set_pipeline_status("running")
+
+            self._log_pipeline_start(pipeline_name, ml_info, "HYBRID")
 
             execution_result = self._execute_unified_hybrid_pipeline(
                 validation_result["batch_nodes"],
@@ -541,14 +555,20 @@ class PipelineExecutor:
         """Prepara información específica de ML."""
         ml_info = {}
 
-        if self.is_ml_layer:
-            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
+        if isinstance(self.context, MLContext):
+            ml_config = self.context.get_pipeline_ml_config(pipeline_name)
 
             final_model_version = (
                 model_version
-                or pipeline_ml_config.get("model_version")
+                or ml_config.get("model_version")
                 or self.context.default_model_version
             )
+
+            if hasattr(self.context, "get_model_registry"):
+                model_registry = self.context.get_model_registry()
+                ml_info["model"] = model_registry.get_model(
+                    ml_config.get("model_name"), version=final_model_version
+                )
 
             final_hyperparams = {}
             final_hyperparams.update(self.context.default_hyperparams)
@@ -563,6 +583,15 @@ class PipelineExecutor:
                 "project_name": self.context.project_name,
                 "is_experiment": self._is_experiment_pipeline(pipeline_name),
             }
+
+        elif self.is_ml_layer:
+            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
+
+            final_model_version = (
+                model_version
+                or pipeline_ml_config.get("model_version")
+                or self.context.default_model_version
+            )
 
             if not final_hyperparams:
                 logger.warning("Executing ML pipeline without hyperparameters")

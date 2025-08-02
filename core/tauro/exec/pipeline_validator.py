@@ -161,23 +161,12 @@ class PipelineValidator:
 
     @staticmethod
     def _is_streaming_node(node_config: Dict[str, Any]) -> bool:
-        """Determina si un nodo es de streaming."""
-
+        """Determina si un nodo es de streaming (solo por entrada)"""
         input_config = node_config.get("input", {})
+
         if isinstance(input_config, dict):
             input_format = input_config.get("format", "")
-            if input_format in PipelineValidator.STREAMING_INPUT_FORMATS:
-                return True
-
-        if node_config.get("streaming"):
-            return True
-
-        output_config = node_config.get("output", {})
-        if isinstance(output_config, dict):
-            output_format = output_config.get("format", "")
-            streaming_outputs = {"kafka", "memory", "console"}
-            if output_format in streaming_outputs:
-                return True
+            return input_format in PipelineValidator.STREAMING_INPUT_FORMATS
 
         return False
 

@@ -131,6 +131,7 @@ class UnityCatalogManager(BaseIO):
         super().__init__(context)
         self.data_validator = DataValidator()
         self.uc_operations = UnityCatalogOperations(context, self.config_validator)
+        self.writer_factory = WriterFactory(context)
 
     def write_to_unity_catalog(
         self,
@@ -160,13 +161,14 @@ class UnityCatalogManager(BaseIO):
             self.uc_operations.ensure_schema_exists(
                 catalog, schema, config.get("output_path")
             )
-            writer, options = self._configure_writer(df, config, start_date, end_date)
-
+            writer_config = self._prepare_writer_config(config, start_date, end_date)
+            writer = self.writer_factory.get_writer("delta")
             self._execute_write_operation(
                 writer,
+                df,
                 table_name,
                 full_table_name,
-                options,
+                writer_config,
                 storage_location,
                 sub_folder,
             )
@@ -181,68 +183,40 @@ class UnityCatalogManager(BaseIO):
             config, ["table_name", "schema", "catalog_name"], "Unity Catalog"
         )
 
-    def _configure_writer(
+    def _prepare_writer_config(
         self,
-        df: Any,
         config: Dict[str, Any],
         start_date: Optional[str],
         end_date: Optional[str],
-    ) -> tuple:
-        """Configure DataFrame writer with appropriate write options."""
-        write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
-        if write_mode not in [mode.value for mode in WriteMode]:
-            logger.warning(
-                f"Write mode '{write_mode}' not recognized. Using 'overwrite'."
-            )
-            write_mode = WriteMode.OVERWRITE.value
+    ) -> Dict[str, Any]:
+        """Prepare configuration for the writer."""
+        writer_config = {
+            "format": "delta",
+            "write_mode": config.get("write_mode", WriteMode.OVERWRITE.value),
+            "overwrite_schema": config.get("overwrite_schema", True),
+            "partition": config.get("partition_col"),
+            "options": config.get("options", {}),
+        }
 
-        writer = df.write.format("delta").mode(write_mode)
-        options = {"overwriteSchema": "true"}
-
-        if partition_col := config.get("partition_col"):
-            if partition_col not in ("catalog", ""):
-                self.data_validator.validate_columns_exist(df, [partition_col])
-                writer = writer.partitionBy(partition_col)
-                self._apply_overwrite_strategy(
-                    config, options, partition_col, start_date, end_date
-                )
-
-        return writer, options
-
-    def _apply_overwrite_strategy(
-        self,
-        config: Dict[str, Any],
-        options: Dict[str, str],
-        partition_col: str,
-        start_date: Optional[str],
-        end_date: Optional[str],
-    ) -> None:
-        """Apply overwrite strategy if configured."""
         if config.get("overwrite_strategy") == "replaceWhere":
-            if not start_date or not end_date:
-                raise ConfigurationError(
-                    "start_date and end_date are required for replaceWhere"
-                )
+            writer_config.update(
+                {
+                    "overwrite_strategy": "replaceWhere",
+                    "partition_col": config.get("partition_col"),
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+            )
 
-            if not (
-                self.config_validator.validate_date_format(start_date)
-                and self.config_validator.validate_date_format(end_date)
-            ):
-                raise ConfigurationError(
-                    f"Invalid date format: {start_date} - {end_date}"
-                )
-
-            options[
-                "replaceWhere"
-            ] = f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
-            options["overwriteSchema"] = "false"
+        return writer_config
 
     def _execute_write_operation(
         self,
         writer: Any,
+        df: Any,
         table_name: str,
         full_table_name: str,
-        options: Dict[str, str],
+        config: Dict[str, Any],
         storage_location: str,
         sub_folder: str,
     ) -> None:
@@ -251,7 +225,7 @@ class UnityCatalogManager(BaseIO):
             raise ConfigurationError("Incomplete configuration to determine path")
 
         path = f"{storage_location}/{sub_folder}/{table_name}"
-        writer.options(**options).save(path)
+        writer.write(df, path, config)
         logger.info(f"Data saved to: {path}")
 
         self.context.spark.sql(

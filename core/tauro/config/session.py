@@ -1,4 +1,4 @@
-from typing import Any, Dict, Literal
+from typing import Any, Dict, List, Literal
 
 from loguru import logger  # type: ignore
 
@@ -7,6 +7,18 @@ class SparkSessionFactory:
     """
     Factory for creating Spark sessions based on the execution mode with ML optimizations.
     """
+
+    PROTECTED_CONFIGS = [
+        "spark.sql.shuffle.partitions",
+        "spark.executor.memory",
+        "spark.driver.memory",
+        "spark.master",
+    ]
+
+    @classmethod
+    def set_protected_configs(cls, configs: List[str]) -> None:
+        """Set custom protected configurations"""
+        cls.PROTECTED_CONFIGS = configs
 
     @staticmethod
     def create_session(
@@ -97,16 +109,9 @@ class SparkSessionFactory:
 
     @staticmethod
     def _apply_ml_configs(builder, ml_config: Dict[str, Any]):
-        """Apply ML-specific configurations to Spark builder, skipping protected ones."""
-        PROTECTED_CONFIGS = [
-            "spark.sql.shuffle.partitions",
-            "spark.executor.memory",
-            "spark.driver.memory",
-            "spark.master",
-        ]
-
+        """Apply ML-specific configurations, skipping protected ones."""
         for key, value in ml_config.items():
-            if key in PROTECTED_CONFIGS:
+            if key in SparkSessionFactory.PROTECTED_CONFIGS:
                 logger.warning(f"Skipping protected Spark config: {key}")
                 continue
             logger.debug(f"Setting Spark config: {key} = {value}")

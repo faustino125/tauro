@@ -6,11 +6,13 @@ from concurrent.futures import as_completed as thread_as_completed
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Set
 
+
 from loguru import logger  # type: ignore
 
 from tauro.exec.commands import Command, ExperimentCommand, MLNodeCommand, NodeCommand
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
+from tauro.config.ml_context import MLContext
 
 
 class NodeExecutor:
@@ -63,7 +65,6 @@ class NodeExecutor:
             logger.error(f"Failed to execute node '{node_name}': {str(e)}")
             raise
         finally:
-            # Limpieza explícita de recursos
             if "input_dfs" in locals():
                 del input_dfs
             if "result_df" in locals():
@@ -188,8 +189,13 @@ class NodeExecutor:
             "hyperparams": ml_info["hyperparams"],
             "node_config": node_config,
             "pipeline_config": ml_info.get("pipeline_config", {}),
-            "spark": self.context.spark,
         }
+
+        if hasattr(self.context, "spark"):
+            common_params["spark"] = self.context.spark
+
+        if isinstance(self.context, MLContext) and "model" in ml_info:
+            common_params["model"] = ml_info["model"]
 
         if self._is_experiment_node(node_config):
             logger.info(f"Creating experiment command for node '{node_name}'")
@@ -478,7 +484,6 @@ class NodeExecutor:
         node = self.context.nodes_config.get(node_name)
         if not node:
             available_nodes = list(self.context.nodes_config.keys())
-            # Mostrar primeros 10 nodos disponibles
             available_str = ", ".join(available_nodes[:10])
             if len(available_nodes) > 10:
                 available_str += f", ... (total: {len(available_nodes)} nodes)"
