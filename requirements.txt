@@ -28,6 +28,7 @@ numpy>=1.24.0,<2.0.0
 # Data manipulation and analysis
 pandas>=2.0.0,<3.0.0
 python-dotenv>=1.0.0,<2.0.0
+scikit-optimize>=0.9.0
 # Configuration and utilities
 PyYAML>=6.0,<7.0
 typing-extensions>=4.3.0,<5.0.0

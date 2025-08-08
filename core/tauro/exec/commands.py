@@ -265,6 +265,37 @@ class ExperimentCommand(MLNodeCommand):
         logger.info(f"Running {len(param_samples)} experiment configurations")
         return self._execute_parameter_samples(param_samples)
 
+    def _grid_search(self) -> List[Dict[str, Any]]:
+        """
+        Genera todas las combinaciones de parámetros para una búsqueda en malla (grid search).
+        """
+        import itertools
+
+        param_space = self._get_parameter_space()
+
+        grid_params = {}
+        for param, config in param_space.items():
+            if config.get("type") == "categorical" and "values" in config:
+                grid_params[param] = config["values"]
+            else:
+                logger.warning(f"Grid search solo puede usar parámetros definidos como listas. "
+                               f"El parámetro '{param}' será ignorado en la malla.")
+
+        if not grid_params:
+            logger.error("No se encontraron hiperparámetros válidos para Grid Search. "
+                         "Asegúrate de que los hiperparámetros en tu configuración sean listas de valores.")
+            return [self.merged_hyperparams]
+
+        param_names = list(grid_params.keys())
+        value_lists = list(grid_params.values())
+
+        product = itertools.product(*value_lists)
+
+        samples = [dict(zip(param_names, p)) for p in product]
+
+        logger.info(f"Generated {len(samples)} parameter combinations for grid search.")
+        return samples
+
     def _random_search(self) -> List[Dict[str, Any]]:
         """Generate random parameter samples."""
         random.seed(self.random_seed)
@@ -305,8 +336,7 @@ class ExperimentCommand(MLNodeCommand):
 
             try:
                 result = super().execute()
-                # Maximize accuracy (customize for your metric)
-                return -result["accuracy"]
+                return -result.get("accuracy", 0.0)
             except Exception:
                 return float("inf")
             finally:
@@ -320,7 +350,6 @@ class ExperimentCommand(MLNodeCommand):
             n_initial_points=5,
         )
 
-        # Return best parameters found
         best_params = dict(zip(param_names, result.x))
         return [best_params]
 
@@ -341,7 +370,7 @@ class ExperimentCommand(MLNodeCommand):
         experiment_results = []
 
         for i, params in enumerate(samples):
-            logger.info(f"Experiment run {i+1}/{len(samples)}: {params}")
+            logger.info(f"--- Experiment run {i+1}/{len(samples)}: {params} ---")
             original_params = self.merged_hyperparams.copy()
             self.merged_hyperparams.update(params)
 
@@ -371,3 +400,21 @@ class ExperimentCommand(MLNodeCommand):
             "experiment_results": experiment_results,
             "best_run": self._find_best_run(experiment_results),
         }
+    
+    def _find_best_run(self, results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Find the best run based on a target metric (e.g., accuracy)."""
+        best_run = None
+        best_score = float('-inf')
+
+        for run in results:
+            if "error" not in run and "result" in run:
+                # Asume que el resultado del nodo es un dict con métricas
+                score = run["result"].get("accuracy", float('-inf'))
+                if score > best_score:
+                    best_score = score
+                    best_run = run
+        
+        if best_run:
+            logger.success(f"🏆 Best run found (ID: {best_run['run_id']}) with score: {best_score}")
+
+        return best_run

@@ -124,7 +124,9 @@ class MLContext(Context):
                         f"and ML pipeline '{ml_name}': {warning}"
                     )
 
-    def validate_hybrid_pipeline(self, pipeline: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_hybrid_pipeline(
+        self, pipeline_name: str, pipeline: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Validación especializada para pipelines híbridos en contexto ML."""
         validation_result = {"is_valid": True, "errors": [], "warnings": []}
 
@@ -139,9 +141,11 @@ class MLContext(Context):
             if p.get("type") == "batch"
         }
 
-        if batch_pipelines:
+        corresponding_batch_pipeline = batch_pipelines.get(pipeline_name)
+
+        if corresponding_batch_pipeline:
             warnings = self.ml_validator.validate_pipeline_compatibility(
-                batch_pipelines[pipeline_name], pipeline  # Asumimos mismo nombre
+                corresponding_batch_pipeline, pipeline
             )
             validation_result["warnings"].extend(warnings)
 

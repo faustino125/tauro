@@ -13,12 +13,20 @@ services:
       - .:/tauro
     environment:
       - API_PORT=8000
-      - PYTHONUNBUFFERED=1  # Mejora logging de Python
+      - PYTHONUNBUFFERED=1
     working_dir: /tauro
     tty: true
     stdin_open: true
     networks:
       - tauro-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'        # Limita el uso a 0.5 nucleos de CPU (la mitad de un nucleo)
+          memory: 500M        # Limita la memoria a 256 Megabytes
+        reservations:
+          cpus: '1'       # Reserva 0.25 nucleos de CPU
+          memory: 500M       # Reserva 128 Megabytes de memoria
 
 networks:
   tauro-network:

@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
-from core.tauro.config.exceptions import ConfigLoadError, ConfigValidationError
+from tauro.config.exceptions import ConfigLoadError, ConfigValidationError
 from loguru import logger  # type: ignore
 
 from tauro.config.configuration import PipelineManager

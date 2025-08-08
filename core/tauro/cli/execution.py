@@ -6,12 +6,8 @@ from loguru import logger  # type: ignore
 from tauro.cli.config import AppConfigManager, ConfigManager
 from tauro.cli.core import ConfigFormat, ConfigurationError, ExecutionError, PathManager
 
-try:
-    from tauro.config import Context
-    from tauro.exec import PipelineExecutor as ExternalPipelineExecutor
-except ImportError as e:
-    logger.error(f"Missing required modules: {e}")
-    raise ImportError("au_execute and au_setting modules required") from e
+from tauro.config.context import Context
+from tauro.exec.executor import PipelineExecutor as ExternalPipelineExecutor
 
 
 class ContextInitializer:
