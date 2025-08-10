@@ -33,22 +33,23 @@ class DSLLoader:
         }
 
     def _load_module(self, path: Path):
-        """Load the Python module from the given path."""
-        module_name = path.stem
-        spec = importlib.util.spec_from_file_location(module_name, path)
+        """Safe module loading with unique identifiers"""
+        unique_name = f"{path.stem}_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(unique_name, path)
 
         if not spec or not spec.loader:
             raise ConfigLoadError(f"Could not load Python DSL module: {path}")
 
         module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
+        sys.modules[unique_name] = module
 
         try:
             spec.loader.exec_module(module)
+            return module
         except Exception as e:
+            if unique_name in sys.modules:
+                del sys.modules[unique_name]
             raise ConfigLoadError(f"Error executing DSL module {path}: {str(e)}") from e
-
-        return module
 
     def _validate_module_variables(self, module, module_path: str) -> None:
         """Validate that the module contains all required variables."""

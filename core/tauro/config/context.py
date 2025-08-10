@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
+from tauro.config.cross_validators import CrossValidator
 from tauro.config.exceptions import ConfigLoadError, ConfigValidationError
 from loguru import logger  # type: ignore
 
@@ -36,7 +37,7 @@ class Context:
             output_config,
         )
 
-        self.spark = SparkSessionFactory.create_session(
+        self.spark = SparkSessionFactory.get_session(
             self.execution_mode, ml_config=self._get_spark_ml_config()
         )
         self._process_configurations()
@@ -202,3 +203,38 @@ class Context:
             input_config=config_data["input_config"],
             output_config=config_data["output_config"],
         )
+
+    def _validate_configurations(self):
+        """Enhanced validation with cross-context checks"""
+        super()._validate_configurations()
+
+        hybrid_pipelines = {
+            name: p
+            for name, p in self.pipelines_config.items()
+            if p.get("type") == "hybrid"
+        }
+
+        for name, pipeline in hybrid_pipelines.items():
+            CrossValidator.validate_hybrid_dependencies(self.nodes_config)
+            self._validate_hybrid_pipeline_structure(name, pipeline)
+
+    def _validate_hybrid_pipeline_structure(self, name: str, pipeline: dict):
+        """Validate hybrid pipeline has both component types"""
+        has_streaming = any(
+            self._is_streaming_node(self.nodes_config[n])
+            for n in pipeline.get("nodes", [])
+        )
+        has_ml = any(
+            self._is_ml_node(self.nodes_config[n]) for n in pipeline.get("nodes", [])
+        )
+
+        if not (has_streaming and has_ml):
+            raise ConfigValidationError(
+                f"Hybrid pipeline '{name}' must contain both streaming and ML nodes"
+            )
+
+    def _is_streaming_node(self, config: dict) -> bool:
+        return "input" in config and "format" in config["input"]
+
+    def _is_ml_node(self, config: dict) -> bool:
+        return "model" in config or "hyperparams" in config

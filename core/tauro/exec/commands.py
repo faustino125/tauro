@@ -278,12 +278,16 @@ class ExperimentCommand(MLNodeCommand):
             if config.get("type") == "categorical" and "values" in config:
                 grid_params[param] = config["values"]
             else:
-                logger.warning(f"Grid search solo puede usar parámetros definidos como listas. "
-                               f"El parámetro '{param}' será ignorado en la malla.")
+                logger.warning(
+                    f"Grid search solo puede usar parámetros definidos como listas. "
+                    f"El parámetro '{param}' será ignorado en la malla."
+                )
 
         if not grid_params:
-            logger.error("No se encontraron hiperparámetros válidos para Grid Search. "
-                         "Asegúrate de que los hiperparámetros en tu configuración sean listas de valores.")
+            logger.error(
+                "No se encontraron hiperparámetros válidos para Grid Search. "
+                "Asegúrate de que los hiperparámetros en tu configuración sean listas de valores."
+            )
             return [self.merged_hyperparams]
 
         param_names = list(grid_params.keys())
@@ -400,21 +404,23 @@ class ExperimentCommand(MLNodeCommand):
             "experiment_results": experiment_results,
             "best_run": self._find_best_run(experiment_results),
         }
-    
+
     def _find_best_run(self, results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Find the best run based on a target metric (e.g., accuracy)."""
         best_run = None
-        best_score = float('-inf')
+        best_score = float("-inf")
 
         for run in results:
             if "error" not in run and "result" in run:
                 # Asume que el resultado del nodo es un dict con métricas
-                score = run["result"].get("accuracy", float('-inf'))
+                score = run["result"].get("accuracy", float("-inf"))
                 if score > best_score:
                     best_score = score
                     best_run = run
-        
+
         if best_run:
-            logger.success(f"🏆 Best run found (ID: {best_run['run_id']}) with score: {best_score}")
+            logger.success(
+                f"🏆 Best run found (ID: {best_run['run_id']}) with score: {best_score}"
+            )
 
         return best_run

@@ -1,5 +1,8 @@
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
+from tauro.config.streaming_context import StreamingContext
+from tauro.config.ml_context import MLContext
 from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
 
 
@@ -49,3 +52,25 @@ class PipelineValidator:
 
         if missing_nodes:
             raise PipelineValidationError(f"Missing nodes: {', '.join(missing_nodes)}")
+
+
+class ValidationStrategy(ABC):
+    @abstractmethod
+    def validate(self, context: Any):
+        pass
+
+
+class MLValidationStrategy(ValidationStrategy):
+    def validate(self, context: "MLContext"):
+        context.ml_validator.validate_ml_pipeline_config(
+            context.ml_pipelines, context.nodes_config
+        )
+
+
+class StreamingValidationStrategy(ValidationStrategy):
+    def validate(self, context: "StreamingContext"):
+        for pipeline_name, pipeline_config in context.streaming_pipelines.items():
+            pipeline_with_name = {**pipeline_config, "name": pipeline_name}
+            context.streaming_validator.validate_streaming_pipeline_config(
+                pipeline_with_name
+            )

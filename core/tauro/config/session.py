@@ -8,6 +8,26 @@ class SparkSessionFactory:
     Factory for creating Spark sessions based on the execution mode with ML optimizations.
     """
 
+    _session = None
+
+    @classmethod
+    def get_session(
+        cls,
+        mode: Literal["local", "databricks"] = "databricks",
+        ml_config: Dict[str, Any] = None,
+    ):
+        """Singleton Spark session with thread-safe initialization"""
+        if cls._session is None:
+            cls._session = SparkSessionFactory.create_session(mode, ml_config)
+        return cls._session
+
+    @classmethod
+    def reset_session(cls):
+        """Reset session for testing or reconfiguration"""
+        if cls._session:
+            cls._session.stop()
+        cls._session = None
+
     PROTECTED_CONFIGS = [
         "spark.sql.shuffle.partitions",
         "spark.executor.memory",
@@ -64,10 +84,18 @@ class SparkSessionFactory:
 
             return builder.getOrCreate()
 
+        except ImportError as e:
+            logger.error(f"Databricks Connect not installed: {str(e)}")
+            raise
+        except ValueError as e:  # Errores de configuración
+            logger.error(f"Invalid configuration: {str(e)}")
+            raise
+        except RuntimeError as e:  # Errores de conexión
+            logger.error(f"Connection failed: {str(e)}")
+            raise
         except Exception as e:
-            logger.error(f"Error connecting to Databricks: {str(e)}")
-            logger.warning("Falling back to local mode")
-            return SparkSessionFactory._create_local_session(ml_config)
+            logger.critical(f"Unhandled exception: {str(e)}")
+            raise RuntimeError("Critical error creating session") from e
 
     @staticmethod
     def _create_local_session(ml_config: Dict[str, Any] = None):
@@ -102,10 +130,14 @@ class SparkSessionFactory:
             return builder.getOrCreate()
 
         except ImportError as e:
-            logger.error(f"Could not import SparkSession: {str(e)}")
-            raise ImportError(
-                "Failed to create a local Spark session. Make sure PySpark is installed."
-            ) from e
+            logger.error(f"PySpark not installed: {str(e)}")
+            raise
+        except RuntimeError as e:
+            logger.error(f"Initialization failed: {str(e)}")
+            raise
+        except Exception as e:
+            logger.critical(f"Unhandled exception: {str(e)}")
+            raise RuntimeError("Critical error creating local session") from e
 
     @staticmethod
     def _apply_ml_configs(builder, ml_config: Dict[str, Any]):

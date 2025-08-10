@@ -1,4 +1,5 @@
 import os
+from tauro.config.cross_validators import CrossValidator
 from loguru import logger  # type: ignore
 
 import time
@@ -15,7 +16,7 @@ from tauro.io.output import OutputManager
 from tauro.streaming.constants import PipelineType
 from tauro.streaming.pipeline_manager import StreamingPipelineManager
 from tauro.streaming.validators import StreamingValidator
-from tauro.config.context_factory import ContextFactory
+from tauro.config.context_factory import ContextFactory, HybridContext
 from tauro.config.ml_context import MLContext
 
 
@@ -51,7 +52,6 @@ class PipelineExecutor:
 
     def run_pipeline(
         self,
-        env: Optional[str] = None,
         pipeline_name: Optional[str] = None,
         node_name: Optional[str] = None,
         start_date: Optional[str] = None,
@@ -95,16 +95,22 @@ class PipelineExecutor:
                 )
 
             elif pipeline_type == PipelineType.HYBRID.value:
-                return self._execute_hybrid_pipeline(
-                    pipeline,
-                    pipeline_name,
-                    node_name,
-                    start_date,
-                    end_date,
-                    model_version,
-                    hyperparams,
-                    execution_mode,
-                )
+                pipeline_nodes = self._extract_pipeline_nodes(pipeline)
+                node_configs = self._get_node_configs(pipeline_nodes)
+                CrossValidator.validate_hybrid_dependencies(node_configs)
+
+                if isinstance(self.context, HybridContext):
+                    return self.context.execute_hybrid_pipeline(pipeline_name)
+                else:
+                    return self._execute_hybrid_pipeline(
+                        pipeline,
+                        pipeline_name,
+                        start_date,
+                        end_date,
+                        model_version,
+                        hyperparams,
+                        execution_mode,
+                    )
 
             else:
                 raise ValueError(f"Unsupported pipeline type: {pipeline_type}")
@@ -156,7 +162,7 @@ class PipelineExecutor:
         pipeline_name: str,
         execution_mode: Optional[str] = "async",
     ) -> str:
-        """Ejecuta pipeline streaming puro."""
+        """Run pure streaming pipeline with specialized context."""
         logger.info(f"Executing streaming pipeline: {pipeline_name}")
 
         if hasattr(self.context, "streaming_validator"):
@@ -188,7 +194,6 @@ class PipelineExecutor:
         self,
         pipeline: Dict[str, Any],
         pipeline_name: str,
-        node_name: Optional[str],
         start_date: Optional[str],
         end_date: Optional[str],
         model_version: Optional[str],
@@ -198,11 +203,11 @@ class PipelineExecutor:
         """Ejecuta pipeline híbrido con coordinación mejorada."""
         logger.info(f"Executing hybrid pipeline: {pipeline_name}")
 
-        # Usar validación especializada si está disponible en el contexto
-        if hasattr(self.context, "validate_hybrid_pipeline"):
-            validation_result = self.context.validate_hybrid_pipeline(pipeline)
+        if isinstance(self.context, HybridContext):
+            validation_result = self.context.validate_hybrid_pipeline(
+                pipeline_name, pipeline
+            )
         else:
-            # Mantener validación existente como fallback
             pipeline_nodes = self._extract_pipeline_nodes(pipeline)
             node_configs = self._get_node_configs(pipeline_nodes)
             validation_result = PipelineValidator.validate_hybrid_pipeline(
@@ -309,7 +314,6 @@ class PipelineExecutor:
                         self._execute_streaming_node_unified,
                         node_name,
                         node_configs[node_name],
-                        execution_mode,
                     )
                     futures[future] = ("streaming", node_name)
 
@@ -385,10 +389,8 @@ class PipelineExecutor:
         self,
         node_name: str,
         node_config: Dict[str, Any],
-        execution_mode: str,
     ) -> Dict[str, Any]:
-        """Ejecuta un nodo streaming individual en contexto unificado."""
-
+        """Runs a single streaming node in a unified context."""
         logger.info(f"Executing streaming node '{node_name}' in unified context")
 
         if not self.unified_state.start_node_execution(node_name):
@@ -398,6 +400,11 @@ class PipelineExecutor:
 
         try:
             self._ensure_batch_dependencies_available(node_name, node_config)
+
+            if isinstance(self.context, HybridContext):
+                self.context._validate_streaming_ml_compatibility(
+                    node_name, self._get_node_dependencies(node_config)
+                )
 
             temp_pipeline = {
                 "type": PipelineType.STREAMING.value,

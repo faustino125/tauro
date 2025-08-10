@@ -3,7 +3,6 @@ import time
 from typing import Any, Dict, List, Optional, Set
 from concurrent.futures import (
     ThreadPoolExecutor,
-    as_completed,
     TimeoutError as FutureTimeoutError,
 )
 from threading import Event, Lock
