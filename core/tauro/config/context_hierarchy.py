@@ -8,10 +8,21 @@ class HybridContext(Context):
     """Combined context for hybrid streaming/ML pipelines."""
 
     def __init__(self, base_context: Context):
-        self.__dict__ = base_context.__dict__.copy()
+        super().__init__(
+            global_settings=base_context.global_settings,
+            pipelines_config=base_context.pipelines_config,
+            nodes_config=base_context.nodes_config,
+            input_config=base_context.input_config,
+            output_config=base_context.output_config,
+        )
 
+        self.base_context = base_context
         self._streaming_ctx = StreamingContext.from_base_context(self)
         self._ml_ctx = MLContext.from_base_context(self)
+
+        if hasattr(base_context, "spark"):
+            self.spark = base_context.spark
+
         self._validate_hybrid_config()
 
     def _validate_hybrid_config(self):
@@ -96,7 +107,7 @@ class HybridContext(Context):
     @property
     def pipelines(self):
         """Unified view of all pipelines"""
-        return self._pipeline_manager.pipelines
+        return self.base_context.pipelines
 
     def execute_pipeline(self, pipeline_name: str):
         """Execute hybrid pipeline with coordinated execution"""

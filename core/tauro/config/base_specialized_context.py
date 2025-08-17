@@ -57,7 +57,6 @@ class BaseSpecializedContext(Context, ABC):
                 )
 
             for dep in dependencies:
-                # Validación unificada: dependencias deben ser strings
                 if not isinstance(dep, str):
                     raise ConfigValidationError(
                         f"{context_type} node '{node_name}' dependency must be string, got {type(dep).__name__}"

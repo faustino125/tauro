@@ -9,6 +9,7 @@ from tauro.config.interpolator import VariableInterpolator
 from tauro.config.loaders import ConfigLoaderFactory
 from tauro.config.session import SparkSessionFactory
 from tauro.config.validators import ConfigValidator
+from tauro.config.dsl_loader import DSLLoader
 
 
 class Context:
@@ -76,30 +77,17 @@ class Context:
         self, source: Union[str, Dict], config_name: str
     ) -> Dict[str, Any]:
         """Load configuration from source with validation."""
+        source_info = source if isinstance(source, str) else type(source).__name__
+
         try:
             config = self._config_loader.load_config(source)
             self._validator.validate_type(config, dict, config_name)
             return config
-        except ConfigLoadError as e:
-            source_info = source if isinstance(source, str) else type(source).__name__
-            logger.error(
-                f"Error loading {config_name} from {source_info}: "
-                f"{type(e).__name__} - {str(e)}"
-            )
-            raise
-        except ConfigValidationError as e:
-            source_info = source if isinstance(source, str) else type(source).__name__
-            logger.error(
-                f"Validation error in {config_name} from {source_info}: "
-                f"{type(e).__name__} - {str(e)}"
-            )
+        except (ConfigLoadError, ConfigValidationError) as e:
+            logger.error(f"Error in {config_name} from {source_info}: {e}")
             raise
         except Exception as e:
-            source_info = source if isinstance(source, str) else type(source).__name__
-            logger.exception(
-                f"Unexpected error loading {config_name} from {source_info}: "
-                f"{type(e).__name__} - {str(e)}"
-            )
+            logger.exception(f"Unexpected error in {config_name} from {source_info}")
             raise ConfigLoadError(f"Unexpected error: {str(e)}") from e
 
     def _process_configurations(self) -> None:
@@ -191,8 +179,6 @@ class Context:
     @classmethod
     def from_python_dsl(cls, python_module_path: str) -> "Context":
         """Create Context instance from a Python DSL module."""
-        from .dsl_loader import DSLLoader
-
         dsl_loader = DSLLoader()
         config_data = dsl_loader.load_from_module(python_module_path)
 
@@ -206,8 +192,6 @@ class Context:
 
     def _validate_configurations(self):
         """Enhanced validation with cross-context checks"""
-        super()._validate_configurations()
-
         hybrid_pipelines = {
             name: p
             for name, p in self.pipelines_config.items()
@@ -234,7 +218,25 @@ class Context:
             )
 
     def _is_streaming_node(self, config: dict) -> bool:
-        return "input" in config and "format" in config["input"]
+        """Validate if node is streaming-capable"""
+        if not isinstance(config, dict):
+            return False
+
+        input_config = config.get("input", {})
+        return (
+            isinstance(input_config, dict)
+            and "format" in input_config
+            and input_config.get("format") in ["kafka", "kinesis", "socket"]
+        )
 
     def _is_ml_node(self, config: dict) -> bool:
-        return "model" in config or "hyperparams" in config
+        """Validate if node is ML-capable"""
+        if not isinstance(config, dict):
+            return False
+
+        return (
+            config.get("type") == "ml"
+            or "model" in config
+            or "hyperparams" in config
+            or config.get("node_type") == "ml"
+        )

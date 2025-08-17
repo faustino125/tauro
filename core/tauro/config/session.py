@@ -33,6 +33,9 @@ class SparkSessionFactory:
         "spark.executor.memory",
         "spark.driver.memory",
         "spark.master",
+        "spark.submit.deployMode",
+        "spark.dynamicAllocation.enabled",
+        "spark.executor.instances",
     ]
 
     @classmethod
@@ -78,7 +81,6 @@ class SparkSessionFactory:
                 host=config.host, token=config.token, cluster_id=config.cluster_id
             )
 
-            # Apply ML configurations
             if ml_config:
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
 
@@ -87,10 +89,10 @@ class SparkSessionFactory:
         except ImportError as e:
             logger.error(f"Databricks Connect not installed: {str(e)}")
             raise
-        except ValueError as e:  # Errores de configuración
+        except ValueError as e:
             logger.error(f"Invalid configuration: {str(e)}")
             raise
-        except RuntimeError as e:  # Errores de conexión
+        except RuntimeError as e:
             logger.error(f"Connection failed: {str(e)}")
             raise
         except Exception as e:
@@ -111,7 +113,6 @@ class SparkSessionFactory:
                 .master("local[*]")
             )
 
-            # Apply default ML configurations
             default_ml_configs = {
                 "spark.sql.adaptive.enabled": "true",
                 "spark.sql.adaptive.coalescePartitions.enabled": "true",
@@ -123,7 +124,6 @@ class SparkSessionFactory:
             for key, value in default_ml_configs.items():
                 builder = builder.config(key, value)
 
-            # Apply custom ML configurations
             if ml_config:
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
 

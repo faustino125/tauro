@@ -27,7 +27,6 @@ class MLValidator:
         self, node_config: Dict[str, Any], node_name: str
     ) -> None:
         """Validate ML node configuration."""
-        # Check required fields
         missing_fields = [
             field for field in self.REQUIRED_NODE_FIELDS if field not in node_config
         ]

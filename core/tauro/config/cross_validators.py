@@ -55,41 +55,11 @@ class HybridValidator:
         """Centraliza validación híbrida"""
         errors = []
 
-        # Validar dependencias cruzadas
-        for node_name, config in context.nodes_config.items():
-            deps = config.get("dependencies", [])
-            node_type = (
-                "streaming"
-                if context._streaming_ctx._is_compatible_node(config)
-                else "ml"
-            )
+        try:
+            CrossValidator.validate_hybrid_dependencies(context.nodes_config)
+        except ConfigValidationError as e:
+            errors.append(str(e))
 
-            for dep in deps:
-                dep_config = context.nodes_config.get(dep, {})
-                dep_type = (
-                    "streaming"
-                    if context._streaming_ctx._is_compatible_node(dep_config)
-                    else "ml"
-                )
-
-                # Validar streaming -> ML
-                if node_type == "ml" and dep_type == "streaming":
-                    if dep_config.get("output", {}).get("format") not in [
-                        "delta",
-                        "parquet",
-                    ]:
-                        errors.append(
-                            f"ML node '{node_name}' requiere salida delta/parquet de nodo streaming '{dep}'"
-                        )
-
-                # Validar ML -> streaming
-                if node_type == "streaming" and dep_type == "ml":
-                    if dep_config.get("model", {}).get("type") != "spark_ml":
-                        errors.append(
-                            f"Nodo streaming '{node_name}' requiere modelo spark_ml de nodo ML '{dep}'"
-                        )
-
-        # Validar estructura de pipelines híbridos
         hybrid_pipelines = {
             name: p
             for name, p in context.pipelines_config.items()

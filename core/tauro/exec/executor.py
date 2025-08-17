@@ -21,7 +21,7 @@ from tauro.config.ml_context import MLContext
 
 
 class PipelineExecutor:
-    """Executor mejorado que soporta correctamente pipelines batch, streaming e híbridos."""
+    """Executor that correctly supports batch, streaming, and hybrid pipelines."""
 
     def __init__(self, context: Context):
         """Inicializa el executor mejorado."""
@@ -200,7 +200,7 @@ class PipelineExecutor:
         hyperparams: Optional[Dict[str, Any]],
         execution_mode: Optional[str] = "async",
     ) -> Dict[str, Any]:
-        """Ejecuta pipeline híbrido con coordinación mejorada."""
+        """Run hybrid pipeline with improved coordination."""
         logger.info(f"Executing hybrid pipeline: {pipeline_name}")
 
         if isinstance(self.context, HybridContext):
@@ -434,8 +434,7 @@ class PipelineExecutor:
     def _ensure_batch_dependencies_available(
         self, streaming_node: str, node_config: Dict[str, Any]
     ) -> None:
-        """Asegura que las dependencias batch estén disponibles para nodo streaming."""
-
+        """Ensures that batch dependencies are available to the streaming node."""
         dependencies = self._get_node_dependencies(node_config)
 
         for dep in dependencies:
@@ -447,14 +446,14 @@ class PipelineExecutor:
                     f"batch dependency '{dep}' not completed (status: {dep_status})"
                 )
 
-            output_path = self.unified_state.get_batch_output_path(dep)
-            if not output_path:
-                raise RuntimeError(
-                    f"Streaming node '{streaming_node}' cannot start: "
-                    f"batch dependency '{dep}' has no output path"
-                )
-
-            logger.info(f"Batch dependency '{dep}' is available at: {output_path}")
+            if self.unified_state.requires_persistent_output(dep):
+                output_path = self.unified_state.get_batch_output_path(dep)
+                if not output_path:
+                    raise RuntimeError(
+                        f"Streaming node '{streaming_node}' cannot start: "
+                        f"batch dependency '{dep}' has no output path"
+                    )
+                logger.info(f"Batch dependency '{dep}' is available at: {output_path}")
 
     def _wait_for_node_dependencies(self, node_name: str) -> None:
         """Espera a que las dependencias de un nodo estén listas."""
@@ -486,12 +485,21 @@ class PipelineExecutor:
         streaming_nodes: List[str],
         node_configs: Dict[str, Dict[str, Any]],
     ) -> None:
-        """Registra todos los nodos en el estado unificado."""
-
+        """Registers all nodes in the unified state."""
         for node_name in batch_nodes:
             node_config = node_configs[node_name]
             dependencies = self._get_node_dependencies(node_config)
-            self.unified_state.register_node(node_name, NodeType.BATCH, dependencies)
+
+            has_persistent_output = "output" in node_config and (
+                "path" in node_config["output"] or "topic" in node_config["output"]
+            )
+
+            self.unified_state.register_node(
+                node_name,
+                NodeType.BATCH,
+                dependencies,
+                has_persistent_output=has_persistent_output,
+            )
 
         for node_name in streaming_nodes:
             node_config = node_configs[node_name]
@@ -559,29 +567,31 @@ class PipelineExecutor:
         model_version: Optional[str],
         hyperparams: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Prepara información específica de ML."""
+        """Prepare ML-specific information."""
         ml_info = {}
+        pipeline_ml_config = {}
+
+        final_hyperparams = hyperparams or {}
+        final_model_version = model_version or self.context.default_model_version
 
         if isinstance(self.context, MLContext):
-            ml_config = self.context.get_pipeline_ml_config(pipeline_name)
-
+            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
             final_model_version = (
                 model_version
-                or ml_config.get("model_version")
+                or pipeline_ml_config.get("model_version")
                 or self.context.default_model_version
             )
+
+            final_hyperparams.update(self.context.default_hyperparams or {})
+            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
+            if hyperparams:
+                final_hyperparams.update(hyperparams)
 
             if hasattr(self.context, "get_model_registry"):
                 model_registry = self.context.get_model_registry()
                 ml_info["model"] = model_registry.get_model(
-                    ml_config.get("model_name"), version=final_model_version
+                    pipeline_ml_config.get("model_name"), version=final_model_version
                 )
-
-            final_hyperparams = {}
-            final_hyperparams.update(self.context.default_hyperparams)
-            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
-            if hyperparams:
-                final_hyperparams.update(hyperparams)
 
             ml_info = {
                 "model_version": final_model_version,
@@ -593,17 +603,28 @@ class PipelineExecutor:
 
         elif self.is_ml_layer:
             pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
-
             final_model_version = (
                 model_version
                 or pipeline_ml_config.get("model_version")
                 or self.context.default_model_version
             )
 
+            final_hyperparams.update(self.context.default_hyperparams or {})
+            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
+            if hyperparams:
+                final_hyperparams.update(hyperparams)
+
             if not final_hyperparams:
                 logger.warning("Executing ML pipeline without hyperparameters")
             else:
                 logger.info(f"ML hyperparameters: {final_hyperparams}")
+
+            ml_info = {
+                "model_version": final_model_version,
+                "hyperparams": final_hyperparams,
+                "pipeline_config": pipeline_ml_config,
+                "is_experiment": self._is_experiment_pipeline(pipeline_name),
+            }
 
         return ml_info
 

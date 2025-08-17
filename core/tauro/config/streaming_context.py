@@ -60,8 +60,10 @@ class StreamingContext(BaseSpecializedContext):
         )
 
         return (
-            input_format in self._validator.SUPPORTED_STREAMING_FORMATS["input"]
-            or output_format in self._validator.SUPPORTED_STREAMING_FORMATS["output"]
+            input_format
+            in self.streaming_validator.SUPPORTED_STREAMING_FORMATS["input"]
+            or output_format
+            in self.streaming_validator.SUPPORTED_STREAMING_FORMATS["output"]
         )
 
     def _get_context_type_name(self) -> str:
