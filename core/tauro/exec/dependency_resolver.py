@@ -73,8 +73,8 @@ class DependencyResolver:
         return sorted_nodes
 
     @staticmethod
-    def _normalize_dependencies(dependencies: Any) -> List[Any]:
-        """Normalize dependencies to a consistent format."""
+    def normalize_dependencies(dependencies: Any) -> List[Any]:
+        """Normalize dependencies to a consistent list format."""
         if dependencies is None:
             return []
         elif isinstance(dependencies, str):
@@ -87,7 +87,7 @@ class DependencyResolver:
             return [str(dependencies)]
 
     @staticmethod
-    def _extract_dependency_name(dependency: Any) -> str:
+    def extract_dependency_name(dependency: Any) -> str:
         """Extract dependency name from various formats."""
         if isinstance(dependency, str):
             return dependency
@@ -107,17 +107,15 @@ class DependencyResolver:
     @staticmethod
     def get_node_dependencies(node_config: Dict[str, Any]) -> List[str]:
         """Extract and normalize node dependencies."""
-        dependencies = DependencyResolver._normalize_dependencies(
+        dependencies = DependencyResolver.normalize_dependencies(
             node_config.get("dependencies", [])
         )
-
         normalized_deps = []
         for dep in dependencies:
             try:
-                dep_name = DependencyResolver._extract_dependency_name(dep)
+                dep_name = DependencyResolver.extract_dependency_name(dep)
                 normalized_deps.append(dep_name)
             except (TypeError, ValueError) as e:
                 logger.error(f"Error processing dependency {dep}: {str(e)}")
                 raise
-
         return normalized_deps

@@ -132,7 +132,7 @@ class SecurityValidator:
 
     @staticmethod
     def validate_path(base_path: Path, target_path: Path) -> Path:
-        """Ensure target path is within base path boundaries."""
+        """Ensure target path is within base path boundaries and safe."""
         try:
             resolved_base = base_path.resolve().absolute()
             resolved_target = target_path.resolve().absolute()
@@ -144,13 +144,27 @@ class SecurityValidator:
                     f"Path traversal attempt blocked: {resolved_target}"
                 )
 
+            if ".." in relative.parts:
+                raise SecurityError(f"Path contains '..': {resolved_target}")
+
+            if any(part.startswith(".") for part in relative.parts):
+                raise SecurityError(
+                    f"Hidden file/directory access denied: {resolved_target}"
+                )
+
+            for sensitive_dir in SecurityValidator.SENSITIVE_DIRS:
+                if resolved_target.is_relative_to(sensitive_dir):
+                    raise SecurityError(
+                        f"Access to sensitive directory '{sensitive_dir}' denied"
+                    )
+
             if resolved_target.is_symlink():
                 raise SecurityError(f"Symbolic links not allowed: {resolved_target}")
 
             if resolved_target.exists():
                 stat_info = os.stat(resolved_target)
 
-                if stat_info.st_mode & stat.S_IWOTH:  # World-writable
+                if stat_info.st_mode & stat.S_IWOTH:
                     raise SecurityError(
                         f"World-writable file detected: {resolved_target}"
                     )

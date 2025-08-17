@@ -1,23 +1,22 @@
 import gc
-from loguru import logger  # type: ignore
-
 import time
 from typing import Any, Dict, List, Optional, Union
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from loguru import logger  # type: ignore
 
 from tauro.config.context import Context
+from tauro.config.context_factory import ContextFactory
+from tauro.config.ml_context import MLContext
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.node_executor import NodeExecutor
+from tauro.exec.pipeline_state import NodeType, UnifiedPipelineState
 from tauro.exec.pipeline_validator import PipelineValidator
-from tauro.exec.pipeline_state import UnifiedPipelineState, NodeType
+from tauro.exec.utils import extract_pipeline_nodes, get_node_dependencies
 from tauro.io.input import InputLoader
 from tauro.io.output import OutputManager
 from tauro.streaming.constants import PipelineType
 from tauro.streaming.pipeline_manager import StreamingPipelineManager
 from tauro.streaming.validators import StreamingValidator
-from tauro.config.context_factory import ContextFactory
-from tauro.config.ml_context import MLContext
-from tauro.exec.utils import extract_pipeline_nodes, get_node_dependencies
 
 
 class BaseExecutor:
@@ -254,8 +253,74 @@ class StreamingExecutor(BaseExecutor):
     ) -> List[str]:
         """Check resource conflicts with running pipelines."""
         conflicts = []
-        # ... (implementación existente)
+        current_resources = self._extract_pipeline_resources(pipeline)
+
+        for running in running_pipelines:
+            running_resources = self._extract_pipeline_resources(running)
+
+            common_topics = (
+                current_resources["kafka_topics"] & running_resources["kafka_topics"]
+            )
+            if common_topics:
+                conflicts.append(
+                    f"Kafka topic conflict: topics {', '.join(common_topics)}"
+                )
+
+            common_paths = (
+                current_resources["file_paths"] & running_resources["file_paths"]
+            )
+            if common_paths:
+                conflicts.append(f"File path conflict: paths {', '.join(common_paths)}")
+
+            common_tables = (
+                current_resources["delta_tables"] & running_resources["delta_tables"]
+            )
+            if common_tables:
+                conflicts.append(
+                    f"Delta table conflict: tables {', '.join(common_tables)}"
+                )
+
         return conflicts
+
+    def _extract_pipeline_resources(
+        self, pipeline: Dict[str, Any]
+    ) -> Dict[str, Set[str]]:
+        """Extract critical resources from pipeline configuration."""
+        resources = {"kafka_topics": set(), "file_paths": set(), "delta_tables": set()}
+
+        pipeline_nodes = self._extract_pipeline_nodes(pipeline)
+        for node_name in pipeline_nodes:
+            node_config = self.context.nodes_config.get(node_name, {})
+
+            # Input resources
+            input_config = node_config.get("input", {})
+            input_format = input_config.get("format")
+            if input_format == "kafka":
+                topics = input_config.get("options", {}).get("topics", [])
+                if isinstance(topics, str):
+                    topics = [topics]
+                resources["kafka_topics"].update(topics)
+            elif input_format == "file_stream":
+                path = input_config.get("options", {}).get("path")
+                if path:
+                    resources["file_paths"].add(path)
+            elif input_format == "delta":
+                path = input_config.get("options", {}).get("path")
+                if path:
+                    resources["delta_tables"].add(path)
+
+            output_config = node_config.get("output", {})
+            output_format = output_config.get("format")
+            if output_format == "kafka":
+                topic = output_config.get("options", {}).get("topic")
+                if topic:
+                    resources["kafka_topics"].add(topic)
+            elif output_format == "delta":
+                path = output_config.get("options", {}).get("path")
+                if path:
+                    resources["delta_tables"].add(path)
+
+        return resources
 
     def _wait_for_streaming_pipeline(
         self, execution_id: str, timeout_seconds: int = 300
@@ -280,6 +345,8 @@ class HybridExecutor(BaseExecutor):
         self.streaming_manager = StreamingPipelineManager(
             context, max_streaming_pipelines
         )
+        self.max_retries = context.global_settings.get("max_retries", 3)
+        self.retry_delay = context.global_settings.get("retry_delay", 5)
 
     def execute(
         self,
@@ -352,27 +419,44 @@ class HybridExecutor(BaseExecutor):
         ml_info: Dict[str, Any],
         execution_mode: str,
     ) -> Dict[str, Any]:
-        """Execute hybrid pipeline with unified coordination."""
+        """Execute hybrid pipeline with enhanced error handling."""
         execution_result = {
             "batch_execution": {},
             "streaming_execution_ids": [],
             "status": "success",
+            "errors": [],
         }
 
-        batch_results = self._execute_batch_phase(
-            batch_nodes, node_configs, start_date, end_date, ml_info
-        )
-        execution_result["batch_execution"] = batch_results
+        try:
+            batch_results = self._execute_batch_phase(
+                batch_nodes, node_configs, start_date, end_date, ml_info
+            )
+            execution_result["batch_execution"] = batch_results
 
-        if any(result["status"] != "completed" for result in batch_results.values()):
+            batch_failures = [
+                node
+                for node, result in batch_results.items()
+                if result["status"] != "completed"
+            ]
+
+            if batch_failures:
+                execution_result["status"] = "failed"
+                execution_result["errors"] = [
+                    f"Batch node failed: {node} - {batch_results[node].get('error')}"
+                    for node in batch_failures
+                ]
+                logger.error("Batch phase failed, skipping streaming execution")
+                return execution_result
+
+            streaming_execution_ids = self._execute_streaming_phase(
+                streaming_nodes, node_configs, execution_mode
+            )
+            execution_result["streaming_execution_ids"] = streaming_execution_ids
+
+        except Exception as e:
             execution_result["status"] = "failed"
-            logger.error("Batch phase failed, skipping streaming execution")
-            return execution_result
-
-        streaming_execution_ids = self._execute_streaming_phase(
-            streaming_nodes, node_configs, execution_mode
-        )
-        execution_result["streaming_execution_ids"] = streaming_execution_ids
+            execution_result["errors"].append(f"Hybrid pipeline failed: {str(e)}")
+            logger.error(f"Hybrid pipeline execution failed: {str(e)}")
 
         return execution_result
 
@@ -384,37 +468,82 @@ class HybridExecutor(BaseExecutor):
         end_date: str,
         ml_info: Dict[str, Any],
     ) -> Dict[str, Dict[str, Any]]:
-        """Execute all batch nodes with dependency resolution."""
+        """Execute batch nodes with retries and dependency resolution."""
         results = {}
         dag = DependencyResolver.build_dependency_graph(batch_nodes, node_configs)
         execution_order = DependencyResolver.topological_sort(dag)
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {}
-            for node in execution_order:
-                if not self.unified_state.start_node_execution(node):
-                    continue
+        for node in execution_order:
+            if not self.unified_state.start_node_execution(node):
+                continue
 
-                future = executor.submit(
-                    self.node_executor.execute_single_node,
-                    node,
-                    start_date,
-                    end_date,
-                    ml_info,
-                )
-                futures[future] = node
-
-            for future in as_completed(futures):
-                node = futures[future]
+            for attempt in range(self.max_retries + 1):
                 try:
-                    output_path = future.result()
+                    output_path = self._execute_node_with_retry(
+                        node, start_date, end_date, ml_info, attempt
+                    )
                     results[node] = {"status": "completed", "output_path": output_path}
                     self.unified_state.complete_node_execution(node, output_path)
+                    break
+
                 except Exception as e:
-                    results[node] = {"status": "failed", "error": str(e)}
-                    self.unified_state.fail_node_execution(node, str(e))
+                    if attempt < self.max_retries:
+                        logger.warning(
+                            f"Retrying node '{node}' (attempt {attempt+1}/{self.max_retries})"
+                        )
+                        time.sleep(self.retry_delay * (attempt + 1))
+                    else:
+                        results[node] = {"status": "failed", "error": str(e)}
+                        self.unified_state.fail_node_execution(node, str(e))
+                        self._handle_batch_failure(node, results)
+                        raise
 
         return results
+
+    def _execute_node_with_retry(
+        self,
+        node_name: str,
+        start_date: str,
+        end_date: str,
+        ml_info: Dict[str, Any],
+        attempt: int,
+    ) -> Any:
+        """Execute a node with retry logic."""
+        try:
+            return self.node_executor.execute_single_node(
+                node_name, start_date, end_date, ml_info
+            )
+        except Exception as e:
+            if attempt < self.max_retries:
+                logger.warning(
+                    f"Attempt {attempt+1} failed for node '{node_name}'. Retrying..."
+                )
+                raise
+            else:
+                logger.error(
+                    f"Node '{node_name}' failed after {self.max_retries} attempts"
+                )
+                raise
+
+    def _handle_batch_failure(self, failed_node: str, results: Dict[str, Any]):
+        """Handle batch node failure: cancel dependents and stop related streaming nodes."""
+        logger.error(f"Batch node '{failed_node}' failed, cleaning up dependents")
+
+        for node in list(results.keys()):
+            if node != failed_node and self.unified_state.is_node_pending(node):
+                if failed_node in self.unified_state.get_node_dependencies(node):
+                    self.unified_state.cancel_node_execution(node)
+                    results[node] = {
+                        "status": "cancelled",
+                        "reason": f"Dependency {failed_node} failed",
+                    }
+                    logger.warning(f"Cancelled dependent node: {node}")
+
+        stopped_streaming = self.unified_state.stop_dependent_streaming_nodes(
+            failed_node
+        )
+        for node in stopped_streaming:
+            logger.warning(f"Stopped streaming node due to batch failure: {node}")
 
     def _execute_streaming_phase(
         self,

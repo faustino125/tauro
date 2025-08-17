@@ -6,17 +6,16 @@ from concurrent.futures import as_completed as thread_as_completed
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Set
 
-
 from loguru import logger  # type: ignore
 
+from tauro.config.ml_context import MLContext
 from tauro.exec.commands import Command, ExperimentCommand, MLNodeCommand, NodeCommand
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
-from tauro.config.ml_context import MLContext
 
 
 class NodeExecutor:
-    """Enhanced node executor with advanced ML capabilities and experiment support."""
+    """Enhanced node executor with ML support and optimized loading."""
 
     def __init__(self, context, input_loader, output_manager, max_workers: int = 4):
         self.context = context
@@ -511,44 +510,66 @@ class NodeExecutor:
 
     @lru_cache(maxsize=32)
     def _load_module(self, module_path: str):
-        """Cached module loader."""
+        """Load a module with caching to avoid repeated imports."""
+        logger.debug(f"Importing module: {module_path}")
         return importlib.import_module(module_path)
 
     def _load_node_function(self, node: Dict[str, Any]) -> Callable:
-        """Load a node's function from its corresponding module."""
+        """Load a node's function with comprehensive validation."""
         module_path = node.get("module")
         function_name = node.get("function")
 
         if not module_path or not function_name:
-            raise ValueError(
-                f"Missing module/function configuration in node. "
-                f"Got module='{module_path}', function='{function_name}'"
-            )
+            raise ValueError("Node configuration must include 'module' and 'function'")
 
         try:
-            logger.debug(
-                f"Loading function '{function_name}' from module '{module_path}'"
-            )
             module = self._load_module(module_path)
-
-            if not hasattr(module, function_name):
-                available_functions = [
-                    attr for attr in dir(module) if callable(getattr(module, attr))
-                ]
-                # Limitar la lista a 5 funciones
-                available_str = ", ".join(available_functions[:5])
-                if len(available_functions) > 5:
-                    available_str += ", ..."
-                raise AttributeError(
-                    f"Function '{function_name}' not found in module '{module_path}'. "
-                    f"Available functions: {available_str}"
-                )
-
-            return getattr(module, function_name)
-
         except ImportError as e:
             logger.error(f"Failed to import module '{module_path}': {str(e)}")
             raise ImportError(f"Cannot import module '{module_path}': {str(e)}")
-        except Exception as e:
-            logger.error(f"Unexpected error loading function: {str(e)}")
-            raise
+
+        if not hasattr(module, function_name):
+            available_funcs = [
+                attr
+                for attr in dir(module)
+                if callable(getattr(module, attr)) and not attr.startswith("_")
+            ]
+            available_str = ", ".join(available_funcs[:5])
+            if len(available_funcs) > 5:
+                available_str += f", ... (total: {len(available_funcs)})"
+
+            raise AttributeError(
+                f"Function '{function_name}' not found in module '{module_path}'. "
+                f"Available functions: {available_str}"
+            )
+
+        func = getattr(module, function_name)
+
+        if not callable(func):
+            raise TypeError(
+                f"Object '{function_name}' in module '{module_path}' is not callable"
+            )
+
+        try:
+            sig = inspect.signature(func)
+            params = list(sig.parameters.keys())
+
+            required_params = {"start_date", "end_date"}
+            if not required_params.issubset(params):
+                logger.warning(
+                    f"Function '{function_name}' may not accept required parameters: "
+                    f"start_date and end_date. Parameters found: {params}"
+                )
+
+            if self.is_ml_layer and "ml_context" not in params:
+                logger.info(
+                    f"Function '{function_name}' doesn't accept 'ml_context' parameter. "
+                    "ML-specific features may not be available."
+                )
+
+        except ValueError as e:
+            logger.warning(
+                f"Signature validation skipped for {function_name}: {str(e)}"
+            )
+
+        return func

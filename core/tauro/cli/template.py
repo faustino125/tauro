@@ -1,12 +1,13 @@
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Dict, Any, List, Optional
-from enum import Enum
 import json
+from abc import ABC, abstractmethod
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 from loguru import logger  # type: ignore
 
-from .core import ConfigFormat, TauroError, ExitCode
+from .core import ConfigFormat, ExitCode, TauroError
 
 try:
     import yaml  # type: ignore
@@ -477,10 +478,239 @@ class MedallionBasicTemplate(BaseTemplate):
         }
 
 
+class MedallionMLTemplate(MedallionBasicTemplate):
+    """Template for ML-optimized Medallion architecture with Platinum layer."""
+
+    def get_template_type(self) -> TemplateType:
+        return TemplateType.MEDALLION_ML
+
+    def generate_global_settings(self) -> Dict[str, Any]:
+        base = super().generate_global_settings()
+        base.update(
+            {
+                "ml_enabled": True,
+                "feature_store_path": "/mnt/feature_store",
+                "model_registry_path": "/mnt/models",
+                "experiment_tracking": "mlflow",
+                "default_model_version": "v1",
+                "default_hyperparams": {"random_state": 42},
+            }
+        )
+        return base
+
+    def generate_pipelines_config(self) -> Dict[str, Any]:
+        pipelines = super().generate_pipelines_config()
+        pipelines.update(
+            {
+                "ml_feature_pipeline": {
+                    "description": "Create ML features from processed data",
+                    "nodes": ["feature_engineering"],
+                    "type": "batch",
+                },
+                "ml_training_pipeline": {
+                    "description": "Train and validate ML models",
+                    "nodes": ["train_model", "evaluate_model"],
+                    "type": "batch",
+                },
+            }
+        )
+        return pipelines
+
+    def generate_nodes_config(self) -> Dict[str, Any]:
+        nodes = super().generate_nodes_config()
+        nodes.update(
+            {
+                "feature_engineering": {
+                    "description": "Create ML features from processed data",
+                    "module": "pipelines.ml.feature_engineering",
+                    "function": "create_features",
+                    "input": ["silver_data"],
+                    "output": ["features"],
+                    "dependencies": ["silver_processing"],
+                },
+                "train_model": {
+                    "description": "Train ML model",
+                    "module": "pipelines.ml.training",
+                    "function": "train_model",
+                    "input": ["features"],
+                    "output": ["model"],
+                    "dependencies": ["feature_engineering"],
+                    "hyperparameters": {"learning_rate": 0.01, "max_depth": 5},
+                },
+                "evaluate_model": {
+                    "description": "Evaluate model performance",
+                    "module": "pipelines.ml.evaluation",
+                    "function": "evaluate_model",
+                    "input": ["test_data", "model"],
+                    "output": ["evaluation_report"],
+                    "dependencies": ["train_model"],
+                },
+            }
+        )
+        return nodes
+
+    def generate_input_config(self) -> Dict[str, Any]:
+        inputs = super().generate_input_config()
+        inputs.update(
+            {
+                "silver_data": {
+                    "description": "Cleaned and processed data in Silver layer",
+                    "format": "delta",
+                    "filepath": "/mnt/data/silver",
+                }
+            }
+        )
+        return inputs
+
+    def generate_output_config(self) -> Dict[str, Any]:
+        outputs = super().generate_output_config()
+        outputs.update(
+            {
+                "features": {
+                    "description": "Engineered features for ML",
+                    "format": "delta",
+                    "table_name": "features",
+                    "schema": "ml_features",
+                    "write_mode": "overwrite",
+                },
+                "model": {
+                    "description": "Trained ML model",
+                    "format": "mlflow",
+                    "model_name": "churn_prediction",
+                    "experiment_name": "churn_experiment",
+                },
+                "evaluation_report": {
+                    "description": "Model evaluation metrics",
+                    "format": "json",
+                    "filepath": "/mnt/reports/evaluation.json",
+                },
+            }
+        )
+        return outputs
+
+
+class MLTrainingTemplate(MedallionMLTemplate):
+    """Template specialized for end-to-end ML training pipelines."""
+
+    def get_template_type(self) -> TemplateType:
+        return TemplateType.ML_TRAINING
+
+    def generate_pipelines_config(self) -> Dict[str, Any]:
+        return {
+            "data_ingestion": {
+                "description": "Ingest raw data for training",
+                "nodes": ["ingest_raw_data"],
+                "type": "batch",
+            },
+            "feature_engineering": {
+                "description": "Create features for training",
+                "nodes": ["clean_data", "feature_engineering"],
+                "type": "batch",
+            },
+            "model_training": {
+                "description": "Train and validate models",
+                "nodes": ["split_data", "train_model", "evaluate_model"],
+                "type": "batch",
+            },
+            "model_deployment": {
+                "description": "Deploy trained model",
+                "nodes": ["register_model", "deploy_model"],
+                "type": "hybrid",
+            },
+        }
+
+    def generate_nodes_config(self) -> Dict[str, Any]:
+        nodes = super().generate_nodes_config()
+        nodes.update(
+            {
+                "ingest_raw_data": {
+                    "description": "Ingest raw data from source",
+                    "module": "pipelines.data.ingestion",
+                    "function": "ingest_data",
+                    "input": [],
+                    "output": ["raw_data"],
+                    "dependencies": [],
+                },
+                "clean_data": {
+                    "description": "Clean and preprocess raw data",
+                    "module": "pipelines.data.cleaning",
+                    "function": "clean_data",
+                    "input": ["raw_data"],
+                    "output": ["cleaned_data"],
+                    "dependencies": ["ingest_raw_data"],
+                },
+                "split_data": {
+                    "description": "Split data into train and test sets",
+                    "module": "pipelines.ml.data_prep",
+                    "function": "split_data",
+                    "input": ["features"],
+                    "output": ["train_data", "test_data"],
+                    "dependencies": ["feature_engineering"],
+                },
+                "register_model": {
+                    "description": "Register model in model registry",
+                    "module": "pipelines.ml.registry",
+                    "function": "register_model",
+                    "input": ["model", "evaluation_report"],
+                    "output": ["registered_model"],
+                    "dependencies": ["evaluate_model"],
+                },
+                "deploy_model": {
+                    "description": "Deploy model to production",
+                    "module": "pipelines.ml.deployment",
+                    "function": "deploy_model",
+                    "input": ["registered_model"],
+                    "output": ["deployed_model"],
+                    "dependencies": ["register_model"],
+                },
+            }
+        )
+        return nodes
+
+    def generate_input_config(self) -> Dict[str, Any]:
+        inputs = super().generate_input_config()
+        inputs.update(
+            {
+                "raw_data": {
+                    "description": "Raw data from source systems",
+                    "format": "csv",
+                    "filepath": "/mnt/data/raw",
+                }
+            }
+        )
+        return inputs
+
+    def generate_output_config(self) -> Dict[str, Any]:
+        outputs = super().generate_output_config()
+        outputs.update(
+            {
+                "registered_model": {
+                    "description": "Registered model in ML registry",
+                    "format": "mlflow",
+                    "model_name": "production_model",
+                    "version": "latest",
+                },
+                "deployed_model": {
+                    "description": "Deployed model endpoint",
+                    "format": "api",
+                    "endpoint": "https://api.example.com/models/churn-prediction",
+                },
+            }
+        )
+        return outputs
+
+
 class TemplateFactory:
     """Factory for creating configuration templates."""
 
-    TEMPLATES = {TemplateType.MEDALLION_BASIC: MedallionBasicTemplate}
+    TEMPLATES = {
+        TemplateType.MEDALLION_BASIC: MedallionBasicTemplate,
+        TemplateType.MEDALLION_ML: MedallionMLTemplate,
+        TemplateType.ML_TRAINING: MLTrainingTemplate,
+        TemplateType.ML_INFERENCE: MLTrainingTemplate,  # Usar mismo template por ahora
+        TemplateType.ETL_BASIC: MedallionBasicTemplate,  # Usar mismo template por ahora
+        TemplateType.STREAMING: MedallionBasicTemplate,  # Usar mismo template por ahora
+    }
 
     @classmethod
     def create_template(
@@ -814,7 +1044,7 @@ def train_baseline_model(train_data: DataFrame, start_date: str, end_date: str) 
     pass
 
 
-def hyperparameter_tuning(train_data: DataFrame, validation_data: DataFrame, 
+def hyperparameter_tuning(train_data: DataFrame, validation_data: DataFrame,
                          start_date: str, end_date: str) -> dict:
     """Perform hyperparameter tuning."""
     logger.info(f"Tuning hyperparameters from {start_date} to {end_date}")
