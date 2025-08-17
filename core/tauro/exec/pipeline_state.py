@@ -436,25 +436,45 @@ class UnifiedPipelineState:
             self._pipeline_status = status
             logger.info(f"Pipeline status changed to: {status}")
 
-    def cleanup(self) -> None:
-        """Clean up resources and stop active streaming queries."""
+    def register_resource(self, node_name: str, resource_type: str, resource: Any):
+        """Register a resource for cleanup tracking"""
         with self._lock:
-            # Stop active streaming queries
+            if node_name not in self._nodes:
+                raise ValueError(f"Node '{node_name}' not registered")
+
+            self._nodes[node_name].resources.append((resource_type, resource))
+            logger.debug(f"Registered {resource_type} resource for node '{node_name}'")
+
+    def cleanup(self) -> None:
+        """Clean up all resources and stop active streaming queries"""
+        with self._lock:
             for node_name, query in self._streaming_queries.items():
-                if hasattr(query, "isActive") and query.isActive:
-                    try:
+                try:
+                    if hasattr(query, "isActive") and query.isActive:
                         query.stop()
                         logger.info(f"Stopped streaming query for node '{node_name}'")
+                except Exception as e:
+                    logger.warning(f"Error stopping streaming query: {e}")
+
+            for node in self._nodes.values():
+                for res_type, resource in node.resources:
+                    try:
+                        if res_type == "spark_rdd" and hasattr(resource, "unpersist"):
+                            resource.unpersist()
+                        elif hasattr(resource, "close"):
+                            resource.close()
+                        logger.debug(f"Released {res_type} for node '{node.node_name}'")
                     except Exception as e:
-                        logger.warning(
-                            f"Error stopping streaming query for '{node_name}': {e}"
-                        )
+                        logger.error(f"Error releasing resource: {str(e)}")
 
-            # Clear all state
-            self._streaming_queries.clear()
-            self._nodes.clear()
-            self._batch_outputs.clear()
-            self._cross_dependencies.clear()
-            self._failure_counts.clear()
+            self._reset_state()
 
-            logger.info("Unified pipeline state cleaned up")
+    def _reset_state(self):
+        """Reset all state containers"""
+        self._streaming_queries.clear()
+        self._nodes.clear()
+        self._batch_outputs.clear()
+        self._cross_dependencies.clear()
+        self._failure_counts.clear()
+        self._pipeline_status = "initializing"
+        self._circuit_open = False

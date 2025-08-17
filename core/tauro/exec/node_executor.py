@@ -65,12 +65,28 @@ class NodeExecutor:
             logger.error(f"Failed to execute node '{node_name}': {str(e)}")
             raise
         finally:
-            if "input_dfs" in locals():
-                del input_dfs
-            if "result_df" in locals():
-                del result_df
+            self._release_resources(input_dfs, result_df)
             duration = time.perf_counter() - start_time
             logger.debug(f"Node '{node_name}' executed in {duration:.2f}s")
+
+    def _release_resources(self, *dataframes):
+        """Explicitly release resources for memory management"""
+        for df in dataframes:
+            if df is None:
+                continue
+
+            try:
+                if hasattr(df, "unpersist"):
+                    df.unpersist()  # Spark DataFrame
+                elif hasattr(df, "close"):
+                    df.close()  # Conexiones
+                elif hasattr(df, "clear"):
+                    df.clear()  # Colecciones
+            except Exception as e:
+                logger.debug(f"Resource release warning: {str(e)}")
+
+            # Referencia explícita a None para GC
+            del df
 
     def execute_nodes_parallel(
         self,
