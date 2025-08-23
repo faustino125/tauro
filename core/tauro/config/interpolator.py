@@ -7,12 +7,17 @@ class VariableInterpolator:
 
     @staticmethod
     def interpolate(string: str, variables: Dict[str, Any]) -> str:
-        """Replace variables in a string with their corresponding values."""
+        """Replace variables in a string with their corresponding values.
+
+        Precedence:
+        1) Environment variables (${VAR}) if set
+        2) Provided 'variables' mapping (fallback)
+        """
         if not string:
             return string
 
         result = string
-        start = result.find("${}")
+
         start = result.find("${")
         while start != -1:
             end = result.find("}", start + 2)
@@ -24,8 +29,9 @@ class VariableInterpolator:
 
             if env_value is not None:
                 result = result[:start] + env_value + result[end + 1 :]
-
-            start = result.find("${", end + 1)
+                start = result.find("${", start + len(env_value))
+            else:
+                start = result.find("${", end + 1)
 
         if variables:
             for key, value in variables.items():

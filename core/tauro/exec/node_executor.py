@@ -22,7 +22,7 @@ class NodeExecutor:
         self.input_loader = input_loader
         self.output_manager = output_manager
         self.max_workers = max_workers
-        self.is_ml_layer = context.is_ml_layer
+        self.is_ml_layer = getattr(context, "is_ml_layer", False)
 
     def execute_single_node(
         self,

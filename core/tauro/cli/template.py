@@ -18,23 +18,9 @@ except ImportError:
 
 
 class TemplateType(Enum):
-    """Available template types."""
+    """Available template types (reduced to a single, simple Medallion template)."""
 
     MEDALLION_BASIC = "medallion_basic"
-    MEDALLION_ML = "medallion_ml"
-    ML_TRAINING = "ml_training"
-    ML_INFERENCE = "ml_inference"
-    ETL_BASIC = "etl_basic"
-    STREAMING = "streaming"
-
-
-class DataLayer(Enum):
-    """Data architecture layers."""
-
-    BRONZE = "bronze"
-    SILVER = "silver"
-    GOLD = "gold"
-    PLATINUM = "platinum"  # For ML models and features
 
 
 class TemplateError(TauroError):
@@ -85,9 +71,10 @@ class BaseTemplate(ABC):
         pass
 
     def generate_settings_json(self) -> Dict[str, Any]:
-        """Generate the main settings.json file."""
+        """Generate the main settings.json file with environment mappings."""
         file_ext = self._get_file_extension()
 
+        # Include 'pre_prod' to align with CLI environment choices
         return {
             "base_path": ".",
             "env_config": {
@@ -102,6 +89,11 @@ class BaseTemplate(ABC):
                     "global_settings_path": f"config/dev/global_settings{file_ext}",
                     "input_config_path": f"config/dev/input{file_ext}",
                     "output_config_path": f"config/dev/output{file_ext}",
+                },
+                "pre_prod": {
+                    "global_settings_path": f"config/pre_prod/global_settings{file_ext}",
+                    "input_config_path": f"config/pre_prod/input{file_ext}",
+                    "output_config_path": f"config/pre_prod/output{file_ext}",
                 },
                 "prod": {
                     "global_settings_path": f"config/prod/global_settings{file_ext}",
@@ -127,15 +119,16 @@ class BaseTemplate(ABC):
             "version": "1.0.0",
             "created_at": self.timestamp,
             "template_type": self.get_template_type().value,
-            "mode": "databricks",
+            "architecture": "medallion",
+            "layers": ["bronze", "silver", "gold"],
+            "mode": "local",  # change to 'databricks' or 'spark' if needed
             "max_parallel_nodes": 4,
             "fail_on_error": True,
-            "layer": "standard",
         }
 
 
 class MedallionBasicTemplate(BaseTemplate):
-    """Template for basic Medallion architecture (Bronze, Silver, Gold)."""
+    """Simple Medallion template supporting batch and streaming pipelines."""
 
     def get_template_type(self) -> TemplateType:
         return TemplateType.MEDALLION_BASIC
@@ -144,572 +137,202 @@ class MedallionBasicTemplate(BaseTemplate):
         base_settings = self.get_common_global_settings()
         base_settings.update(
             {
-                "input_path": "/mnt/data/raw",
-                "output_path": "/mnt/data/processed",
-                "architecture": "medallion",
-                "layers": ["bronze", "silver", "gold"],
-                "start_date": "2024-01-01",
-                "end_date": "2024-12-31",
+                "default_start_date": "2025-01-01",
+                "default_end_date": "2025-12-31",
+                "data_root": "data",
+                "bronze_path": "data/bronze",
+                "silver_path": "data/silver",
+                "gold_path": "data/gold",
             }
         )
         return base_settings
 
     def generate_pipelines_config(self) -> Dict[str, Any]:
+        # Batch pipelines and a simple streaming pipeline that lands in Bronze
         return {
-            "data_preparation": {
-                "description": "Prepare data for ML training",
-                "nodes": ["load_features", "split_data", "validate_splits"],
-                "inputs": ["feature_store"],
-                "outputs": ["train_data", "test_data", "validation_data"],
+            "bronze_batch_ingestion": {
+                "description": "Batch ingestion from CSV files to Bronze layer",
+                "type": "batch",
+                "nodes": ["ingest_sales_data", "ingest_customer_data"],
+                "inputs": ["sales_source_csv", "customer_source_csv"],
+                "outputs": ["bronze_sales", "bronze_customers"],
             },
-            "model_training": {
-                "description": "Train and tune ML models",
-                "nodes": [
-                    "train_baseline",
-                    "hyperparameter_tuning",
-                    "train_best_model",
-                    "cross_validate",
-                ],
-                "inputs": ["train_data", "validation_data"],
-                "outputs": ["baseline_model", "tuned_model", "best_model"],
+            "silver_transform": {
+                "description": "Clean and transform Bronze data into Silver",
+                "type": "batch",
+                "nodes": ["clean_sales_data", "clean_customer_data"],
+                "inputs": ["bronze_sales", "bronze_customers"],
+                "outputs": ["silver_sales", "silver_customers"],
             },
-            "model_evaluation": {
-                "description": "Evaluate and validate models",
-                "nodes": [
-                    "evaluate_models",
-                    "generate_reports",
-                    "validate_performance",
-                ],
-                "inputs": ["test_data", "best_model"],
-                "outputs": ["evaluation_metrics", "model_report"],
+            "gold_aggregation": {
+                "description": "Aggregate data in Gold layer for analytics",
+                "type": "batch",
+                "nodes": ["aggregate_sales"],
+                "inputs": ["silver_sales"],
+                "outputs": ["gold_sales_agg"],
             },
-            "model_deployment": {
-                "description": "Register and deploy models",
-                "nodes": ["register_model", "create_endpoints", "deploy_model"],
-                "inputs": ["best_model", "evaluation_metrics"],
-                "outputs": ["registered_model", "model_endpoint"],
+            "bronze_streaming_ingestion": {
+                "description": "Streaming ingestion from Kafka to Bronze",
+                "type": "streaming",
+                "nodes": ["stream_from_kafka", "process_stream", "write_stream"],
+                "inputs": ["kafka_topic_sales"],
+                "outputs": ["bronze_stream"],
             },
         }
 
     def generate_nodes_config(self) -> Dict[str, Any]:
+        # Minimal node definitions with module/function placeholders
         return {
-            # Data Preparation Nodes
-            "load_features": {
-                "description": "Load feature store data",
-                "module": "pipelines.ml.data_prep",
-                "function": "load_features",
-                "input": ["feature_store"],
-                "output": ["raw_features"],
+            # Bronze batch
+            "ingest_sales_data": {
+                "description": "Ingest sales CSV into Bronze",
+                "module": "pipelines.bronze.ingestion",
+                "function": "ingest_sales_data",
+                "input": ["sales_source_csv"],
+                "output": ["bronze_sales"],
                 "dependencies": [],
             },
-            "split_data": {
-                "description": "Split data into train/validation/test sets",
-                "module": "pipelines.ml.data_prep",
-                "function": "split_data",
-                "input": ["raw_features"],
-                "output": ["train_data", "test_data", "validation_data"],
-                "dependencies": ["load_features"],
+            "ingest_customer_data": {
+                "description": "Ingest customer CSV into Bronze",
+                "module": "pipelines.bronze.ingestion",
+                "function": "ingest_customer_data",
+                "input": ["customer_source_csv"],
+                "output": ["bronze_customers"],
+                "dependencies": [],
             },
-            "validate_splits": {
-                "description": "Validate data splits quality",
-                "module": "pipelines.ml.validation",
-                "function": "validate_splits",
-                "input": ["train_data", "test_data", "validation_data"],
-                "output": [],
-                "dependencies": ["split_data"],
+            # Silver
+            "clean_sales_data": {
+                "description": "Clean and standardize Bronze sales data",
+                "module": "pipelines.silver.transform",
+                "function": "clean_sales_data",
+                "input": ["bronze_sales"],
+                "output": ["silver_sales"],
+                "dependencies": ["ingest_sales_data"],
             },
-            # Training Nodes
-            "train_baseline": {
-                "description": "Train baseline model",
-                "module": "pipelines.ml.training",
-                "function": "train_baseline_model",
-                "input": ["train_data"],
-                "output": ["baseline_model"],
-                "model_artifacts": [
-                    {
-                        "name": "baseline_model",
-                        "type": "sklearn",
-                        "path": "models/baseline",
-                    }
-                ],
-                "dependencies": ["validate_splits"],
+            "clean_customer_data": {
+                "description": "Clean and standardize Bronze customer data",
+                "module": "pipelines.silver.transform",
+                "function": "clean_customer_data",
+                "input": ["bronze_customers"],
+                "output": ["silver_customers"],
+                "dependencies": ["ingest_customer_data"],
             },
-            "hyperparameter_tuning": {
-                "description": "Perform hyperparameter tuning",
-                "module": "pipelines.ml.tuning",
-                "function": "hyperparameter_tuning",
-                "input": ["train_data", "validation_data"],
-                "output": ["tuned_hyperparams"],
-                "dependencies": ["train_baseline"],
+            # Gold
+            "aggregate_sales": {
+                "description": "Aggregate sales for analytics",
+                "module": "pipelines.gold.aggregation",
+                "function": "aggregate_sales",
+                "input": ["silver_sales"],
+                "output": ["gold_sales_agg"],
+                "dependencies": ["clean_sales_data"],
             },
-            "train_best_model": {
-                "description": "Train model with best hyperparameters",
-                "module": "pipelines.ml.training",
-                "function": "train_best_model",
-                "input": ["train_data", "tuned_hyperparams"],
-                "output": ["best_model"],
-                "model_artifacts": [
-                    {"name": "best_model", "type": "sklearn", "path": "models/best"}
-                ],
-                "dependencies": ["hyperparameter_tuning"],
+            # Streaming to Bronze
+            "stream_from_kafka": {
+                "description": "Read sales events from Kafka",
+                "module": "pipelines.bronze.streaming",
+                "function": "stream_from_kafka",
+                "input": ["kafka_topic_sales"],
+                "output": ["raw_stream"],
+                "dependencies": [],
             },
-            "cross_validate": {
-                "description": "Perform cross-validation",
-                "module": "pipelines.ml.validation",
-                "function": "cross_validate_model",
-                "input": ["train_data", "best_model"],
-                "output": ["cv_scores"],
-                "dependencies": ["train_best_model"],
+            "process_stream": {
+                "description": "Parse and filter streaming events",
+                "module": "pipelines.bronze.streaming",
+                "function": "process_stream",
+                "input": ["raw_stream"],
+                "output": ["processed_stream"],
+                "dependencies": ["stream_from_kafka"],
             },
-            # Evaluation Nodes
-            "evaluate_models": {
-                "description": "Evaluate model performance",
-                "module": "pipelines.ml.evaluation",
-                "function": "evaluate_models",
-                "input": ["test_data", "best_model"],
-                "output": ["evaluation_metrics"],
-                "dependencies": ["cross_validate"],
-            },
-            "generate_reports": {
-                "description": "Generate model evaluation reports",
-                "module": "pipelines.ml.reporting",
-                "function": "generate_reports",
-                "input": ["evaluation_metrics", "cv_scores"],
-                "output": ["model_report"],
-                "dependencies": ["evaluate_models"],
-            },
-            "validate_performance": {
-                "description": "Validate model meets performance thresholds",
-                "module": "pipelines.ml.validation",
-                "function": "validate_performance",
-                "input": ["evaluation_metrics"],
-                "output": [],
-                "dependencies": ["generate_reports"],
-            },
-            # Deployment Nodes
-            "register_model": {
-                "description": "Register model in model registry",
-                "module": "pipelines.ml.deployment",
-                "function": "register_model",
-                "input": ["best_model", "evaluation_metrics"],
-                "output": ["registered_model"],
-                "dependencies": ["validate_performance"],
-            },
-            "create_endpoints": {
-                "description": "Create model serving endpoints",
-                "module": "pipelines.ml.deployment",
-                "function": "create_endpoints",
-                "input": ["registered_model"],
-                "output": ["model_endpoint"],
-                "dependencies": ["register_model"],
-            },
-            "deploy_model": {
-                "description": "Deploy model to production",
-                "module": "pipelines.ml.deployment",
-                "function": "deploy_model",
-                "input": ["model_endpoint"],
-                "output": [],
-                "dependencies": ["create_endpoints"],
+            "write_stream": {
+                "description": "Write streaming data to Bronze (Delta/Parquet)",
+                "module": "pipelines.bronze.streaming",
+                "function": "write_stream",
+                "input": ["processed_stream"],
+                "output": ["bronze_stream"],
+                "dependencies": ["process_stream"],
             },
         }
 
     def generate_input_config(self) -> Dict[str, Any]:
         return {
-            "feature_store": {
-                "description": "Feature store with ML-ready features",
-                "format": "delta",
-                "filepath": "/mnt/data/features/feature_store",
+            "sales_source_csv": {
+                "description": "Sales CSV input (batch)",
+                "format": "csv",
+                "filepath": "data/raw/sales/*.csv",
+                "options": {"header": True, "inferSchema": True},
             },
-            "raw_features": {
-                "description": "Raw features from feature store",
-                "format": "delta",
-                "filepath": "/mnt/data/features/raw_features",
+            "customer_source_csv": {
+                "description": "Customer CSV input (batch)",
+                "format": "csv",
+                "filepath": "data/raw/customers/*.csv",
+                "options": {"header": True, "inferSchema": True},
             },
-            "train_data": {
-                "description": "Training dataset",
-                "format": "delta",
-                "filepath": "/mnt/data/ml/train_data",
-            },
-            "test_data": {
-                "description": "Test dataset",
-                "format": "delta",
-                "filepath": "/mnt/data/ml/test_data",
-            },
-            "validation_data": {
-                "description": "Validation dataset",
-                "format": "delta",
-                "filepath": "/mnt/data/ml/validation_data",
-            },
-            "baseline_model": {
-                "description": "Baseline model",
-                "format": "pickle",
-                "filepath": "/mnt/models/baseline/model.pkl",
-            },
-            "tuned_hyperparams": {
-                "description": "Tuned hyperparameters",
-                "format": "json",
-                "filepath": "/mnt/models/hyperparams/best_params.json",
-            },
-            "best_model": {
-                "description": "Best trained model",
-                "format": "pickle",
-                "filepath": "/mnt/models/best/model.pkl",
-            },
-            "cv_scores": {
-                "description": "Cross-validation scores",
-                "format": "json",
-                "filepath": "/mnt/models/evaluation/cv_scores.json",
-            },
-            "evaluation_metrics": {
-                "description": "Model evaluation metrics",
-                "format": "json",
-                "filepath": "/mnt/models/evaluation/metrics.json",
-            },
-            "model_report": {
-                "description": "Model evaluation report",
-                "format": "json",
-                "filepath": "/mnt/models/reports/model_report.json",
-            },
-            "registered_model": {
-                "description": "Registered model reference",
-                "format": "json",
-                "filepath": "/mnt/models/registry/registered_model.json",
+            "kafka_topic_sales": {
+                "description": "Kafka topic for sales events (streaming)",
+                "format": "kafka",
+                "kafka.bootstrap.servers": "localhost:9092",
+                "subscribe": "sales_events",
+                "startingOffsets": "latest",
             },
         }
 
     def generate_output_config(self) -> Dict[str, Any]:
         return {
-            "train_data": {
-                "description": "Training data output",
+            # Bronze batch outputs
+            "bronze_sales": {
+                "description": "Bronze sales table",
                 "format": "delta",
-                "table_name": "train_data",
-                "schema": "ml_training",
-                "sub_folder": "datasets",
-                "write_mode": "overwrite",
-                "vacuum": True,
-            },
-            "test_data": {
-                "description": "Test data output",
-                "format": "delta",
-                "table_name": "test_data",
-                "schema": "ml_training",
-                "sub_folder": "datasets",
-                "write_mode": "overwrite",
-                "vacuum": True,
-            },
-            "validation_data": {
-                "description": "Validation data output",
-                "format": "delta",
-                "table_name": "validation_data",
-                "schema": "ml_training",
-                "sub_folder": "datasets",
-                "write_mode": "overwrite",
-                "vacuum": True,
-            },
-            "baseline_model": {
-                "description": "Baseline model output",
-                "format": "pickle",
-                "table_name": "baseline_model",
-                "schema": "ml_models",
-                "sub_folder": "baseline",
-                "write_mode": "overwrite",
-            },
-            "tuned_hyperparams": {
-                "description": "Tuned hyperparameters output",
-                "format": "json",
-                "table_name": "hyperparams",
-                "schema": "ml_tuning",
-                "sub_folder": "hyperparams",
-                "write_mode": "overwrite",
-            },
-            "best_model": {
-                "description": "Best model output",
-                "format": "pickle",
-                "table_name": "best_model",
-                "schema": "ml_models",
-                "sub_folder": "production",
-                "write_mode": "overwrite",
-            },
-            "cv_scores": {
-                "description": "Cross-validation scores output",
-                "format": "json",
-                "table_name": "cv_scores",
-                "schema": "ml_evaluation",
-                "sub_folder": "validation",
-                "write_mode": "overwrite",
-            },
-            "evaluation_metrics": {
-                "description": "Evaluation metrics output",
-                "format": "unity_catalog",
-                "catalog_name": "ml_monitoring",
-                "table_name": "evaluation_metrics",
-                "schema": "ml_evaluation",
-                "sub_folder": "metrics",
-                "write_mode": "append",
-                "partition_col": "date",
-                "vacuum": True,
-            },
-            "model_report": {
-                "description": "Model report output",
-                "format": "json",
-                "table_name": "model_reports",
-                "schema": "ml_evaluation",
-                "sub_folder": "reports",
-                "write_mode": "overwrite",
-            },
-            "registered_model": {
-                "description": "Registered model output",
-                "format": "unity_catalog",
-                "catalog_name": "ml_registry",
-                "table_name": "registered_models",
-                "schema": "ml_registry",
-                "sub_folder": "models",
+                "filepath": "data/bronze/sales",
                 "write_mode": "append",
                 "vacuum": True,
             },
-            "model_endpoint": {
-                "description": "Model endpoint output",
-                "format": "json",
-                "table_name": "model_endpoints",
-                "schema": "ml_deployment",
-                "sub_folder": "endpoints",
+            "bronze_customers": {
+                "description": "Bronze customers table",
+                "format": "delta",
+                "filepath": "data/bronze/customers",
+                "write_mode": "append",
+                "vacuum": True,
+            },
+            # Silver
+            "silver_sales": {
+                "description": "Silver sales table",
+                "format": "delta",
+                "filepath": "data/silver/sales",
                 "write_mode": "overwrite",
+                "vacuum": True,
+            },
+            "silver_customers": {
+                "description": "Silver customers table",
+                "format": "delta",
+                "filepath": "data/silver/customers",
+                "write_mode": "overwrite",
+                "vacuum": True,
+            },
+            # Gold
+            "gold_sales_agg": {
+                "description": "Gold aggregated sales table",
+                "format": "delta",
+                "filepath": "data/gold/sales_agg",
+                "write_mode": "overwrite",
+                "vacuum": True,
+            },
+            # Streaming sink into Bronze
+            "bronze_stream": {
+                "description": "Bronze streaming sink (Delta)",
+                "format": "delta",
+                "filepath": "data/bronze/stream_sales",
+                "checkpointLocation": "data/checkpoints/stream_sales",
+                "outputMode": "append",
+                "trigger": {"processingTime": "10 seconds"},
             },
         }
-
-
-class MedallionMLTemplate(MedallionBasicTemplate):
-    """Template for ML-optimized Medallion architecture with Platinum layer."""
-
-    def get_template_type(self) -> TemplateType:
-        return TemplateType.MEDALLION_ML
-
-    def generate_global_settings(self) -> Dict[str, Any]:
-        base = super().generate_global_settings()
-        base.update(
-            {
-                "ml_enabled": True,
-                "feature_store_path": "/mnt/feature_store",
-                "model_registry_path": "/mnt/models",
-                "experiment_tracking": "mlflow",
-                "default_model_version": "v1",
-                "default_hyperparams": {"random_state": 42},
-            }
-        )
-        return base
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        pipelines = super().generate_pipelines_config()
-        pipelines.update(
-            {
-                "ml_feature_pipeline": {
-                    "description": "Create ML features from processed data",
-                    "nodes": ["feature_engineering"],
-                    "type": "batch",
-                },
-                "ml_training_pipeline": {
-                    "description": "Train and validate ML models",
-                    "nodes": ["train_model", "evaluate_model"],
-                    "type": "batch",
-                },
-            }
-        )
-        return pipelines
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        nodes = super().generate_nodes_config()
-        nodes.update(
-            {
-                "feature_engineering": {
-                    "description": "Create ML features from processed data",
-                    "module": "pipelines.ml.feature_engineering",
-                    "function": "create_features",
-                    "input": ["silver_data"],
-                    "output": ["features"],
-                    "dependencies": ["silver_processing"],
-                },
-                "train_model": {
-                    "description": "Train ML model",
-                    "module": "pipelines.ml.training",
-                    "function": "train_model",
-                    "input": ["features"],
-                    "output": ["model"],
-                    "dependencies": ["feature_engineering"],
-                    "hyperparameters": {"learning_rate": 0.01, "max_depth": 5},
-                },
-                "evaluate_model": {
-                    "description": "Evaluate model performance",
-                    "module": "pipelines.ml.evaluation",
-                    "function": "evaluate_model",
-                    "input": ["test_data", "model"],
-                    "output": ["evaluation_report"],
-                    "dependencies": ["train_model"],
-                },
-            }
-        )
-        return nodes
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        inputs = super().generate_input_config()
-        inputs.update(
-            {
-                "silver_data": {
-                    "description": "Cleaned and processed data in Silver layer",
-                    "format": "delta",
-                    "filepath": "/mnt/data/silver",
-                }
-            }
-        )
-        return inputs
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        outputs = super().generate_output_config()
-        outputs.update(
-            {
-                "features": {
-                    "description": "Engineered features for ML",
-                    "format": "delta",
-                    "table_name": "features",
-                    "schema": "ml_features",
-                    "write_mode": "overwrite",
-                },
-                "model": {
-                    "description": "Trained ML model",
-                    "format": "mlflow",
-                    "model_name": "churn_prediction",
-                    "experiment_name": "churn_experiment",
-                },
-                "evaluation_report": {
-                    "description": "Model evaluation metrics",
-                    "format": "json",
-                    "filepath": "/mnt/reports/evaluation.json",
-                },
-            }
-        )
-        return outputs
-
-
-class MLTrainingTemplate(MedallionMLTemplate):
-    """Template specialized for end-to-end ML training pipelines."""
-
-    def get_template_type(self) -> TemplateType:
-        return TemplateType.ML_TRAINING
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        return {
-            "data_ingestion": {
-                "description": "Ingest raw data for training",
-                "nodes": ["ingest_raw_data"],
-                "type": "batch",
-            },
-            "feature_engineering": {
-                "description": "Create features for training",
-                "nodes": ["clean_data", "feature_engineering"],
-                "type": "batch",
-            },
-            "model_training": {
-                "description": "Train and validate models",
-                "nodes": ["split_data", "train_model", "evaluate_model"],
-                "type": "batch",
-            },
-            "model_deployment": {
-                "description": "Deploy trained model",
-                "nodes": ["register_model", "deploy_model"],
-                "type": "hybrid",
-            },
-        }
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        nodes = super().generate_nodes_config()
-        nodes.update(
-            {
-                "ingest_raw_data": {
-                    "description": "Ingest raw data from source",
-                    "module": "pipelines.data.ingestion",
-                    "function": "ingest_data",
-                    "input": [],
-                    "output": ["raw_data"],
-                    "dependencies": [],
-                },
-                "clean_data": {
-                    "description": "Clean and preprocess raw data",
-                    "module": "pipelines.data.cleaning",
-                    "function": "clean_data",
-                    "input": ["raw_data"],
-                    "output": ["cleaned_data"],
-                    "dependencies": ["ingest_raw_data"],
-                },
-                "split_data": {
-                    "description": "Split data into train and test sets",
-                    "module": "pipelines.ml.data_prep",
-                    "function": "split_data",
-                    "input": ["features"],
-                    "output": ["train_data", "test_data"],
-                    "dependencies": ["feature_engineering"],
-                },
-                "register_model": {
-                    "description": "Register model in model registry",
-                    "module": "pipelines.ml.registry",
-                    "function": "register_model",
-                    "input": ["model", "evaluation_report"],
-                    "output": ["registered_model"],
-                    "dependencies": ["evaluate_model"],
-                },
-                "deploy_model": {
-                    "description": "Deploy model to production",
-                    "module": "pipelines.ml.deployment",
-                    "function": "deploy_model",
-                    "input": ["registered_model"],
-                    "output": ["deployed_model"],
-                    "dependencies": ["register_model"],
-                },
-            }
-        )
-        return nodes
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        inputs = super().generate_input_config()
-        inputs.update(
-            {
-                "raw_data": {
-                    "description": "Raw data from source systems",
-                    "format": "csv",
-                    "filepath": "/mnt/data/raw",
-                }
-            }
-        )
-        return inputs
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        outputs = super().generate_output_config()
-        outputs.update(
-            {
-                "registered_model": {
-                    "description": "Registered model in ML registry",
-                    "format": "mlflow",
-                    "model_name": "production_model",
-                    "version": "latest",
-                },
-                "deployed_model": {
-                    "description": "Deployed model endpoint",
-                    "format": "api",
-                    "endpoint": "https://api.example.com/models/churn-prediction",
-                },
-            }
-        )
-        return outputs
 
 
 class TemplateFactory:
-    """Factory for creating configuration templates."""
+    """Factory for creating configuration templates (single option)."""
 
     TEMPLATES = {
         TemplateType.MEDALLION_BASIC: MedallionBasicTemplate,
-        TemplateType.MEDALLION_ML: MedallionMLTemplate,
-        TemplateType.ML_TRAINING: MLTrainingTemplate,
-        TemplateType.ML_INFERENCE: MLTrainingTemplate,  # Usar mismo template por ahora
-        TemplateType.ETL_BASIC: MedallionBasicTemplate,  # Usar mismo template por ahora
-        TemplateType.STREAMING: MedallionBasicTemplate,  # Usar mismo template por ahora
     }
 
     @classmethod
@@ -731,23 +354,13 @@ class TemplateFactory:
 
     @classmethod
     def list_available_templates(cls) -> List[Dict[str, str]]:
-        """List all available templates with descriptions."""
+        """List the single available template with a clear description."""
         return [
             {
                 "type": TemplateType.MEDALLION_BASIC.value,
-                "name": "Medallion Basic",
-                "description": "Basic Medallion architecture with Bronze, Silver, and Gold layers",
-            },
-            {
-                "type": TemplateType.MEDALLION_ML.value,
-                "name": "Medallion ML",
-                "description": "ML-optimized Medallion architecture with Platinum layer for models",
-            },
-            {
-                "type": TemplateType.ML_TRAINING.value,
-                "name": "ML Training",
-                "description": "Specialized ML model training and evaluation pipeline",
-            },
+                "name": "Medallion (Batch + Streaming)",
+                "description": "Simple Medallion architecture with batch and streaming examples (Bronze, Silver, Gold).",
+            }
         ]
 
 
@@ -770,6 +383,15 @@ class TemplateGenerator:
         else:
             return ".dsl"
 
+    def _settings_filename(self) -> str:
+        """Return settings file name aligned with ConfigDiscovery/ConfigManager expectations."""
+        if self.config_format == ConfigFormat.YAML:
+            return "settings_yml.json"
+        elif self.config_format == ConfigFormat.JSON:
+            return "settings_json.json"
+        else:
+            return "settings_dsl.json"
+
     def generate_project(
         self,
         template_type: TemplateType,
@@ -787,14 +409,14 @@ class TemplateGenerator:
         )
 
         # Create directory structure
-        self._create_directory_structure(template_type)
+        self._create_directory_structure()
 
         # Generate configuration files
         self._generate_config_files(template)
 
         # Generate sample code if requested
         if create_sample_code:
-            self._generate_sample_code(template)
+            self._generate_sample_code()
 
         # Generate additional project files
         self._generate_project_files(template)
@@ -803,11 +425,12 @@ class TemplateGenerator:
             f"Project '{project_name}' generated successfully at {self.output_path}"
         )
 
-    def _create_directory_structure(self, template_type: TemplateType) -> None:
+    def _create_directory_structure(self) -> None:
         """Create project directory structure."""
         directories = [
             "config",
             "config/dev",
+            "config/pre_prod",
             "config/prod",
             "pipelines",
             "pipelines/bronze",
@@ -819,21 +442,12 @@ class TemplateGenerator:
             "notebooks",
             "data",
             "data/raw",
-            "data/processed",
+            "data/bronze",
+            "data/silver",
+            "data/gold",
+            "data/checkpoints",
             "logs",
         ]
-
-        # Add ML-specific directories
-        if template_type in [TemplateType.MEDALLION_ML, TemplateType.ML_TRAINING]:
-            directories.extend(
-                [
-                    "pipelines/platinum",
-                    "pipelines/ml",
-                    "models",
-                    "experiments",
-                    "features",
-                ]
-            )
 
         for directory in directories:
             dir_path = self.output_path / directory
@@ -854,16 +468,17 @@ class TemplateGenerator:
         }
 
         # Generate main settings file
-        settings_file = self.output_path / f"settings_{self.config_format.value}.json"
+        settings_file = self.output_path / self._settings_filename()
         self._write_json_file(settings_file, template.generate_settings_json())
 
         # Generate configuration files for each environment
-        for env in ["base", "dev", "prod"]:
+        for env in ["base", "dev", "pre_prod", "prod"]:
             config_dir = self.output_path / "config" / (env if env != "base" else "")
 
             for config_name, config_data in configs.items():
+                # Only generate pipelines/nodes for base environment
                 if env != "base" and config_name in ["pipelines", "nodes"]:
-                    continue  # Only generate these for base environment
+                    continue
 
                 file_path = config_dir / f"{config_name}{self._file_extension}"
                 self._write_config_file(file_path, config_data)
@@ -895,7 +510,7 @@ class TemplateGenerator:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     def _write_dsl_file(self, file_path: Path, data: Dict[str, Any]) -> None:
-        """Write DSL file."""
+        """Write DSL file (very simple key/value with section headers)."""
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(f"# Configuration file generated on {datetime.now()}\n\n")
             self._write_dsl_dict(f, data, 0)
@@ -911,150 +526,91 @@ class TemplateGenerator:
             else:
                 f.write("  " * indent + f"{key} = {value}\n")
 
-    def _generate_sample_code(self, template: BaseTemplate) -> None:
-        """Generate sample Python code for pipeline functions."""
-        template_type = template.get_template_type()
-
-        if template_type == TemplateType.MEDALLION_BASIC:
-            self._generate_medallion_sample_code()
-        elif template_type == TemplateType.MEDALLION_ML:
-            self._generate_medallion_ml_sample_code()
-        elif template_type == TemplateType.ML_TRAINING:
-            self._generate_ml_training_sample_code()
-
-    def _generate_medallion_sample_code(self) -> None:
-        """Generate sample code for Medallion architecture."""
-        # Bronze layer sample
-        bronze_code = '''"""Bronze layer data ingestion functions."""
-from pyspark.sql import DataFrame
+    def _generate_sample_code(self) -> None:
+        """Generate minimal sample Python code for batch and streaming."""
+        # Bronze batch ingestion
+        bronze_ingestion_code = '''"""Bronze layer batch ingestion functions."""
 from loguru import logger
 
-
-def ingest_sales_data(start_date: str, end_date: str) -> DataFrame:
-    """Ingest raw sales data into Bronze layer."""
-    logger.info(f"Ingesting sales data from {start_date} to {end_date}")
-    # Implementation here
+def ingest_sales_data(start_date: str, end_date: str):
+    """Ingest raw sales data (CSV) into Bronze."""
+    logger.info(f"Ingesting sales from {start_date} to {end_date}")
+    # TODO: implement reading CSV and writing to Bronze (Delta/Parquet)
     pass
 
-
-def ingest_customer_data(start_date: str, end_date: str) -> DataFrame:
-    """Ingest raw customer data into Bronze layer."""
-    logger.info(f"Ingesting customer data from {start_date} to {end_date}")
-    # Implementation here
+def ingest_customer_data(start_date: str, end_date: str):
+    """Ingest raw customer data (CSV) into Bronze."""
+    logger.info(f"Ingesting customers from {start_date} to {end_date}")
+    # TODO: implement reading CSV and writing to Bronze (Delta/Parquet)
     pass
 '''
+        bronze_ingestion_file = (
+            self.output_path / "pipelines" / "bronze" / "ingestion.py"
+        )
+        self._write_text_file(bronze_ingestion_file, bronze_ingestion_code)
 
-        bronze_file = self.output_path / "pipelines" / "bronze" / "ingestion.py"
-        self._write_text_file(bronze_file, bronze_code)
-
-        # Silver layer sample
-        silver_code = '''"""Silver layer data cleaning and transformation functions."""
-from pyspark.sql import DataFrame
+        # Silver transformations
+        silver_transform_code = '''"""Silver layer transformation functions."""
 from loguru import logger
 
-
-def clean_sales_data(sales_bronze: DataFrame, start_date: str, end_date: str) -> DataFrame:
-    """Clean and standardize sales data for Silver layer."""
-    logger.info(f"Cleaning sales data from {start_date} to {end_date}")
-    # Implementation here
+def clean_sales_data(start_date: str, end_date: str):
+    """Clean and standardize Bronze sales data into Silver."""
+    logger.info(f"Cleaning sales from {start_date} to {end_date}")
+    # TODO: implement transformations and write to Silver
     pass
 
-
-def clean_customer_data(customer_bronze: DataFrame, start_date: str, end_date: str) -> DataFrame:
-    """Clean and standardize customer data for Silver layer."""
-    logger.info(f"Cleaning customer data from {start_date} to {end_date}")
-    # Implementation here
+def clean_customer_data(start_date: str, end_date: str):
+    """Clean and standardize Bronze customer data into Silver."""
+    logger.info(f"Cleaning customers from {start_date} to {end_date}")
+    # TODO: implement transformations and write to Silver
     pass
 '''
+        silver_transform_file = (
+            self.output_path / "pipelines" / "silver" / "transform.py"
+        )
+        self._write_text_file(silver_transform_file, silver_transform_code)
 
-        silver_file = self.output_path / "pipelines" / "silver" / "cleaning.py"
-        self._write_text_file(silver_file, silver_code)
-
-    def _generate_medallion_ml_sample_code(self) -> None:
-        """Generate sample code for ML Medallion architecture."""
-        # Feature engineering sample
-        features_code = '''"""Gold layer feature engineering for ML."""
-from pyspark.sql import DataFrame
+        # Gold aggregations
+        gold_aggregation_code = '''"""Gold layer aggregation functions."""
 from loguru import logger
 
-
-def create_customer_features(master_dataset: DataFrame, start_date: str, end_date: str) -> DataFrame:
-    """Engineer customer-level features for ML models."""
-    logger.info(f"Creating customer features from {start_date} to {end_date}")
-    # Implementation here
-    pass
-
-
-def create_temporal_features(master_dataset: DataFrame, start_date: str, end_date: str) -> DataFrame:
-    """Engineer time-based features for ML models."""
-    logger.info(f"Creating temporal features from {start_date} to {end_date}")
-    # Implementation here
+def aggregate_sales(start_date: str, end_date: str):
+    """Aggregate Silver sales for analytics into Gold."""
+    logger.info(f"Aggregating sales from {start_date} to {end_date}")
+    # TODO: implement aggregations and write to Gold
     pass
 '''
+        gold_aggregation_file = (
+            self.output_path / "pipelines" / "gold" / "aggregation.py"
+        )
+        self._write_text_file(gold_aggregation_file, gold_aggregation_code)
 
-        features_file = self.output_path / "pipelines" / "gold" / "features.py"
-        self._write_text_file(features_file, features_code)
-
-        # ML training sample
-        ml_code = '''"""Platinum layer ML model training."""
-from pyspark.sql import DataFrame
+        # Streaming ingestion into Bronze
+        bronze_streaming_code = '''"""Bronze layer streaming ingestion functions."""
 from loguru import logger
-import pickle
 
+def stream_from_kafka():
+    """Read events from Kafka (source)."""
+    logger.info("Starting Kafka source stream")
+    # TODO: implement Kafka source creation
+    return None
 
-def train_churn_model(training_data: DataFrame, start_date: str, end_date: str) -> bytes:
-    """Train customer churn prediction model."""
-    logger.info(f"Training churn model with data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+def process_stream(raw_stream=None):
+    """Parse/filter streaming events."""
+    logger.info("Processing streaming data")
+    # TODO: implement streaming transformations
+    return None
 
-
-def train_recommendation_model(training_data: DataFrame, start_date: str, end_date: str) -> bytes:
-    """Train product recommendation model."""
-    logger.info(f"Training recommendation model with data from {start_date} to {end_date}")
-    # Implementation here
-    pass
-'''
-
-        ml_file = self.output_path / "pipelines" / "platinum" / "training.py"
-        self._write_text_file(ml_file, ml_code)
-
-    def _generate_ml_training_sample_code(self) -> None:
-        """Generate sample code for ML training pipeline."""
-        training_code = '''"""ML model training pipeline functions."""
-from pyspark.sql import DataFrame
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
-from loguru import logger
-import pickle
-
-
-def split_data(features: DataFrame, start_date: str, end_date: str) -> tuple:
-    """Split data into train, validation, and test sets."""
-    logger.info(f"Splitting data from {start_date} to {end_date}")
-    # Implementation here
-    pass
-
-
-def train_baseline_model(train_data: DataFrame, start_date: str, end_date: str) -> bytes:
-    """Train a baseline model."""
-    logger.info(f"Training baseline model with data from {start_date} to {end_date}")
-    # Implementation here
-    pass
-
-
-def hyperparameter_tuning(train_data: DataFrame, validation_data: DataFrame,
-                         start_date: str, end_date: str) -> dict:
-    """Perform hyperparameter tuning."""
-    logger.info(f"Tuning hyperparameters from {start_date} to {end_date}")
-    # Implementation here
+def write_stream(processed_stream=None):
+    """Write streaming data to Bronze (Delta/Parquet) with checkpoints."""
+    logger.info("Writing streaming data to Bronze")
+    # TODO: implement sink with checkpointing
     pass
 '''
-
-        training_file = self.output_path / "pipelines" / "ml" / "training.py"
-        training_file.parent.mkdir(parents=True, exist_ok=True)
-        self._write_text_file(training_file, training_code)
+        bronze_streaming_file = (
+            self.output_path / "pipelines" / "bronze" / "streaming.py"
+        )
+        self._write_text_file(bronze_streaming_file, bronze_streaming_code)
 
     def _generate_project_files(self, template: BaseTemplate) -> None:
         """Generate additional project files."""
@@ -1063,59 +619,53 @@ def hyperparameter_tuning(train_data: DataFrame, validation_data: DataFrame,
 
 Generated using Tauro {template.get_template_type().value} template.
 
-## Project Structure
+## What you get
 
-- `config/`: Configuration files for different environments
-- `pipelines/`: Data pipeline implementation
-- `src/`: Source code utilities
-- `tests/`: Unit and integration tests
-- `notebooks/`: Jupyter notebooks for exploration
-- `data/`: Data storage (local development)
-- `logs/`: Application logs
+- Medallion architecture (Bronze, Silver, Gold)
+- Batch pipelines:
+  - bronze_batch_ingestion
+  - silver_transform
+  - gold_aggregation
+- Streaming pipeline:
+  - bronze_streaming_ingestion (Kafka -> Bronze)
 
-## Getting Started
+## Quick start
 
 1. Install dependencies:
-   ```bash
    pip install -r requirements.txt
-   ```
 
-2. Run a pipeline:
-   ```bash
-   tauro --env dev --pipeline bronze_ingestion
-   ```
+2. Inspect and adjust config files under ./config and settings_*.json
 
-## Architecture
+3. Run a batch pipeline:
+   tauro --env dev --pipeline bronze_batch_ingestion
 
-This project follows the {template.get_template_type().value} architecture pattern.
+4. Run streaming (from streaming CLI):
+   tauro --streaming --streaming-command run --streaming-config ./settings_json.json --streaming-pipeline bronze_streaming_ingestion
 
 Generated on: {template.timestamp}
 """
-
         readme_file = self.output_path / "README.md"
+        # Use 4 backticks escaping for Markdown outside this function when needed by the platform
         self._write_text_file(readme_file, readme_content)
 
-        # requirements.txt
-        requirements = """# Tauro framework dependencies
+        # requirements.txt (minimal)
+        requirements = """# Tauro framework (core CLI integration)
 tauro-framework>=0.1.0
 
-# Data processing
+# Data processing (choose what you need)
 pyspark>=3.4.0
 pandas>=1.5.0
-polars>=0.19.0
 
-# Delta Lake
+# Optional: Delta Lake for tables
 delta-spark>=2.4.0
 
-# ML libraries (if using ML templates)
-scikit-learn>=1.3.0
-mlflow>=2.7.0
+# Streaming (Kafka)
+kafka-python>=2.0.2
 
 # Utilities
 loguru>=0.7.0
 pyyaml>=6.0
 """
-
         requirements_file = self.output_path / "requirements.txt"
         self._write_text_file(requirements_file, requirements)
 
@@ -1124,24 +674,18 @@ pyyaml>=6.0
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
 env/
 venv/
-ENV/
 
 # Data
 data/raw/*
-data/processed/*
+data/bronze/*
+data/silver/*
+data/gold/*
 !data/raw/.gitkeep
-!data/processed/.gitkeep
 
 # Logs
 logs/*.log
-
-# Models
-models/*.pkl
-models/*.joblib
 
 # Notebooks checkpoints
 .ipynb_checkpoints/
@@ -1149,8 +693,6 @@ models/*.joblib
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
 # OS
 .DS_Store
@@ -1159,11 +701,7 @@ Thumbs.db
 # Spark
 metastore_db/
 spark-warehouse/
-
-# Databricks
-.databricks/
 """
-
         gitignore_file = self.output_path / ".gitignore"
         self._write_text_file(gitignore_file, gitignore)
 
@@ -1234,10 +772,7 @@ class TemplateCommand:
         logger.info("Examples:")
         logger.info("  tauro --template medallion_basic --project-name my_pipeline")
         logger.info(
-            "  tauro --template medallion_ml --project-name ml_project --format json"
-        )
-        logger.info(
-            "  tauro --template ml_training --project-name model_training --output ./projects"
+            "  tauro --template medallion_basic --project-name my_pipeline --format json"
         )
 
         return ExitCode.SUCCESS.value
@@ -1377,44 +912,18 @@ class TemplateCommand:
         logger.info("\n📋 Next steps:")
         logger.info(f"1. cd {output_dir}")
         logger.info("2. pip install -r requirements.txt")
-        logger.info("3. Review and customize configuration files")
+        logger.info("3. Review and customize configuration files under ./config")
         logger.info("4. Implement pipeline functions in the pipelines/ directory")
 
-        # Template-specific guidance
-        if template_type == TemplateType.MEDALLION_BASIC:
-            logger.info("\n🔄 Medallion Architecture:")
-            logger.info("   • Bronze: Raw data ingestion")
-            logger.info("   • Silver: Cleaned and transformed data")
-            logger.info("   • Gold: Business-ready aggregations")
+        logger.info("\n🚀 Example usage (batch):")
+        logger.info("   tauro --env dev --pipeline bronze_batch_ingestion")
+        logger.info("   tauro --env dev --pipeline silver_transform")
+        logger.info("   tauro --env dev --pipeline gold_aggregation")
 
-            logger.info("\n🚀 Example usage:")
-            logger.info("   tauro --env dev --pipeline bronze_ingestion")
-            logger.info("   tauro --env dev --pipeline silver_transformation")
-            logger.info("   tauro --env dev --pipeline gold_aggregation")
-
-        elif template_type == TemplateType.MEDALLION_ML:
-            logger.info("\n🤖 ML Medallion Architecture:")
-            logger.info("   • Bronze: Raw data ingestion")
-            logger.info("   • Silver: ML preprocessing")
-            logger.info("   • Gold: Feature engineering")
-            logger.info("   • Platinum: ML models and inference")
-
-            logger.info("\n🚀 Example usage:")
-            logger.info("   tauro --env dev --pipeline bronze_ingestion")
-            logger.info("   tauro --env dev --pipeline gold_feature_engineering")
-            logger.info("   tauro --env dev --pipeline platinum_ml_training")
-
-        elif template_type == TemplateType.ML_TRAINING:
-            logger.info("\n🎯 ML Training Pipeline:")
-            logger.info("   • Data preparation and splitting")
-            logger.info("   • Model training and tuning")
-            logger.info("   • Evaluation and validation")
-            logger.info("   • Model registration and deployment")
-
-            logger.info("\n🚀 Example usage:")
-            logger.info("   tauro --env dev --pipeline data_preparation")
-            logger.info("   tauro --env dev --pipeline model_training")
-            logger.info("   tauro --env dev --pipeline model_evaluation")
+        logger.info("\n🟢 Example usage (streaming):")
+        logger.info(
+            "   tauro --streaming --streaming-command run --streaming-config ./settings_json.json --streaming-pipeline bronze_streaming_ingestion"
+        )
 
 
 # Integration with CLI system

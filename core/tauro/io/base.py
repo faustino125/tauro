@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
@@ -10,10 +10,39 @@ class BaseIO:
     """Base class for input/output operations with enhanced validation and error handling."""
 
     def __init__(self, context: Dict[str, Any]):
-        """Initialize BaseIO with application context."""
+        """Initialize BaseIO with application context (dict u objeto Context)."""
         self.context = context
         self.config_validator = ConfigValidator()
         logger.debug("BaseIO initialized with context")
+
+    def _ctx_get(self, key: str, default: Optional[Any] = None) -> Any:
+        """Safe get from context for both dict and object."""
+        if isinstance(self.context, dict):
+            return self.context.get(key, default)
+        return getattr(self.context, key, default)
+
+    def _ctx_has(self, key: str) -> bool:
+        """Safe hasattr/contains for context."""
+        if isinstance(self.context, dict):
+            return key in self.context
+        return hasattr(self.context, key)
+
+    def _ctx_spark(self) -> Optional[Any]:
+        """Get SparkSession if present, else None."""
+        return self._ctx_get("spark")
+
+    def _ctx_mode(self) -> Optional[str]:
+        """Get normalized execution mode."""
+        mode = self._ctx_get("execution_mode")
+        if not mode:
+            return None
+        mode = str(mode).lower()
+        if mode == "databricks":
+            return "distributed"
+        return mode
+
+    def _is_local(self) -> bool:
+        return self._ctx_mode() == "local"
 
     def _validate_config(
         self, config: Dict[str, Any], required_fields: List[str], config_type: str
@@ -23,7 +52,7 @@ class BaseIO:
 
     def _prepare_local_directory(self, path: str) -> None:
         """Create local directories if necessary."""
-        if getattr(self.context, "execution_mode", None) == "local":
+        if self._is_local():
             try:
                 dir_path = os.path.dirname(path)
                 if dir_path and not os.path.isdir(dir_path):
@@ -36,7 +65,8 @@ class BaseIO:
 
     def _spark_available(self) -> bool:
         """Check if Spark context is available."""
-        is_available = hasattr(self.context, "spark") and self.context.spark is not None
+        spark = self._ctx_spark()
+        is_available = spark is not None
         logger.debug(f"Spark availability: {is_available}")
         return is_available
 

@@ -3,6 +3,7 @@ import stat
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime  # added
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
@@ -91,12 +92,18 @@ class CLIConfig:
     config_type: Optional[str] = None
     interactive: bool = False
     list_configs: bool = False
+    # ADDED: flags referenced elsewhere
+    list_pipelines: bool = False
+    pipeline_info: Optional[str] = None
+    clear_cache: bool = False
+    # logging and exec
     log_level: str = "INFO"
     log_file: Optional[str] = None
     validate_only: bool = False
     dry_run: bool = False
     verbose: bool = False
     quiet: bool = False
+    # template
     template: Optional[str] = None
     project_name: Optional[str] = None
     output_path: Optional[str] = None
@@ -104,7 +111,7 @@ class CLIConfig:
     no_sample_code: bool = False
     list_templates: bool = False
     template_interactive: bool = False
-
+    # streaming
     streaming: bool = False
     streaming_command: Optional[str] = None
     streaming_config: Optional[str] = None
@@ -130,6 +137,20 @@ class ConfigLoaderProtocol(Protocol):
 class SecurityValidator:
     """Validates file paths and prevents directory traversal attacks."""
 
+    # ADDED: define sensitive directories (best-effort; platform-aware)
+    SENSITIVE_DIRS: Tuple[Path, ...] = tuple(
+        p
+        for p in [
+            Path("/etc"),
+            Path("/proc"),
+            Path("/sys"),
+            Path("/var/run"),
+            Path("/root"),
+            Path.home() / ".ssh",
+        ]
+        if os.name == "posix"
+    )
+
     @staticmethod
     def validate_path(base_path: Path, target_path: Path) -> Path:
         """Ensure target path is within base path boundaries and safe."""
@@ -152,27 +173,40 @@ class SecurityValidator:
                     f"Hidden file/directory access denied: {resolved_target}"
                 )
 
+            # Guard sensitive dirs (POSIX only)
             for sensitive_dir in SecurityValidator.SENSITIVE_DIRS:
-                if resolved_target.is_relative_to(sensitive_dir):
-                    raise SecurityError(
-                        f"Access to sensitive directory '{sensitive_dir}' denied"
-                    )
-
-            if resolved_target.is_symlink():
-                raise SecurityError(f"Symbolic links not allowed: {resolved_target}")
+                try:
+                    if resolved_target.is_relative_to(sensitive_dir):
+                        raise SecurityError(
+                            f"Access to sensitive directory '{sensitive_dir}' denied"
+                        )
+                except AttributeError:
+                    # Path.is_relative_to requires Python 3.9+; fallback:
+                    try:
+                        resolved_target.relative_to(sensitive_dir)
+                        raise SecurityError(
+                            f"Access to sensitive directory '{sensitive_dir}' denied"
+                        )
+                    except Exception:
+                        pass
 
             if resolved_target.exists():
-                stat_info = os.stat(resolved_target)
-
-                if stat_info.st_mode & stat.S_IWOTH:
-                    raise SecurityError(
-                        f"World-writable file detected: {resolved_target}"
-                    )
-
-                if stat_info.st_uid != os.getuid():
-                    raise SecurityError(
-                        f"File not owned by current user: {resolved_target}"
-                    )
+                try:
+                    stat_info = os.stat(resolved_target)
+                    # World-writable check (POSIX)
+                    if hasattr(stat, "S_IWOTH") and (stat_info.st_mode & stat.S_IWOTH):
+                        raise SecurityError(
+                            f"World-writable file detected: {resolved_target}"
+                        )
+                    # Ownership check (POSIX only)
+                    if hasattr(os, "getuid"):
+                        if stat_info.st_uid != os.getuid():
+                            raise SecurityError(
+                                f"File not owned by current user: {resolved_target}"
+                            )
+                except OSError:
+                    # If we can't stat, be conservative but allow
+                    pass
 
             return resolved_target
         except Exception as e:
@@ -296,3 +330,30 @@ class PathManager:
         logger.info("- Check if all required modules are installed")
         logger.info("- Verify __init__.py files exist in package directories")
         logger.info("- Ensure working directory is correct")
+
+
+def parse_iso_date(date_str: Optional[str]) -> Optional[str]:
+    """Validate and normalize a date string to ISO format YYYY-MM-DD."""
+    if not date_str:
+        return None
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return dt.strftime("%Y-%m-%d")
+    except ValueError as e:
+        raise ValidationError(
+            f"Invalid date format '{date_str}'. Use YYYY-MM-DD"
+        ) from e
+
+
+def validate_date_range(start_date: Optional[str], end_date: Optional[str]) -> None:
+    """Ensure start_date <= end_date when both are provided."""
+    if start_date and end_date:
+        try:
+            sd = datetime.strptime(start_date, "%Y-%m-%d")
+            ed = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValidationError("Dates must be in YYYY-MM-DD format")
+        if sd > ed:
+            raise ValidationError(
+                f"Start date {start_date} must be <= end date {end_date}"
+            )

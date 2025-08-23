@@ -8,7 +8,7 @@ from tauro.config.validators import FormatPolicy
 class PipelineValidator:
     """Enhanced validator supporting hybrid batch/streaming pipelines."""
 
-    BATCH_OUTPUT_FORMATS = {"parquet", "delta", "json", "csv", "kafka"}
+    BATCH_OUTPUT_FORMATS = {"parquet", "delta", "json", "csv", "kafka", "orc"}
 
     @staticmethod
     def validate_required_params(

@@ -1,11 +1,18 @@
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-import pandas as pd  # type: ignore
-import polars as pl  # type: ignore
 from loguru import logger  # type: ignore
 from pyspark.sql import DataFrame  # type: ignore
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    pd = None  # type: ignore
+
+try:
+    import polars as pl  # type: ignore
+except Exception:  # pragma: no cover
+    pl = None  # type: ignore
 
 from tauro.io.base import BaseIO
 from tauro.io.constants import (
@@ -19,27 +26,262 @@ from tauro.io.factories import WriterFactory
 from tauro.io.validators import ConfigValidator, DataValidator
 
 
-class UnityCatalogOperations:
+class DataFrameConverter(BaseIO):
+    """Handles DataFrame conversion between different types."""
+
+    def __init__(self, context: Any):
+        super().__init__(context)
+
+    def convert_to_spark(self, df: Any) -> DataFrame:
+        """Convert any compatible DataFrame to Spark DataFrame."""
+        if not self._spark_available():
+            raise WriteOperationError("Spark session unavailable for conversion")
+
+        spark = self._ctx_spark()
+        try:
+            if self._is_spark_dataframe(df):
+                logger.debug(f"DataFrame is already a Spark DataFrame: {type(df)}")
+                return df
+            elif pd is not None and isinstance(df, pd.DataFrame):
+                logger.info("Converting pandas DataFrame to Spark")
+                return spark.createDataFrame(df)
+            elif pl is not None and isinstance(df, pl.DataFrame):
+                logger.info("Converting Polars DataFrame to Spark via pandas")
+                return spark.createDataFrame(df.to_pandas())
+            else:
+                raise ConfigurationError(f"Unsupported DataFrame type: {type(df)}")
+        except Exception as e:
+            logger.error(f"DataFrame conversion failed: {str(e)}")
+            raise WriteOperationError(f"DataFrame conversion failed: {e}") from e
+
+    def _is_spark_dataframe(self, df: Any) -> bool:
+        """Check if DataFrame is a Spark DataFrame."""
+        return (
+            hasattr(df, "sql_ctx")
+            or hasattr(df, "sparkSession")
+            or "pyspark.sql" in str(type(df))
+        )
+
+
+class PathResolver(BaseIO):
+    """Handles path resolution for different environments."""
+
+    def __init__(self, context: Any, config_validator: ConfigValidator):
+        super().__init__(context)
+        self.config_validator = config_validator
+
+    def resolve_output_path(
+        self, dataset_config: Dict[str, Any], out_key: str
+    ) -> Union[Path, str]:
+        """Build paths compatible with multi-environment (Azure, AWS, GCP, local)."""
+        self._validate_inputs(dataset_config, out_key)
+
+        components = self._extract_path_components(dataset_config, out_key)
+        base_path = self._get_base_path()
+
+        return self._build_final_path(base_path, components)
+
+    def _validate_inputs(self, dataset_config: Dict[str, Any], out_key: str) -> None:
+        """Validate input parameters."""
+        if not isinstance(dataset_config, dict):
+            raise ConfigurationError("dataset_config must be a dictionary")
+        if not out_key or not isinstance(out_key, str):
+            raise ConfigurationError("out_key must be a non-empty string")
+
+    def _extract_path_components(
+        self, dataset_config: Dict[str, Any], out_key: str
+    ) -> Dict[str, str]:
+        """Extract path components from config and output key."""
+        try:
+            parsed_key = self.config_validator.validate_output_key(out_key)
+            components = {
+                "table_name": str(
+                    dataset_config.get("table_name", parsed_key["table_name"])
+                ).strip(),
+                "schema": str(
+                    dataset_config.get("schema", parsed_key["schema"])
+                ).strip(),
+                "sub_folder": str(
+                    dataset_config.get("sub_folder", parsed_key["sub_folder"])
+                ).strip(),
+            }
+
+            if not all(components.values()):
+                raise ConfigurationError("Path components cannot be empty")
+
+            return components
+        except (KeyError, AttributeError) as e:
+            raise ConfigurationError(f"Error parsing out_key: {str(e)}") from e
+
+    def _get_base_path(self) -> str:
+        """Get base output path from context."""
+        output_path = self._ctx_get("output_path")
+        if not output_path:
+            raise ConfigurationError("Context does not have output_path configured")
+        return str(output_path)
+
+    def _build_final_path(
+        self, base_path: str, components: Dict[str, str]
+    ) -> Union[Path, str]:
+        """Build final path joining base and components."""
+        schema = components["schema"]
+        sub_folder = components["sub_folder"]
+        table_name = components["table_name"]
+
+        # Keep as string for cloud URIs; Path still works for local
+        if base_path.startswith(("s3://", "abfss://", "gs://", "dbfs:/")):
+            return f"{base_path.rstrip('/')}/{schema}/{sub_folder}/{table_name}"
+        return Path(base_path) / schema / sub_folder / table_name
+
+
+class DataWriter(BaseIO):
+    """Enhanced DataWriter using factory pattern."""
+
+    def __init__(self, context: Dict[str, Any]):
+        """Initialize the DataWriter."""
+        super().__init__(context)
+        self.writer_factory = WriterFactory(context)
+        self.data_validator = DataValidator()
+
+    def write_data(self, df: Any, path: str, config: Dict[str, Any]) -> None:
+        """Write data to traditional storage systems."""
+        if not path:
+            raise ConfigurationError("Output path cannot be empty")
+
+        self._validate_write_config(config)
+        self._prepare_local_directory(path)
+
+        try:
+            format_name = config["format"].lower()
+            writer = self.writer_factory.get_writer(format_name)
+            writer.write(df, path, config)
+        except Exception as e:
+            logger.error(f"Error saving to {path}: {str(e)}")
+            raise WriteOperationError(f"Failed to write data: {e}") from e
+
+    def _validate_write_config(self, config: Dict[str, Any]) -> None:
+        """Validate basic write configuration."""
+        self._validate_config(config, ["format"], "write operation")
+
+        format_name = config.get("format", "").lower()
+        supported_formats = [
+            fmt.value
+            for fmt in SupportedFormats
+            if fmt != SupportedFormats.UNITY_CATALOG
+        ]
+
+        if format_name not in supported_formats:
+            raise ConfigurationError(
+                f"Unsupported format: {format_name}. Supported formats: {supported_formats}"
+            )
+
+
+class ModelArtifactManager(BaseIO):
+    """Enhanced ModelArtifactManager with better validation."""
+
+    def __init__(self, context: Dict[str, Any]):
+        """Initialize the ModelArtifactManager."""
+        super().__init__(context)
+
+    def save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
+        """Save model artifacts to the model registry."""
+        self._validate_inputs(node, model_version)
+
+        global_settings = self._ctx_get("global_settings", {}) or {}
+        model_registry_path = global_settings.get("model_registry_path")
+        if not model_registry_path:
+            logger.warning("Model registry path not configured")
+            return
+
+        for artifact in node.get("model_artifacts", []):
+            if not self._is_valid_artifact(artifact):
+                logger.warning("Invalid artifact found, skipping")
+                continue
+
+            try:
+                artifact_path = self._build_artifact_path(
+                    model_registry_path, artifact, model_version
+                )
+                self._create_artifact_directory(artifact_path)
+                logger.info(
+                    f"Artifact '{artifact.get('name', 'unnamed')}' saved to: {artifact_path}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error saving artifact {artifact.get('name', 'unknown')}: {str(e)}"
+                )
+
+    def _validate_inputs(self, node: Dict[str, Any], model_version: str) -> None:
+        """Validate input parameters."""
+        if not node or not isinstance(node, dict):
+            raise ConfigurationError("Node must be a valid dictionary")
+        if not model_version:
+            raise ConfigurationError("Model version cannot be empty")
+
+    def _is_valid_artifact(self, artifact: Any) -> bool:
+        """Check if artifact is valid."""
+        return artifact and isinstance(artifact, dict) and artifact.get("name")
+
+    def _build_artifact_path(
+        self, base_path: str, artifact: Dict[str, Any], version: str
+    ) -> Path:
+        """Build the complete path for the artifact."""
+        if not base_path:
+            raise ConfigurationError("Model registry base path cannot be empty")
+
+        artifact_name = str(artifact.get("name", "")).strip()
+        if not artifact_name:
+            raise ConfigurationError("Artifact name cannot be empty")
+
+        return Path(base_path) / artifact_name / version
+
+    def _create_artifact_directory(self, path: Path) -> None:
+        """Create the artifact directory if it doesn't exist (local mode)."""
+        # Reuse BaseIO helper to create parent dirs in local mode
+        self._prepare_local_directory(str(path))
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise WriteOperationError(
+                f"Failed to create artifact directory {path}: {e}"
+            ) from e
+
+
+class UnityCatalogOperations(BaseIO):
     """Handles Unity Catalog specific operations."""
 
     def __init__(self, context: Any, config_validator: ConfigValidator):
-        self.context = context
+        super().__init__(context)
         self.config_validator = config_validator
         self._unity_catalog_enabled = self._check_unity_catalog_support()
 
     def _check_unity_catalog_support(self) -> bool:
         """Verify if Unity Catalog is enabled."""
-        return (
-            self._spark_available()
-            and self.context.spark.conf.get(
-                "spark.databricks.unityCatalog.enabled", "false"
+        spark = self._ctx_spark()
+        return bool(
+            spark
+            and str(
+                spark.conf.get("spark.databricks.unityCatalog.enabled", "false")
             ).lower()
             == "true"
         )
 
-    def _spark_available(self) -> bool:
-        """Check if Spark is available."""
-        return hasattr(self.context, "spark") and self.context.spark is not None
+    def ensure_schema_exists(
+        self, catalog: str, schema: str, output_path_override: Optional[str] = None
+    ) -> None:
+        """Ensure catalog and schema exist."""
+        if not self._spark_available():
+            logger.warning("Spark not available for schema creation")
+            return
+        spark = self._ctx_spark()
+        try:
+            spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+            # Basic create schema; LOCATION can be appended if desired
+            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
+            logger.info(f"Verified/created {catalog}.{schema}")
+        except Exception as e:
+            logger.error(f"Error ensuring schema {catalog}.{schema}: {e}")
+            raise
 
     def optimize_table(
         self, full_table_name: str, partition_col: str, start_date: str, end_date: str
@@ -51,7 +293,8 @@ class UnityCatalogOperations:
 
         logger.info(f"Optimizing table {full_table_name}")
         try:
-            self.context.spark.sql(
+            spark = self._ctx_spark()
+            spark.sql(
                 f"""
                 OPTIMIZE {full_table_name}
                 WHERE {partition_col} BETWEEN '{start_date}' AND '{end_date}'
@@ -75,7 +318,8 @@ class UnityCatalogOperations:
         comment = f"{safe_description}. Partition: {partition_col or 'N/A'}"
 
         try:
-            self.context.spark.sql(f"COMMENT ON TABLE {full_table_name} IS '{comment}'")
+            spark = self._ctx_spark()
+            spark.sql(f"COMMENT ON TABLE {full_table_name} IS '{comment}'")
             logger.info(f"Comment added to table {full_table_name}")
         except Exception as e:
             logger.error(f"Error adding comment: {str(e)}")
@@ -94,33 +338,11 @@ class UnityCatalogOperations:
         logger.info(f"Executing VACUUM on {full_table_name}")
 
         try:
-            self.context.spark.sql(f"VACUUM {full_table_name} RETAIN {hours} HOURS")
+            spark = self._ctx_spark()
+            spark.sql(f"VACUUM {full_table_name} RETAIN {hours} HOURS")
             logger.info(f"VACUUM completed on {full_table_name}")
         except Exception as e:
-            logger.error(f"Error executing VACUUM: {str(e)}")
-
-    def ensure_schema_exists(
-        self, catalog: str, schema: str, managed_location: Optional[str] = None
-    ) -> None:
-        """Ensure schema exists in Unity Catalog."""
-        if not self._unity_catalog_enabled:
-            logger.warning("Unity Catalog is not enabled. Cannot create schema.")
-            return
-
-        if not catalog or not schema:
-            raise ConfigurationError("Catalog and schema cannot be empty")
-
-        create_sql = f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}"
-        if managed_location:
-            create_sql += f" MANAGED LOCATION '{managed_location}'"
-
-        try:
-            logger.info(f"Verifying schema: {catalog}.{schema}")
-            self.context.spark.sql(create_sql)
-            logger.info(f"Schema {catalog}.{schema} created/verified successfully")
-        except Exception as e:
-            logger.error(f"Error creating schema {catalog}.{schema}: {str(e)}")
-            raise WriteOperationError(f"Failed to create schema: {e}") from e
+            logger.error(f"Error executing VACUUM on {full_table_name}: {str(e)}")
 
 
 class UnityCatalogManager(BaseIO):
@@ -155,7 +377,9 @@ class UnityCatalogManager(BaseIO):
         sub_folder = config.get("sub_folder", parsed["sub_folder"])
         table_name = config.get("table_name", parsed["table_name"])
         full_table_name = f"{catalog}.{schema}.{table_name}"
-        storage_location = f"{self.context.output_path}/{schema}"
+
+        output_path = self._ctx_get("output_path", "")
+        storage_location = f"{output_path}/{schema}" if output_path else ""
 
         try:
             self.uc_operations.ensure_schema_exists(
@@ -221,21 +445,35 @@ class UnityCatalogManager(BaseIO):
         sub_folder: str,
     ) -> None:
         """Execute the data write operation to the table."""
-        if not storage_location or not table_name:
-            raise ConfigurationError("Incomplete configuration to determine path")
+        if not table_name or not full_table_name:
+            raise ConfigurationError("Incomplete configuration to determine table name")
 
-        path = f"{storage_location}/{sub_folder}/{table_name}"
-        writer.write(df, path, config)
-        logger.info(f"Data saved to: {path}")
+        # Determine destination path for Delta files
+        if not storage_location:
+            raise ConfigurationError(
+                "Storage location cannot be empty for Unity Catalog writes"
+            )
 
-        self.context.spark.sql(
-            f"""
-            CREATE TABLE IF NOT EXISTS {full_table_name}
-            USING DELTA
-            LOCATION '{path}'
-        """
-        )
-        logger.success(f"Table {full_table_name} registered in Unity Catalog")
+        destination_path = f"{storage_location.rstrip('/')}/{sub_folder}/{table_name}"
+        logger.info(f"Writing Delta data to path: {destination_path}")
+        writer.write(df, destination_path, config)
+
+        # Create table if not exists and point to destination
+        try:
+            spark = self._ctx_spark()
+            spark.sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS {full_table_name}
+                USING DELTA
+                LOCATION '{destination_path}'
+                """
+            )
+            logger.info(
+                f"Ensured table exists and is linked to location: {full_table_name}"
+            )
+        except Exception as e:
+            logger.error(f"Error creating/ensuring table {full_table_name}: {e}")
+            raise
 
     def _post_write_operations(
         self,
@@ -244,270 +482,26 @@ class UnityCatalogManager(BaseIO):
         start_date: Optional[str],
         end_date: Optional[str],
     ) -> None:
-        """Execute operations after writing data."""
-        try:
-            if partition_col := config.get("partition_col"):
-                if start_date and end_date:
-                    self.uc_operations.optimize_table(
-                        full_table_name, partition_col, start_date, end_date
-                    )
+        """Execute post-write operations like comments, optimize and vacuum."""
+        description = config.get("description")
+        partition_col = config.get("partition_col")
 
-                self.uc_operations.add_table_comment(
-                    full_table_name, config.get("description"), partition_col
-                )
+        # Table comment
+        self.uc_operations.add_table_comment(
+            full_table_name, description, partition_col
+        )
 
-            if config.get("vacuum", True):
-                self.uc_operations.execute_vacuum(
-                    full_table_name, config.get("vacuum_retention_hours")
-                )
-        except Exception as e:
-            logger.warning(f"Error in post-write operations: {str(e)}")
-
-
-class DataWriter(BaseIO):
-    """Enhanced DataWriter using factory pattern."""
-
-    def __init__(self, context: Dict[str, Any]):
-        """Initialize the DataWriter."""
-        super().__init__(context)
-        self.writer_factory = WriterFactory(context)
-        self.data_validator = DataValidator()
-
-    def write_data(self, df: Any, path: str, config: Dict[str, Any]) -> None:
-        """Write data to traditional storage systems."""
-        if not path:
-            raise ConfigurationError("Output path cannot be empty")
-
-        self._validate_write_config(config)
-        self._prepare_local_directory(path)
-
-        try:
-            format_name = config["format"].lower()
-            writer = self.writer_factory.get_writer(format_name)
-            writer.write(df, path, config)
-        except Exception as e:
-            logger.error(f"Error saving to {path}: {str(e)}")
-            raise WriteOperationError(f"Failed to write data: {e}") from e
-
-    def _validate_write_config(self, config: Dict[str, Any]) -> None:
-        """Validate basic write configuration."""
-        self._validate_config(config, ["format"], "write operation")
-
-        format_name = config.get("format", "").lower()
-        supported_formats = [
-            fmt.value
-            for fmt in SupportedFormats
-            if fmt != SupportedFormats.UNITY_CATALOG
-        ]
-
-        if format_name not in supported_formats:
-            raise ConfigurationError(
-                f"Unsupported format: {format_name}. Supported formats: {supported_formats}"
+        # Optimize (when date range provided or configured overwrite strategy)
+        should_optimize = config.get("optimize", True)
+        if should_optimize and partition_col and start_date and end_date:
+            self.uc_operations.optimize_table(
+                full_table_name, partition_col, start_date, end_date
             )
 
-
-class ModelArtifactManager(BaseIO):
-    """Enhanced ModelArtifactManager with better validation."""
-
-    def __init__(self, context: Dict[str, Any]):
-        """Initialize the ModelArtifactManager."""
-        super().__init__(context)
-
-    def save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
-        """Save model artifacts to the model registry."""
-        self._validate_inputs(node, model_version)
-
-        model_registry_path = getattr(self.context, "global_settings", {}).get(
-            "model_registry_path"
-        )
-        if not model_registry_path:
-            logger.warning("Model registry path not configured")
-            return
-
-        for artifact in node.get("model_artifacts", []):
-            if not self._is_valid_artifact(artifact):
-                logger.warning("Invalid artifact found, skipping")
-                continue
-
-            try:
-                artifact_path = self._build_artifact_path(
-                    model_registry_path, artifact, model_version
-                )
-                self._create_artifact_directory(artifact_path)
-                logger.info(
-                    f"Artifact '{artifact.get('name', 'unnamed')}' saved to: {artifact_path}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error saving artifact {artifact.get('name', 'unknown')}: {str(e)}"
-                )
-
-    def _validate_inputs(self, node: Dict[str, Any], model_version: str) -> None:
-        """Validate input parameters."""
-        if not node or not isinstance(node, dict):
-            raise ConfigurationError("Node must be a valid dictionary")
-        if not model_version:
-            raise ConfigurationError("Model version cannot be empty")
-
-    def _is_valid_artifact(self, artifact: Any) -> bool:
-        """Check if artifact is valid."""
-        return artifact and isinstance(artifact, dict) and artifact.get("name")
-
-    def _build_artifact_path(
-        self, base_path: str, artifact: Dict[str, Any], version: str
-    ) -> Path:
-        """Build the complete path for the artifact."""
-        if not base_path:
-            raise ConfigurationError("Model registry base path cannot be empty")
-
-        artifact_name = artifact.get("name")
-        if not artifact_name:
-            raise ConfigurationError("Artifact must have a name")
-
-        return Path(base_path) / artifact_name / version
-
-    def _create_artifact_directory(self, artifact_path: Path) -> None:
-        """Create artifact directory if it doesn't exist."""
-        try:
-            artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            raise WriteOperationError(
-                f"Failed to create artifact directory: {e}"
-            ) from e
-
-
-class DataFrameConverter:
-    """Handles DataFrame conversion between different types."""
-
-    def __init__(self, context: Any):
-        self.context = context
-
-    def convert_to_spark(self, df: Any) -> DataFrame:
-        """Convert any compatible DataFrame to Spark DataFrame."""
-        if not hasattr(self.context, "spark") or not self.context.spark:
-            raise WriteOperationError("Spark session unavailable for conversion")
-
-        try:
-            if self._is_spark_dataframe(df):
-                logger.debug(f"DataFrame is already a Spark DataFrame: {type(df)}")
-                return df
-            elif isinstance(df, pd.DataFrame):
-                logger.info("Converting pandas DataFrame to Spark")
-                return self.context.spark.createDataFrame(df)
-            elif isinstance(df, pl.DataFrame):
-                logger.info("Converting Polars DataFrame to Spark via pandas")
-                return self.context.spark.createDataFrame(df.to_pandas())
-            else:
-                raise ConfigurationError(f"Unsupported DataFrame type: {type(df)}")
-        except Exception as e:
-            logger.error(f"DataFrame conversion failed: {str(e)}")
-            raise WriteOperationError(f"DataFrame conversion failed: {e}") from e
-
-    def _is_spark_dataframe(self, df: Any) -> bool:
-        """Check if DataFrame is a Spark DataFrame."""
-        return (
-            hasattr(df, "sql_ctx")
-            or hasattr(df, "sparkSession")
-            or "pyspark.sql" in str(type(df))
-        )
-
-
-class PathResolver:
-    """Handles path resolution for different environments."""
-
-    def __init__(self, context: Any, config_validator: ConfigValidator):
-        self.context = context
-        self.config_validator = config_validator
-
-    def resolve_output_path(
-        self, dataset_config: Dict[str, Any], out_key: str
-    ) -> Union[Path, str]:
-        """Build paths compatible with multi-environment (Azure, AWS, GCP, local)."""
-        self._validate_inputs(dataset_config, out_key)
-
-        components = self._extract_path_components(dataset_config, out_key)
-        base_path = self._get_base_path()
-
-        return self._build_final_path(base_path, components)
-
-    def _validate_inputs(self, dataset_config: Dict[str, Any], out_key: str) -> None:
-        """Validate input parameters."""
-        if not isinstance(dataset_config, dict):
-            raise ConfigurationError("dataset_config must be a dictionary")
-        if not out_key or not isinstance(out_key, str):
-            raise ConfigurationError("out_key must be a non-empty string")
-
-    def _extract_path_components(
-        self, dataset_config: Dict[str, Any], out_key: str
-    ) -> Dict[str, str]:
-        """Extract path components from config and output key."""
-        try:
-            parsed_key = self.config_validator.validate_output_key(out_key)
-            components = {
-                "table_name": str(
-                    dataset_config.get("table_name", parsed_key["table_name"])
-                ).strip(),
-                "schema": str(
-                    dataset_config.get("schema", parsed_key["schema"])
-                ).strip(),
-                "sub_folder": str(
-                    dataset_config.get("sub_folder", parsed_key["sub_folder"])
-                ).strip(),
-            }
-
-            if not all(components.values()):
-                raise ConfigurationError("Path components cannot be empty")
-
-            return components
-        except (KeyError, AttributeError) as e:
-            raise ConfigurationError(f"Error parsing out_key: {str(e)}") from e
-
-    def _get_base_path(self) -> str:
-        """Get base output path from context."""
-        if not hasattr(self.context, "output_path") or not self.context.output_path:
-            raise ConfigurationError("Context does not have output_path configured")
-        return self.context.output_path
-
-    def _build_final_path(
-        self, base_path: str, components: Dict[str, str]
-    ) -> Union[Path, str]:
-        """Build the final path based on the base path type."""
-        path_parts = [
-            components["schema"],
-            components["sub_folder"],
-            components["table_name"],
-        ]
-
-        if self._is_local_path(base_path):
-            return self._build_local_path(base_path, path_parts)
-        else:
-            return self._build_cloud_path(base_path, path_parts)
-
-    def _is_local_path(self, base_path: str) -> bool:
-        """Check if base path is local or DBFS."""
-        return isinstance(base_path, Path) or (
-            isinstance(base_path, str) and not re.match(r"^[a-z0-9]+://", base_path)
-        )
-
-    def _build_local_path(self, base_path: str, path_parts: List[str]) -> Path:
-        """Build local or DBFS path."""
-        try:
-            base = Path(base_path)
-            # Special handling for DBFS in Databricks
-            if str(base).startswith(("/dbfs", "dbfs:")):
-                return Path("/dbfs") / "/".join(path_parts).lstrip("/")
-            return base.joinpath(*path_parts)
-        except Exception as e:
-            raise ConfigurationError(f"Error building local path: {str(e)}") from e
-
-    def _build_cloud_path(self, base_path: str, path_parts: List[str]) -> str:
-        """Build cloud storage path."""
-        base_str = str(base_path).rstrip("/")
-        full_path = "/".join([p for p in path_parts if p])
-
-        # Prevent double slashes
-        separator = "" if base_str.endswith("/") else "/"
-        return f"{base_str}{separator}{full_path}"
+        # Vacuum
+        retention_hours = config.get("vacuum_retention_hours")
+        if retention_hours is not None or config.get("vacuum", False):
+            self.uc_operations.execute_vacuum(full_table_name, retention_hours)
 
 
 class OutputManager(BaseIO):
@@ -538,9 +532,8 @@ class OutputManager(BaseIO):
         self._validate_inputs(node, df)
 
         out_keys = self._get_output_keys(node)
-        error_handler = ErrorHandler(
-            self.context.global_settings.get("fail_on_error", True)
-        )
+        global_settings = self._ctx_get("global_settings", {}) or {}
+        error_handler = ErrorHandler(global_settings.get("fail_on_error", True))
 
         for out_key in out_keys or []:
             error_handler.execute_with_error_handling(
@@ -583,7 +576,8 @@ class OutputManager(BaseIO):
         if not out_key:
             raise ConfigurationError("Output key cannot be empty")
 
-        dataset_config = self.context.output_config.get(out_key)
+        output_cfg = self._ctx_get("output_config", {}) or {}
+        dataset_config = output_cfg.get(out_key)
         if not dataset_config:
             raise ConfigurationError(f"Output configuration '{out_key}' not found")
 

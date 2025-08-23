@@ -13,7 +13,7 @@ class SparkSessionFactory:
     @classmethod
     def get_session(
         cls,
-        mode: Literal["local", "databricks"] = "databricks",
+        mode: Literal["local", "databricks", "distributed"] = "databricks",
         ml_config: Dict[str, Any] = None,
     ):
         """Singleton Spark session with thread-safe initialization"""
@@ -50,7 +50,7 @@ class SparkSessionFactory:
 
     @staticmethod
     def create_session(
-        mode: Literal["local", "databricks"] = "databricks",
+        mode: Literal["local", "databricks", "distributed"] = "databricks",
         ml_config: Dict[str, Any] = None,
     ):
         """Create a Spark session based on the specified mode with ML configurations."""
@@ -59,13 +59,14 @@ class SparkSessionFactory:
         if ml_config:
             logger.info("Applying ML-specific Spark configurations")
 
-        if mode.lower() == "databricks":
+        normalized = str(mode).lower()
+        if normalized in ("databricks", "distributed"):
             return SparkSessionFactory._create_databricks_session(ml_config)
-        elif mode.lower() == "local":
+        elif normalized == "local":
             return SparkSessionFactory._create_local_session(ml_config)
         else:
             raise ValueError(
-                f"Invalid execution mode: {mode}. Use 'local' or 'databricks'."
+                f"Invalid execution mode: {mode}. Use 'local', 'databricks' or 'distributed'."
             )
 
     @staticmethod
@@ -110,65 +111,30 @@ class SparkSessionFactory:
         try:
             from pyspark.sql import SparkSession  # type: ignore
 
-            logger.info("Initializing local Spark session")
-            builder = (
-                SparkSession.builder.appName("LocalSparkApplication")
-                .config("spark.sql.execution.arrow.pyspark.enabled", "true")
-                .config("spark.driver.memory", "4g")
-                .master("local[*]")
-            )
-
-            default_ml_configs = {
-                "spark.sql.adaptive.enabled": "true",
-                "spark.sql.adaptive.coalescePartitions.enabled": "true",
-                "spark.serializer": "org.apache.spark.serializer.KryoSerializer",
-                "spark.sql.adaptive.advisoryPartitionSizeInBytes": "128MB",
-                "spark.sql.adaptive.skewJoin.enabled": "true",
-            }
-
-            for key, value in default_ml_configs.items():
-                builder = builder.config(key, value)
+            builder = SparkSession.builder.appName("TauroLocal")
 
             if ml_config:
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
 
             return builder.getOrCreate()
-
-        except ImportError as e:
-            logger.error(f"PySpark not installed: {str(e)}")
-            raise
-        except RuntimeError as e:
-            logger.error(f"Initialization failed: {str(e)}")
-            raise
         except Exception as e:
-            logger.critical(f"Unhandled exception: {str(e)}")
-            raise RuntimeError("Critical error creating local session") from e
-
-    @staticmethod
-    def _apply_ml_configs(builder, ml_config: Dict[str, Any]):
-        """Apply ML-specific configurations, skipping protected ones."""
-        for key, value in ml_config.items():
-            if key in SparkSessionFactory.PROTECTED_CONFIGS:
-                logger.warning(f"Skipping protected Spark config: {key}")
-                continue
-            logger.debug(f"Setting Spark config: {key} = {value}")
-            builder = builder.config(key, str(value))
-        return builder
+            logger.error(f"Failed to create local Spark session: {e}")
+            raise
 
     @staticmethod
     def _validate_databricks_config(config) -> None:
-        """Validate that the Databricks configuration is complete."""
-        required_params = {
-            "host": config.host,
-            "token": config.token,
-            "cluster_id": config.cluster_id,
-        }
+        """Validate required Databricks configuration parameters."""
+        required = ["host", "token", "cluster_id"]
+        missing = [k for k in required if not getattr(config, k, None)]
+        if missing:
+            raise ValueError(f"Missing Databricks config values: {', '.join(missing)}")
 
-        missing_params = [
-            param for param, value in required_params.items() if not value
-        ]
-
-        if missing_params:
-            raise ValueError(
-                f"Incomplete Databricks configuration. Missing: {', '.join(missing_params)}"
-            )
+    @staticmethod
+    def _apply_ml_configs(builder: Any, ml_config: Dict[str, Any]) -> Any:
+        """Apply ML-related configurations to the Spark builder."""
+        for k, v in (ml_config or {}).items():
+            try:
+                builder = builder.config(k, v)
+            except Exception:
+                logger.debug(f"Failed to apply Spark config {k}={v}", exc_info=True)
+        return builder

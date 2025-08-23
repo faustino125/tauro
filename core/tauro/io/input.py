@@ -1,5 +1,4 @@
 import os
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
@@ -10,11 +9,11 @@ from tauro.io.factories import ReaderFactory
 from tauro.io.validators import DataValidator
 
 
-class InputLoadingStrategy:
+class InputLoadingStrategy(BaseIO):
     """Strategy for loading inputs (sequential vs parallel)."""
 
     def __init__(self, context: Any, reader_factory: ReaderFactory):
-        self.context = context
+        super().__init__(context)
         self.reader_factory = reader_factory
         self.data_validator = DataValidator()
 
@@ -28,8 +27,8 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
 
     def load_inputs(self, input_keys: List[str], fail_fast: bool = True) -> List[Any]:
         """Load datasets sequentially."""
-        results = []
-        errors = []
+        results: List[Any] = []
+        errors: List[str] = []
 
         logger.info(f"Loading {len(input_keys)} datasets sequentially")
         for key in input_keys:
@@ -63,7 +62,8 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
 
     def _get_dataset_config(self, input_key: str) -> Dict[str, Any]:
         """Get configuration for a dataset."""
-        config = self.context.input_config.get(input_key)
+        input_cfg = self._ctx_get("input_config", {}) or {}
+        config = input_cfg.get(input_key)
         if not config:
             raise ConfigurationError(f"Missing configuration for '{input_key}'")
         return config
@@ -75,11 +75,7 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
             raise ConfigurationError(f"Missing filepath for '{input_key}'")
 
         # Verify file existence in local mode
-        if (
-            hasattr(self.context, "execution_mode")
-            and self.context.execution_mode == "local"
-            and not os.path.exists(path)
-        ):
+        if self._is_local() and not os.path.exists(path):
             raise FileNotFoundError(f"File '{path}' does not exist in local mode")
         return path
 
@@ -96,35 +92,20 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
             )
             return sequential_strategy.load_inputs(input_keys, fail_fast)
 
-        sc = self.context.spark.sparkContext
+        sc = self._ctx_spark().sparkContext  # type: ignore[attr-defined]
         logger.info(f"Loading {len(input_keys)} datasets in parallel")
 
-        # Broadcast configuration to worker nodes
-        broadcast_configs = sc.broadcast(
-            {
-                "input_config": self.context.input_config,
-                "execution_mode": getattr(
-                    self.context, "execution_mode", "distributed"
-                ),
-            }
-        )
+        rdd = sc.parallelize(input_keys)
+        results = rdd.map(lambda k: self._parallel_load_single(k)).collect()
 
-        # Execute parallel loading tasks
-        parallel_results = (
-            sc.parallelize(input_keys)
-            .map(lambda key: self._load_task(key, broadcast_configs.value))
-            .collect()
-        )
+        return self._process_parallel_results(results, fail_fast)
 
-        return self._process_parallel_results(parallel_results, fail_fast)
-
-    def _load_task(
-        self, input_key: str, broadcast_config: Dict[str, Any]
-    ) -> Tuple[str, Any, Optional[str]]:
-        """Task for loading a single dataset in parallel."""
+    def _parallel_load_single(
+        self, input_key: str
+    ) -> Tuple[str, Optional[Any], Optional[str]]:
+        """Load a single dataset inside a Spark task."""
         try:
-            # Create a simplified context for parallel execution
-            ctx = SimpleNamespace(**broadcast_config)
+            ctx = self.context
             sequential_strategy = SequentialLoadingStrategy(ctx, ReaderFactory(ctx))
             return input_key, sequential_strategy._load_single_dataset(input_key), None
         except Exception as e:
@@ -134,8 +115,8 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
         self, results: List[Tuple[str, Any, Optional[str]]], fail_fast: bool
     ) -> List[Any]:
         """Process the results of parallel loading operations."""
-        loaded_data = []
-        errors = []
+        loaded_data: List[Any] = []
+        errors: List[str] = []
 
         for input_key, data, error in results:
             if error:
@@ -150,10 +131,6 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
             logger.warning(f"Errors encountered during parallel loading: {errors}")
 
         return loaded_data
-
-    def _spark_available(self) -> bool:
-        """Check if Spark is available."""
-        return hasattr(self.context, "spark") and self.context.spark is not None
 
 
 class InputLoader(BaseIO):
@@ -202,7 +179,9 @@ class InputLoader(BaseIO):
     def _try_import_delta(self) -> None:
         """Try to import Delta Lake dependencies."""
         try:
-            from delta import configure_spark_with_delta_pip  # type: ignore
+            from delta import (  # type: ignore # noqa: F401
+                configure_spark_with_delta_pip,
+            )
         except ImportError:
             logger.error(
                 "Package 'delta-spark' not installed. Install it with: pip install delta-spark"
@@ -212,7 +191,8 @@ class InputLoader(BaseIO):
     def _try_import_xml(self) -> None:
         """Try to verify XML dependencies are available."""
         try:
-            if hasattr(self.context, "spark") and self.context.spark:
-                self.context.spark._jvm.com.databricks.spark.xml
+            spark = self._ctx_spark()
+            if spark:
+                spark._jvm.com.databricks.spark.xml  # type: ignore[attr-defined]
         except Exception:
             logger.warning("XML format configured, but library not available.")

@@ -1,852 +1,372 @@
-# Tauro Framework - Documentación Técnica
-
-## Tabla de Contenidos
-
-1. [Visión General](#visión-general)
-2. [Arquitectura del Sistema](#arquitectura-del-sistema)
-3. [Módulos Principales](#módulos-principales)
-4. [Configuración](#configuración)
-5. [Ejecución de Pipelines](#ejecución-de-pipelines)
-6. [API Reference](#api-reference)
-7. [Desarrollo y Extensión](#desarrollo-y-extensión)
-8. [Mejores Prácticas](#mejores-prácticas)
-9. [Troubleshooting](#troubleshooting)
-
-## Visión General
-
-Tauro es un framework de ejecución de pipelines de datos escalable que soporta tanto flujos de trabajo tradicionales como de Machine Learning. Está diseñado para manejar dependencias complejas, ejecución paralela y múltiples entornos de despliegue.
-
-### Características Principales
-
-- **Resolución automática de dependencias** mediante algoritmos de ordenamiento topológico
-- **Ejecución paralela inteligente** respetando el grafo de dependencias
-- **Soporte multi-formato** de configuración (YAML, JSON, DSL personalizado)
-- **Integración Spark** para local y Databricks
-- **Pipelines especializados** para ML con soporte de hiperparámetros
-- **Validación robusta** de configuraciones y esquemas de datos
-
-## Arquitectura del Sistema
-
-```
-tauro/
-├── cli/                    # Interfaz de línea de comandos
-│   ├── cli.py             # Clase principal TauroCLI
-│   ├── config.py          # Gestión y descubrimiento de configuración
-│   ├── core.py            # Tipos de datos centrales y errores
-│   └── execution.py       # Inicialización de contexto y wrapper de ejecución
-├── exec/                   # Motor de ejecución de pipelines
-│   ├── commands.py        # Patrón Command para nodos
-│   ├── dependency_resolver.py # Resolución de dependencias
-│   ├── executor.py        # Coordinador principal de pipeline
-│   ├── node_executor.py   # Ejecutor de nodos con paralelismo
-│   └── pipeline_validator.py # Validadores de pipeline
-└── config/                # Sistema de configuración
-    ├── context.py         # Contexto principal de aplicación
-    ├── loaders.py         # Factory y loaders de configuración
-    ├── session.py         # Factory de sesiones Spark
-    └── validators.py      # Validadores de configuración
-```
-
-### Flujo de Datos
-
-```mermaid
-graph TD
-    A[CLI Arguments] --> B[ConfigDiscovery]
-    B --> C[ConfigManager]
-    C --> D[Context Initialization]
-    D --> E[Pipeline Validation]
-    E --> F[Dependency Resolution]
-    F --> G[Execution Planning]
-    G --> H[Parallel Node Execution]
-    H --> I[Output Management]
-
-    subgraph "Configuration Loading"
-        B --> B1[Auto-discovery]
-        C --> C1[Multi-format Support]
-        C --> C2[Security Validation]
-    end
-
-    subgraph "Execution Engine"
-        F --> F1[Topological Sort]
-        G --> G1[Thread Pool Management]
-        H --> H1[Command Pattern]
-    end
-```
-
-## Módulos Principales
-
-### 1. CLI Module (`tauro.cli`)
-
-#### TauroCLI
-Clase principal que coordina la ejecución completa.
-
-```python
-from tauro.cli import TauroCLI
-
-cli = TauroCLI()
-exit_code = cli.run([
-    "--env", "dev",
-    "--pipeline", "data_processing",
-    "--start-date", "2024-01-01",
-    "--end-date", "2024-01-31"
-])
-```
-
-#### ConfigDiscovery
-Descubre automáticamente archivos de configuración en el árbol de directorios.
-
-```python
-from tauro.cli.config import ConfigDiscovery
-
-discovery = ConfigDiscovery("/path/to/project")
-configs = discovery.discover(max_depth=3)
-
-# Búsqueda inteligente con criterios
-best_match = discovery.find_best_match(
-    layer_name="golden_layer",
-    use_case="clustering_analysis",
-    config_type="yaml"
-)
-```
-
-#### ConfigManager
-Gestiona la carga de configuraciones en múltiples formatos.
-
-```python
-from tauro.cli.config import ConfigManager
-
-manager = ConfigManager(
-    base_path="/project/configs",
-    layer_name="processing_layer",
-    interactive=True
-)
-
-# Cambio seguro al directorio de configuración
-manager.change_to_config_directory()
-
-# Creación de loader apropiado
-loader = manager.create_loader()
-```
-
-### 2. Execution Module (`tauro.exec`)
-
-#### PipelineExecutor
-Coordinador principal para la ejecución de pipelines.
-
-```python
-from tauro.exec import PipelineExecutor
-from tauro.config import Context
-
-context = Context(...)
-executor = PipelineExecutor(context)
-
-# Ejecución completa de pipeline
-executor.run_pipeline(
-    pipeline_name="etl_pipeline",
-    start_date="2024-01-01",
-    end_date="2024-01-31"
-)
-
-# Ejecución de nodo específico
-executor.run_pipeline(
-    pipeline_name="etl_pipeline",
-    node_name="transform_data",
-    start_date="2024-01-01",
-    end_date="2024-01-31"
-)
-```
-
-#### DependencyResolver
-Resuelve dependencias entre nodos usando ordenamiento topológico.
-
-```python
-from tauro.exec.dependency_resolver import DependencyResolver
-
-# Construcción del grafo de dependencias
-dag = DependencyResolver.build_dependency_graph(
-    pipeline_nodes=["extract", "transform", "load"],
-    node_configs=node_configurations
-)
-
-# Ordenamiento topológico
-execution_order = DependencyResolver.topological_sort(dag)
-# Resultado: ["extract", "transform", "load"]
-```
-
-#### NodeExecutor
-Maneja la ejecución paralela de nodos respetando dependencias.
-
-```python
-from tauro.exec.node_executor import NodeExecutor
-
-executor = NodeExecutor(context, input_loader, output_manager, max_workers=4)
-
-# Ejecución paralela con gestión de dependencias
-executor.execute_nodes_parallel(
-    execution_order=["node1", "node2", "node3"],
-    node_configs=configs,
-    dag=dependency_graph,
-    start_date="2024-01-01",
-    end_date="2024-01-31",
-    ml_info={}
-)
-```
-
-### 3. Config Module (`tauro.config`)
-
-#### Context
-Contexto central que contiene todas las configuraciones del sistema.
-
-```python
-from tauro.config import Context
-
-# Inicialización desde archivos separados
-context = Context(
-    global_settings="conf/global.yaml",
-    pipelines_config="conf/pipelines.yaml",
-    nodes_config="conf/nodes.yaml",
-    input_config="conf/inputs.yaml",
-    output_config="conf/outputs.yaml"
-)
-
-# Inicialización desde configuración JSON unificada
-context = Context.from_json_config(
-    global_settings=global_dict,
-    pipelines_config=pipelines_dict,
-    nodes_config=nodes_dict,
-    input_config=inputs_dict,
-    output_config=outputs_dict
-)
-
-# Acceso a pipelines
-pipeline = context.get_pipeline("my_pipeline")
-all_pipelines = context.list_pipeline_names()
-```
-
-#### SparkSessionFactory
-Factory para crear sesiones Spark según el modo de ejecución.
-
-```python
-from tauro.config.session import SparkSessionFactory
-
-# Sesión local
-spark_local = SparkSessionFactory.create_session("local")
-
-# Sesión Databricks (requiere configuración)
-spark_databricks = SparkSessionFactory.create_session("databricks")
-```
-
-## Configuración
-
-### Formatos Soportados
-
-#### 1. YAML Configuration
-```yaml
-# settings_yml.json
-env_config:
-  base:
-    global_settings_path: "conf/global.yaml"
-    pipelines_config_path: "conf/pipelines.yaml"
-  dev:
-    nodes_config_path: "conf/nodes_dev.yaml"
-    input_config_path: "conf/inputs_dev.yaml"
-    output_config_path: "conf/outputs_dev.yaml"
-```
-
-#### 2. JSON Configuration
-```json
-{
-  "env_config": {
-    "base": {
-      "config_path": "conf/unified_config.json"
-    },
-    "dev": {
-      "config_path": "conf/dev_config.json"
-    }
-  }
-}
-```
-
-#### 3. DSL Configuration
-```
-# settings_dsl.json
-base_path = "/project/configs"
-environment = "dev"
-max_parallel_nodes = 4
-debug_mode = true
-allowed_formats = ["parquet", "delta"]
-```
-
-### Estructura de Configuración de Pipeline
-
-```yaml
-# pipelines.yaml
-data_processing:
-  description: "Pipeline de procesamiento de datos principal"
-  nodes:
-    - extract_data
-    - transform_data
-    - validate_data
-    - load_data
-  inputs:
-    - raw_data
-  outputs:
-    - processed_data
-
-ml_training:
-  description: "Pipeline de entrenamiento ML"
-  nodes:
-    - feature_engineering
-    - model_training
-    - model_validation
-```
-
-### Configuración de Nodos
-
-```yaml
-# nodes.yaml
-extract_data:
-  module: "pipelines.extraction.extractors"
-  function: "extract_customer_data"
-  dependencies: []
-
-transform_data:
-  module: "pipelines.transformation.transformers"
-  function: "transform_customer_features"
-  dependencies:
-    - extract_data
-
-model_training:
-  module: "ml.training.trainers"
-  function: "train_classification_model"
-  dependencies:
-    - feature_engineering
-  ml_config:
-    hyperparams:
-      learning_rate: 0.01
-      max_depth: 10
-```
-
-## Ejecución de Pipelines
-
-### Comandos CLI Básicos
+# Tauro Development Guide
 
+This document is for developers working on Tauro’s CLI layer and related components. It explains the architecture, coding standards, how to extend the CLI, and how to test and ship changes.
+
+If you are a non‑technical user looking for basic usage, see core/README.md.
+
+---
+
+## Architecture Overview
+
+Tauro follows a clear separation of concerns:
+
+- CLI (core/tauro/cli)
+  - cli.py: Main entry, argparse flags, high-level orchestration.
+  - streaming_cli.py: Streaming subcommands implemented with click.
+  - config.py: Configuration discovery and parsing (YAML/JSON/DSL) plus AppConfigManager for environment path mapping.
+  - execution.py: Context initialization and a safe wrapper around ExternalPipelineExecutor.
+  - core.py: Shared types (ExitCode), errors, logging (LoggerManager), path safety (SecurityValidator), date helpers, in-memory cache (ConfigCache).
+  - template.py: Minimal project template generator (Medallion: Bronze → Silver → Gold; batch + streaming).
+- Core runtime (outside this folder)
+  - tauro.config.contexts.Context: Domain object that loads/holds config.
+  - tauro.exec.executor.PipelineExecutor: The execution engine used by our wrapper.
+
+High‑level flow:
+
+1) User invokes tauro with flags (argparse).
+2) Logger configured, special modes handled (template, streaming, listing).
+3) Config discovery picks the right settings file; working directory changes to the active config directory.
+4) ContextInitializer uses AppConfigManager to map environment → concrete config file paths.
+5) PipelineExecutor wrapper calls the external executor, handles path setup, and normalizes errors and logs.
+6) On exit, working directory and path changes are restored; caches cleared.
+
+---
+
+## Repository Layout (CLI)
+
+- core/tauro/cli/core.py
+  - CLIConfig dataclass for normalized args.
+  - ExitCode, TauroError hierarchy, LoggerManager, SecurityValidator, ConfigCache.
+  - Date helpers: parse_iso_date, validate_date_range.
+
+- core/tauro/cli/config.py
+  - YAMLConfigLoader, JSONConfigLoader, DSLConfigLoader.
+  - ConfigDiscovery: scans filesystem and caches results.
+  - ConfigManager: picks active config dir/file and format; manages chdir/restore.
+  - AppConfigManager: reads settings_* index and resolves environment paths.
+
+- core/tauro/cli/execution.py
+  - ContextInitializer: composes Context from paths.
+  - PipelineExecutor wrapper: adds path setup, error capture, validation helpers.
+
+- core/tauro/cli/cli.py
+  - ArgumentParser: argparse flags.
+  - ConfigValidator: cross‑field checks.
+  - SpecialModeHandler: list, info, clear cache, etc.
+  - TauroCLI: main run loop, streaming delegation, dry‑run, validate‑only.
+
+- core/tauro/cli/streaming_cli.py
+  - click group: streaming.
+  - Commands: run, status, stop.
+  - Helpers: _list_all_pipelines_status, simple table rendering utilities.
+
+- core/tauro/cli/template.py
+  - Single template type: medallion_basic (batch + streaming).
+  - TemplateGenerator creates folder structure, config files, and basic sample code.
+
+---
+
+## Configuration Model
+
+- Index (“settings”) file located at the project root; auto‑discovered using predefined names:
+  - settings_yml.json (points to YAML section files),
+  - settings_json.json (points to JSON section files),
+  - settings_dsl.json (points to DSL section files).
+- Section files (per environment mapping inside settings):
+  - global_settings, pipelines, nodes, input, output.
+- Environments: base, dev, pre_prod, prod.
+
+AppConfigManager reads the settings index and returns validated, absolute paths for each required config section per environment. SecurityValidator ensures paths do not escape the project and are safe to use.
+
+---
+
+## Error Handling and Exit Codes
+
+Use TauroError and its subclasses to communicate expected failures:
+
+- ConfigurationError (ExitCode.CONFIGURATION_ERROR)
+- ValidationError (ExitCode.VALIDATION_ERROR)
+- ExecutionError (ExitCode.EXECUTION_ERROR)
+- SecurityError (ExitCode.SECURITY_ERROR)
+
+All other unexpected exceptions are treated as GENERAL_ERROR.
+
+Guidelines:
+- Prefer fail‑fast validation (e.g., date parsing/ordering, streaming required flags).
+- Wrap external integrations with try/except and raise domain‑specific errors.
+- Log error details with logger.exception only for truly unexpected errors.
+
+---
+
+## Logging
+
+LoggerManager.setup configures:
+- Console logging (DEBUG if --verbose, ERROR if --quiet, otherwise selected level).
+- File logging to logs/tauro.log by default (rotated and retained).
+
+Best practices:
+- Use logger.info for normal flow, logger.debug for detailed internals, logger.warning for recoverable issues, and logger.error for failures.
+- Avoid printing directly; use logger or click.echo in click command paths.
+- Do not leak secrets in logs.
+
+---
+
+## Security
+
+SecurityValidator.validate_path(base_path, target_path):
+- Ensures target is within base (no traversal), not hidden, not symlinked, not world‑writable, and owned by current user (POSIX).
+- Always validate paths before chdir or reading/writing files.
+
+When changing directories:
+- ConfigManager.change_to_config_directory() moves to the active config dir (validated).
+- Always call restore_original_directory() in finally blocks.
+
+---
+
+## Dates
+
+The CLI provides:
+- parse_iso_date: validates YYYY‑MM‑DD and normalizes string.
+- validate_date_range: ensures start <= end.
+
+Integrate at the CLI boundary to fail fast and pass canonical values downstream.
+
+---
+
+## Coding Standards
+
+- Python 3.9+.
+- Type hints required for new/modified public functions.
+- Logging via loguru, no prints in library code.
+- Follow the existing exception hierarchy.
+- Keep CLI flags backward compatible when possible; if a breaking change is unavoidable, document it in the changelog.
+
+Formatting and linting (recommended):
+- black
+- isort
+- flake8 (or ruff)
+- mypy (optional but recommended for core modules)
+
+Example:
 ```bash
-# Ejecución básica
-tauro --env dev --pipeline data_processing
-
-# Con rango de fechas específico
-tauro --env prod --pipeline etl \
-      --start-date 2024-01-01 \
-      --end-date 2024-01-31
-
-# Nodo específico
-tauro --env dev --pipeline ml_training --node feature_engineering
-
-# Modo interactivo para selección de configuración
-tauro --env dev --pipeline test --interactive
-
-# Validación sin ejecución
-tauro --env dev --pipeline test --validate-only
-
-# Dry run (muestra plan de ejecución)
-tauro --env dev --pipeline test --dry-run
+python -m pip install -U black isort flake8 mypy
+black core/tauro/cli
+isort core/tauro/cli
+flake8 core/tauro/cli
+mypy core/tauro/cli
 ```
 
-### Comandos de Información
+---
 
+## Development Environment
+
+Recommended setup:
 ```bash
-# Listar configuraciones disponibles
-tauro --list-configs
+# 1) Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Listar pipelines disponibles
-tauro --list-pipelines
+# 2) Install project with dev extras (if defined) or basic deps
+pip install -r requirements.txt
 
-# Información de pipeline específico
-tauro --pipeline-info data_processing
+# 3) Install development tools
+pip install -U black isort flake8 pytest
 
-# Limpiar cache de configuración
-tauro --clear-cache
+# 4) Run unit tests
+pytest -q
 ```
 
-### Ejemplo de Implementación de Nodo
+Suggested pre-commit:
+```bash
+pip install pre-commit
+pre-commit install
+# Configure .pre-commit-config.yaml with black/isort/flake8/ruff
+```
 
+---
+
+## Execution Flow Details
+
+Batch pipeline (cli.py):
+1) Parse args → LoggerManager.setup.
+2) Handle template or streaming modes early.
+3) SpecialModeHandler handles list, info, cache clear.
+4) Date normalization and validation.
+5) ConfigManager resolves active settings file and chdir.
+6) ContextInitializer builds Context from AppConfigManager.
+7) PipelineExecutor.execute runs the pipeline; wrapper sets up sys.path and logs.
+8) Cleanup (restore directory, clear cache).
+
+Streaming pipeline (streaming_cli.py):
+- run: builds Context from DSL or Python config (Context.from_dsl), creates executor (from tauro.exec.executor), and calls run_pipeline with mode async/sync.
+- status: fetches either a single execution’s status or all, pretty‑prints table or JSON.
+- stop: requests a graceful stop with timeout.
+
+Note: The main CLI invokes click commands’ .callback in a controlled manner to reuse logic without a full click context.
+
+---
+
+## Extending the CLI
+
+### Add a new argparse flag
+
+1) cli.py → ArgumentParser.create(): add parser.add_argument(...).
+2) core.py → CLIConfig: add a matching field if the value is part of normalized config.
+3) cli.py → TauroCLI.parse_arguments(): map parsed to CLIConfig.
+4) cli.py → ConfigValidator.validate(): add cross‑field checks if needed.
+5) Integrate usage in SpecialModeHandler or execution flow.
+
+Be mindful of:
+- Interactions with --verbose/--quiet.
+- Special modes that bypass full execution.
+- Backward compatibility.
+
+### Add a new streaming subcommand
+
+1) streaming_cli.py: define a new @streaming.command() with click options.
+2) If you want to expose it through the main CLI:
+   - cli.py → TauroCLI._handle_streaming_command(): branch on streaming_command and call your click_command.callback with appropriate kwargs.
+3) Implement error handling using ValidationError/ExecutionError; return proper ExitCode on sys.exit.
+
+Example:
 ```python
-# pipelines/transformation/transformers.py
-import pandas as pd
-from typing import List
-
-def transform_customer_features(
-    raw_df: pd.DataFrame,
-    start_date: str,
-    end_date: str
-) -> pd.DataFrame:
-    """
-    Transforma características de clientes.
-
-    Args:
-        raw_df: DataFrame con datos crudos
-        start_date: Fecha de inicio del rango
-        end_date: Fecha de fin del rango
-
-    Returns:
-        DataFrame transformado
-    """
-    # Filtrar por rango de fechas
-    df_filtered = raw_df[
-        (raw_df['date'] >= start_date) &
-        (raw_df['date'] <= end_date)
-    ]
-
-    # Aplicar transformaciones
-    df_transformed = df_filtered.copy()
-    df_transformed['age_group'] = pd.cut(
-        df_transformed['age'],
-        bins=[0, 25, 45, 65, 100],
-        labels=['young', 'adult', 'middle_age', 'senior']
-    )
-
-    return df_transformed
-```
-
-### Ejemplo de Nodo ML
-
-```python
-# ml/training/trainers.py
-from sklearn.ensemble import RandomForestClassifier
-import mlflow
-
-def train_classification_model(
-    features_df: pd.DataFrame,
-    start_date: str,
-    end_date: str
-) -> pd.DataFrame:
-    """
-    Entrena modelo de clasificación con MLflow tracking.
-    """
-    with mlflow.start_run():
-        # Obtener hiperparámetros del contexto Spark
-        spark = SparkSession.getActiveSession()
-        learning_rate = float(spark.conf.get("ml.hyperparams.learning_rate", "0.01"))
-        max_depth = int(spark.conf.get("ml.hyperparams.max_depth", "10"))
-
-        # Preparar datos
-        X = features_df.drop(['target'], axis=1)
-        y = features_df['target']
-
-        # Entrenar modelo
-        model = RandomForestClassifier(
-            max_depth=max_depth,
-            n_estimators=100,
-            random_state=42
-        )
-        model.fit(X, y)
-
-        # Log métricas
-        score = model.score(X, y)
-        mlflow.log_metric("accuracy", score)
-        mlflow.log_param("max_depth", max_depth)
-
-        # Retornar resultados
-        predictions = model.predict(X)
-        result_df = features_df.copy()
-        result_df['predictions'] = predictions
-
-        return result_df
-```
-
-## API Reference
-
-### Core Classes
-
-#### CLIConfig
-```python
-@dataclass
-class CLIConfig:
-    env: str
-    pipeline: str
-    node: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    base_path: Optional[str] = None
-    layer_name: Optional[str] = None
-    use_case_name: Optional[str] = None
-    config_type: Optional[str] = None
-    interactive: bool = False
-    list_configs: bool = False
-    log_level: str = "INFO"
-    log_file: Optional[str] = None
-    validate_only: bool = False
-    dry_run: bool = False
-    verbose: bool = False
-    quiet: bool = False
-```
-
-#### Context
-```python
-class Context:
-    def __init__(
-        self,
-        global_settings: Union[str, Dict],
-        pipelines_config: Union[str, Dict],
-        nodes_config: Union[str, Dict],
-        input_config: Union[str, Dict],
-        output_config: Union[str, Dict],
-    )
-
-    @property
-    def pipelines(self) -> Dict[str, Dict[str, Any]]
-
-    def get_pipeline(self, name: str) -> Optional[Dict[str, Any]]
-
-    def list_pipeline_names(self) -> List[str]
-
-    @classmethod
-    def from_json_config(cls, ...) -> "Context"
-
-    @classmethod
-    def from_python_dsl(cls, python_module_path: str) -> "Context"
-```
-
-### Command Classes
-
-#### NodeCommand
-```python
-class NodeCommand(Command):
-    def __init__(
-        self,
-        function: Callable,
-        input_dfs: List[Any],
-        start_date: str,
-        end_date: str,
-        node_name: str,
-    )
-
-    def execute(self) -> Any
-```
-
-#### MLNodeCommand
-```python
-class MLNodeCommand(NodeCommand):
-    def __init__(
-        self,
-        function: Callable,
-        input_dfs: List[Any],
-        start_date: str,
-        end_date: str,
-        node_name: str,
-        model_version: str,
-        hyperparams: Optional[Dict[str, Any]] = None,
-        spark=None,
-    )
-```
-
-### Exception Hierarchy
-
-```python
-class TauroError(Exception):
-    def __init__(self, message: str, exit_code: ExitCode = ExitCode.GENERAL_ERROR)
-
-class ConfigurationError(TauroError):
-    """Errores de configuración inválida o faltante"""
-
-class ValidationError(TauroError):
-    """Errores de validación de entrada"""
-
-class ExecutionError(TauroError):
-    """Errores durante la ejecución del pipeline"""
-
-class SecurityError(TauroError):
-    """Errores de validación de seguridad"""
-```
-
-## Desarrollo y Extensión
-
-### Creando Nuevos Loaders de Configuración
-
-```python
-from tauro.config.loaders import ConfigLoader
-
-class CustomConfigLoader(ConfigLoader):
-    def can_load(self, source: Union[str, Path]) -> bool:
-        return Path(source).suffix.lower() == ".custom"
-
-    def load(self, source: Union[str, Path]) -> Dict[str, Any]:
-        # Implementar lógica de carga personalizada
-        with open(source, 'r') as f:
-            return self.parse_custom_format(f.read())
-
-    def parse_custom_format(self, content: str) -> Dict[str, Any]:
-        # Lógica de parsing específica
-        pass
-
-# Registrar el loader
-factory = ConfigLoaderFactory()
-factory._loaders.append(CustomConfigLoader())
-```
-
-### Extendiendo Validadores
-
-```python
-from tauro.config.validators import ConfigValidator
-
-class CustomValidator(ConfigValidator):
-    @staticmethod
-    def validate_business_rules(config: Dict[str, Any]) -> None:
-        """Validaciones específicas del negocio"""
-        if config.get('environment') == 'prod':
-            if not config.get('backup_enabled'):
-                raise ConfigValidationError(
-                    "Backup must be enabled in production"
-                )
-```
-
-### Implementando Nuevos Tipos de Command
-
-```python
-from tauro.exec.commands import Command
-
-class BatchCommand(Command):
-    def __init__(self, batch_size: int, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.batch_size = batch_size
-
-    def execute(self) -> Any:
-        # Lógica de procesamiento por lotes
-        results = []
-        for batch in self.create_batches():
-            result = self.process_batch(batch)
-            results.append(result)
-        return self.combine_results(results)
-```
-
-## Mejores Prácticas
-
-### 1. Estructura de Proyecto Recomendada
-
-```
-project/
-├── conf/                   # Configuraciones
-│   ├── settings_yml.json  # Configuración principal
-│   ├── global.yaml        # Configuración global
-│   ├── pipelines.yaml     # Definición de pipelines
-│   ├── nodes.yaml         # Configuración de nodos
-│   ├── inputs.yaml        # Configuración de inputs
-│   └── outputs.yaml       # Configuración de outputs
-├── pipelines/             # Código de pipelines
-│   ├── extraction/
-│   ├── transformation/
-│   └── loading/
-├── ml/                    # Código ML específico
-│   ├── features/
-│   ├── training/
-│   └── inference/
-├── tests/                 # Tests
-└── logs/                  # Logs de ejecución
-```
-
-### 2. Configuración de Logging
-
-```python
-# Configuración avanzada de logging
-LoggerManager.setup(
-    level="INFO",
-    log_file="logs/tauro.log",
-    verbose=False,
-    quiet=False
-)
-
-# En código de nodos
-from loguru import logger
-
-def my_transform_function(df, start_date, end_date):
-    logger.info(f"Processing {len(df)} records")
-    logger.debug(f"Date range: {start_date} to {end_date}")
-
+@streaming.command()
+@click.option("--config", "-c", required=True)
+@click.option("--execution-id", "-e", required=True)
+def metrics(config: str, execution_id: str):
     try:
-        result = process_data(df)
-        logger.success("Transformation completed successfully")
-        return result
+        context = _load_context_from_dsl(config)
+        from tauro.exec.executor import PipelineExecutor
+        executor = PipelineExecutor(context)
+        data = executor.get_metrics(execution_id)  # implement in external exec
+        click.echo(json.dumps(data, indent=2))
     except Exception as e:
-        logger.error(f"Transformation failed: {e}")
-        raise
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(ExitCode.EXECUTION_ERROR.value)
 ```
 
-### 3. Gestión de Dependencias
-
-```yaml
-# Ejemplo de dependencias complejas
-nodes:
-  load_customers:
-    dependencies: []
-
-  load_transactions:
-    dependencies: []
-
-  join_customer_transactions:
-    dependencies:
-      - load_customers
-      - load_transactions
-
-  calculate_metrics:
-    dependencies:
-      - join_customer_transactions
-
-  generate_report:
-    dependencies:
-      - calculate_metrics
-```
-
-### 4. Testing
-
+Then wire it in cli.py:
 ```python
-import pytest
-from tauro.exec.dependency_resolver import DependencyResolver
-
-def test_dependency_resolution():
-    nodes = ["A", "B", "C"]
-    configs = {
-        "A": {"dependencies": []},
-        "B": {"dependencies": ["A"]},
-        "C": {"dependencies": ["A", "B"]}
-    }
-
-    dag = DependencyResolver.build_dependency_graph(nodes, configs)
-    execution_order = DependencyResolver.topological_sort(dag)
-
-    assert execution_order == ["A", "B", "C"]
-
-def test_circular_dependency_detection():
-    nodes = ["A", "B"]
-    configs = {
-        "A": {"dependencies": ["B"]},
-        "B": {"dependencies": ["A"]}
-    }
-
-    dag = DependencyResolver.build_dependency_graph(nodes, configs)
-    execution_order = DependencyResolver.topological_sort(dag)
-
-    assert execution_order == []  # Circular dependency detected
+elif command == "metrics":
+    return cmd_metrics.callback(config=parsed_args.streaming_config,
+                                execution_id=parsed_args.execution_id)
 ```
 
-## Troubleshooting
+### Add a new config format
 
-### Problemas Comunes
+- Implement a loader with the `ConfigLoaderProtocol` (load_config, get_format_name).
+- Register it in ConfigManager.LOADERS and CONFIG_FILES (if needed).
+- Update ConfigFormat enum if the format is first‑class.
+- Ensure ConfigDiscovery looks for a settings_* index name that routes to your new format.
 
-#### 1. Error de Configuración No Encontrada
-```
-ConfigurationError: No configuration files found
-```
+### Update or extend the template
 
-**Solución:**
-```bash
-# Verificar estructura de archivos
-tauro --list-configs
+- Only one template is shipped (Medallion Basic) to keep UX simple.
+- To add new files or defaults, modify MedallionBasicTemplate methods in template.py.
+- Ensure generated settings_* filename matches ConfigDiscovery’s expectations.
 
-# Usar modo interactivo
-tauro --interactive --env dev --pipeline test
+---
 
-# Especificar ruta base
-tauro --base-path /path/to/configs --env dev --pipeline test
-```
+## Testing
 
-#### 2. Dependencias Circulares
-```
-ValueError: Pipeline has circular dependencies - cannot execute
-```
+Unit tests (suggestions):
+- core.py
+  - parse_iso_date and validate_date_range with valid/invalid cases.
+  - SecurityValidator.validate_path positive/negative tests (use tmp dirs).
+- config.py
+  - ConfigDiscovery.discover against a temporary directory tree.
+  - JSONConfigLoader/YAMLConfigLoader/DSLConfigLoader with sample files.
+  - ConfigManager.detect format and change directory behavior.
+  - AppConfigManager.get_env_config merges base + env and validates paths.
+- execution.py
+  - ContextInitializer with mocked AppConfigManager returning test paths.
+  - PipelineExecutor.execute with a stub ExternalPipelineExecutor.
+- streaming_cli.py
+  - _list_all_pipelines_status normalization.
+  - _fmt_ts and _fmt_seconds formatting.
+- template.py
+  - TemplateGenerator outputs expected files and folders.
 
-**Solución:**
-```yaml
-# Revisar configuración de dependencias en nodes.yaml
-# Asegurarse de que no hay ciclos en el grafo
-node_A:
-  dependencies: [node_B]  # ❌ Si node_B depende de node_A
+Integration tests:
+- Use the generated template to run a “dry run” pipeline and validate the CLI flow.
 
-node_B:
-  dependencies: []        # ✅ Corrección
-```
+Mocking:
+- Patch tauro.exec.executor.PipelineExecutor in tests to avoid real execution.
+- Use tmp_path fixtures to isolate filesystem effects.
 
-#### 3. Errores de Importación de Módulos
-```
-ImportError: Cannot import module 'pipelines.extraction.extractors'
-```
-
-**Solución:**
+Example with pytest:
 ```python
-# Verificar estructura de módulos y __init__.py
-pipelines/
-├── __init__.py           # ✅ Requerido
-├── extraction/
-│   ├── __init__.py       # ✅ Requerido
-│   └── extractors.py
-```
-
-#### 4. Problemas de Conexión Databricks
-```
-Error connecting to Databricks: Missing configuration
-```
-
-**Solución:**
-```bash
-# Configurar variables de entorno
-export DATABRICKS_HOST="https://your-workspace.databricks.com"
-export DATABRICKS_TOKEN="your-token"
-export DATABRICKS_CLUSTER_ID="your-cluster-id"
-
-# O usar archivo de configuración
-# ~/.databrickscfg
-[DEFAULT]
-host = https://your-workspace.databricks.com
-token = your-token
-cluster_id = your-cluster-id
-```
-
-### Debug Mode
-
-```bash
-# Ejecutar con información detallada
-tauro --env dev --pipeline test --verbose --log-level DEBUG
-
-# Validar configuración sin ejecutar
-tauro --env dev --pipeline test --validate-only --verbose
-```
-
-### Performance Tuning
-
-```python
-# Configuración de paralelismo
-context = Context(...)
-executor = PipelineExecutor(context)
-executor.max_workers = 8  # Ajustar según recursos
-
-# En global.yaml
-max_parallel_nodes: 8
-spark:
-  driver_memory: "4g"
-  executor_memory: "8g"
-  executor_cores: 4
+def test_date_validation():
+    from tauro.cli.core import parse_iso_date, validate_date_range, ValidationError
+    assert parse_iso_date("2025-01-01") == "2025-01-01"
+    with pytest.raises(ValidationError):
+        parse_iso_date("2025/01/01")
+    with pytest.raises(ValidationError):
+        validate_date_range("2025-02-01", "2025-01-01")
 ```
 
 ---
 
-## Contribución
+## Performance and Reliability Tips
 
-Para contribuir al framework:
-
-1. **Fork** el repositorio
-2. Crear **branch** para nueva funcionalidad
-3. Implementar con **tests** correspondientes
-4. Seguir **convenciones de código** establecidas
-5. Enviar **Pull Request** con descripción detallada
-
-### Convenciones de Código
-
-- Usar **type hints** en todas las funciones públicas
-- Documentar con **docstrings** estilo Google
-- Seguir **PEP 8** para estilo de código
-- Implementar **tests unitarios** para nueva funcionalidad
-- Usar **logging** apropiado con Loguru
+- Nodes should be idempotent where possible; rerunning should not corrupt outputs.
+- Prefer deterministic outputs for testability.
+- If using Spark:
+  - Avoid collecting large data to the driver.
+  - Use broadcast joins when appropriate.
+  - Partition wisely for writes; configure vacuum where supported.
+- For streaming:
+  - Always set a checkpoint location and a suitable trigger.
+  - Avoid heavy per‑record logging; prefer metrics.
 
 ---
 
-*Documentación generada para Tauro Framework v2.1.0*
+## Debugging
+
+- Use --verbose to get DEBUG logs and stack traces when handled.
+- For unexpected exceptions, logger.exception is used sparingly to avoid noisy logs.
+- When troubleshooting imports:
+  - PathManager adds config_dir, src, lib, and parent/src into sys.path.
+  - Use LoggerManager at DEBUG level to see added paths.
+  - Check that package folders have __init__.py.
+
+---
+
+## Versioning and Releases
+
+Recommended:
+- Semantic Versioning (MAJOR.MINOR.PATCH).
+- Update release notes/CHANGELOG for user‑visible changes.
+- Keep template changes backward compatible where possible (avoid renaming settings_* index files).
+
+---
+
+## Common Pitfalls
+
+- Skipping validate_path before chdir or reading config files.
+- Adding argparse flags without updating CLIConfig/ConfigValidator.
+- Calling click commands directly without passing required options to .callback.
+- Assuming file ownership checks pass on non‑POSIX systems; guard platform specifics as in SecurityValidator.
+
+---
+
+## Glossary
+
+- Context: In‑memory representation of configuration across global/pipelines/nodes/input/output.
+- Node: A single step within a pipeline; typically a function in project code.
+- Pipeline: An ordered (or DAG) set of nodes with inputs/outputs and dependencies.
+- Settings index: The top‑level file that maps environments to config section files.
+
+---
+
+## Appendix: Exit Codes
+
+- 0 SUCCESS
+- 1 GENERAL_ERROR
+- 2 CONFIGURATION_ERROR
+- 3 VALIDATION_ERROR
+- 4 EXECUTION_ERROR
+- 5 DEPENDENCY_ERROR
+- 6 SECURITY_ERROR
+
+---

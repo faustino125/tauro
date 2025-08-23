@@ -87,7 +87,6 @@ class Context:
             output_config,
         )
 
-        # Inicializar política de formatos desde configuración global (con overrides opcionales)
         self.format_policy = FormatPolicy(self.global_settings.get("format_policy", {}))
 
         self.spark = SparkSessionFactory.get_session(
@@ -114,7 +113,10 @@ class Context:
         self._validator.validate_required_keys(
             self.global_settings, self.REQUIRED_GLOBAL_SETTINGS, "global settings"
         )
+
         self.execution_mode = self.global_settings.get("mode", "databricks")
+        self.input_path = self.global_settings.get("input_path")
+        self.output_path = self.global_settings.get("output_path")
 
         self.pipelines_config = self._load_and_validate_config(
             pipelines_config, "pipelines config"
@@ -145,16 +147,15 @@ class Context:
     def _process_configurations(self) -> None:
         """Process and prepare configurations after loading."""
         self.layer = self.global_settings.get("layer", "").lower()
-        self.input_path = self.global_settings.get("input_path", "")
-        self.output_path = self.global_settings.get("output_path", "")
-
-        self.project_name = self.global_settings.get("project_name", "")
-        self.default_model_version = self.global_settings.get(
-            "default_model_version", "latest"
-        )
-        self.default_hyperparams = self.global_settings.get("default_hyperparams", {})
-
-        self._interpolate_input_paths()
+        try:
+            self._interpolator.interpolate_config_paths(
+                self.input_config, self.global_settings
+            )
+            self._interpolator.interpolate_config_paths(
+                self.output_config, self.global_settings
+            )
+        except Exception:
+            logger.debug("Path interpolation skipped due to error", exc_info=True)
 
     def _get_spark_ml_config(self) -> Dict[str, Any]:
         """Extract Spark ML configuration from global settings."""

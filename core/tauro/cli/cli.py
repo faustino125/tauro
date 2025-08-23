@@ -25,6 +25,8 @@ from tauro.cli.core import (
     LoggerManager,
     TauroError,
     ValidationError,
+    parse_iso_date,
+    validate_date_range,
 )
 from tauro.cli.execution import ContextInitializer, PipelineExecutor
 from tauro.cli.template import handle_template_command
@@ -43,12 +45,12 @@ class ArgumentParser:
             Examples:
             # Pipeline execution
             tauro --env dev --pipeline data_processing
-            
+
             # Template generation
             tauro --template medallion_basic --project-name my_project
             tauro --template-interactive
             tauro --list-templates
-            
+
             # Streaming commands
             tauro --streaming --streaming-command run --streaming-config config/streaming.py --streaming-pipeline real_time_processing
             tauro --streaming --streaming-command status --streaming-config config/streaming.py
@@ -91,6 +93,11 @@ class ArgumentParser:
             "--list-pipelines", action="store_true", help="List available pipelines"
         )
         parser.add_argument("--pipeline-info", help="Show pipeline information")
+        parser.add_argument(
+            "--clear-cache",
+            action="store_true",
+            help="Clear configuration discovery cache",
+        )
 
         # Logging
         parser.add_argument(
@@ -101,89 +108,79 @@ class ArgumentParser:
         )
         parser.add_argument("--log-file", help="Custom log file path")
         parser.add_argument(
-            "-v", "--verbose", action="store_true", help="Verbose output"
-        )
-        parser.add_argument("-q", "--quiet", action="store_true", help="Quiet mode")
-
-        parser.add_argument(
-            "--validate-only", action="store_true", help="Validate config only"
+            "--verbose", action="store_true", help="Enable verbose output (DEBUG)"
         )
         parser.add_argument(
-            "--dry-run", action="store_true", help="Show execution plan"
+            "--quiet", action="store_true", help="Reduce output (ERROR only)"
+        )
+
+        # Template commands
+        parser.add_argument("--template", help="Template type to generate")
+        parser.add_argument("--project-name", help="Project name for template")
+        parser.add_argument(
+            "--output-path", help="Output path for generated template files"
         )
         parser.add_argument(
-            "--clear-cache", action="store_true", help="Clear config cache"
-        )
-
-        parser.add_argument("--version", action="version", version="Tauro CLI v 0.1.0")
-
-        # Template generation group
-        template_group = parser.add_argument_group("Template Generation")
-        template_group.add_argument(
-            "--template",
-            choices=["medallion_basic", "medallion_ml", "ml_training"],
-            help="Generate project template",
-        )
-        template_group.add_argument("--project-name", help="Project name for template")
-        template_group.add_argument(
-            "--output-path", help="Output directory for generated project"
-        )
-        template_group.add_argument(
             "--format",
-            choices=["yaml", "json", "dsl"],
+            choices=["yaml", "json"],
             default="yaml",
-            help="Configuration file format",
+            help="Config format for generated template",
         )
-        template_group.add_argument(
-            "--no-sample-code", action="store_true", help="Skip sample code generation"
+        parser.add_argument(
+            "--no-sample-code",
+            action="store_true",
+            help="Do not include sample code in generated template",
         )
-        template_group.add_argument(
+        parser.add_argument(
             "--list-templates", action="store_true", help="List available templates"
         )
-        template_group.add_argument(
+        parser.add_argument(
             "--template-interactive",
             action="store_true",
             help="Interactive template generation",
         )
 
-        # Streaming commands group
-        streaming_group = parser.add_argument_group("Streaming Commands")
-        streaming_group.add_argument(
-            "--streaming",
-            action="store_true",
-            help="Execute streaming pipeline commands",
+        # Streaming toggle to delegate to streaming CLI if needed
+        parser.add_argument(
+            "--streaming", action="store_true", help="Use streaming subcommands"
         )
-        streaming_group.add_argument(
+        parser.add_argument(
             "--streaming-command",
-            choices=["run", "status", "stop", "metrics", "validate", "list"],
+            choices=["run", "status", "stop"],
             help="Streaming command to execute",
         )
-        streaming_group.add_argument(
-            "--streaming-config",
-            help="Path to streaming configuration file (required for streaming commands)",
-        )
-        streaming_group.add_argument(
-            "--streaming-pipeline",
-            help="Streaming pipeline name to execute (required for run command)",
-        )
-        streaming_group.add_argument(
-            "--execution-id",
-            help="Execution ID for status/stop/metrics commands",
-        )
-        streaming_group.add_argument(
+        parser.add_argument("--streaming-config", help="Streaming config path")
+        parser.add_argument("--streaming-pipeline", help="Streaming pipeline name")
+        parser.add_argument("--execution-id", help="Streaming execution id")
+        parser.add_argument(
             "--streaming-mode",
             choices=["sync", "async"],
             default="async",
-            help="Execution mode for streaming pipelines",
+            help="Streaming execution mode",
         )
-        streaming_group.add_argument(
-            "--model-version", help="Model version for ML pipelines"
+        parser.add_argument("--model-version", help="Model version for ML pipelines")
+        parser.add_argument("--hyperparams", help="Hyperparameters as JSON string")
+
+        # Dry-run / validate-only
+        parser.add_argument(
+            "--validate-only",
+            action="store_true",
+            help="Validate configuration without executing the pipeline",
         )
-        streaming_group.add_argument(
-            "--hyperparams", help="Hyperparameters as JSON string"
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Log actions without executing the pipeline",
         )
 
         return parser
+
+
+def _normalize_and_validate_dates(args) -> None:
+    """Normalize and validate CLI date arguments in-place."""
+    args.start_date = parse_iso_date(args.start_date)
+    args.end_date = parse_iso_date(args.end_date)
+    validate_date_range(args.start_date, args.end_date)
 
 
 class ConfigValidator:
@@ -195,7 +192,6 @@ class ConfigValidator:
         if config.verbose and config.quiet:
             raise ValidationError("Cannot use both --verbose and --quiet")
 
-        # Special handling for streaming commands
         if config.streaming:
             if not config.streaming_config:
                 raise ValidationError(
@@ -205,19 +201,15 @@ class ConfigValidator:
             if config.streaming_command == "run" and not config.streaming_pipeline:
                 raise ValidationError("--streaming-pipeline required for 'run' command")
 
-            if (
-                config.streaming_command in ["stop", "metrics"]
-                and not config.execution_id
-            ):
+            if config.streaming_command in ["stop"] and not config.execution_id:
                 raise ValidationError("--execution-id required for this command")
 
-        # Check if this is a special mode that doesn't need full config
         special_modes = [
             config.list_configs,
             config.list_pipelines,
+            bool(config.pipeline_info),
             config.clear_cache,
-            config.pipeline_info,
-            config.streaming,  # Streaming is a special mode
+            config.streaming,  # Streaming handled separately
         ]
 
         if not any(special_modes):
@@ -226,15 +218,10 @@ class ConfigValidator:
             if not config.pipeline:
                 raise ValidationError("--pipeline required for pipeline execution")
 
-        # Validate date range
-        if config.start_date and config.end_date:
-            try:
-                start = datetime.strptime(config.start_date, "%Y-%m-%d")
-                end = datetime.strptime(config.end_date, "%Y-%m-%d")
-                if start > end:
-                    raise ValidationError("Start date must be before end date")
-            except ValueError:
-                raise ValidationError("Invalid date format. Use YYYY-MM-DD")
+        if config.start_date or config.end_date:
+            sd = parse_iso_date(config.start_date)
+            ed = parse_iso_date(config.end_date)
+            validate_date_range(sd, ed)
 
 
 class SpecialModeHandler:
@@ -255,7 +242,6 @@ class SpecialModeHandler:
             discovery.list_all()
             return ExitCode.SUCCESS.value
 
-        # Initialize config manager for pipeline-related commands
         try:
             self.config_manager = ConfigManager(
                 base_path=getattr(parsed_args, "base_path", None),
@@ -349,6 +335,9 @@ class TauroCLI:
             config_type=parsed.config_type,
             interactive=parsed.interactive,
             list_configs=parsed.list_configs,
+            list_pipelines=parsed.list_pipelines,
+            pipeline_info=parsed.pipeline_info,
+            clear_cache=getattr(parsed, "clear_cache", False),
             log_level=parsed.log_level,
             log_file=parsed.log_file,
             validate_only=parsed.validate_only,
@@ -398,6 +387,9 @@ class TauroCLI:
             special_result = special_handler.handle(parsed_args)
             if special_result is not None:
                 return special_result
+
+            # Normalize and validate dates early (fail-fast)
+            _normalize_and_validate_dates(parsed_args)
 
             # Parse and validate full configuration
             self.config = self.parse_arguments(args)
@@ -454,24 +446,9 @@ class TauroCLI:
         """Execute streaming pipeline commands."""
         try:
             # Import streaming commands only when needed
-            from tauro.cli.streaming_cli import (
-                run,
-                status,
-                stop,
-                metrics,
-                validate,
-                list_pipelines,
-            )
-
-            # Prepare context for streaming commands
-            ctx = {
-                "config": parsed_args.streaming_config,
-                "pipeline": parsed_args.streaming_pipeline,
-                "mode": parsed_args.streaming_mode,
-                "model_version": parsed_args.model_version,
-                "hyperparams": parsed_args.hyperparams,
-                "execution_id": parsed_args.execution_id,
-            }
+            from tauro.cli.streaming_cli import run as cmd_run
+            from tauro.cli.streaming_cli import status as cmd_status
+            from tauro.cli.streaming_cli import stop as cmd_stop
 
             command = parsed_args.streaming_command or "run"
 
@@ -480,39 +457,38 @@ class TauroCLI:
                     raise ValidationError(
                         "--streaming-pipeline required for 'run' command"
                     )
-                return run.callback(**ctx)
+                # Click commands expose .callback for direct invocation
+                return cmd_run.callback(
+                    config=parsed_args.streaming_config,
+                    pipeline=parsed_args.streaming_pipeline,
+                    mode=parsed_args.streaming_mode,
+                    model_version=parsed_args.model_version,
+                    hyperparams=parsed_args.hyperparams,
+                )
 
             elif command == "status":
-                return status.callback(**ctx)
+                # Default to table format when invoked from main CLI
+                return cmd_status.callback(
+                    config=parsed_args.streaming_config,
+                    execution_id=parsed_args.execution_id,
+                    format="table",
+                )
 
             elif command == "stop":
                 if not parsed_args.execution_id:
                     raise ValidationError("--execution-id required for 'stop' command")
-                return stop.callback(
-                    config=ctx["config"],
-                    execution_id=ctx["execution_id"],
-                    graceful=True,
+                return cmd_stop.callback(
+                    config=parsed_args.streaming_config,
+                    execution_id=parsed_args.execution_id,
+                    timeout=60,
                 )
-
-            elif command == "metrics":
-                if not parsed_args.execution_id:
-                    raise ValidationError(
-                        "--execution-id required for 'metrics' command"
-                    )
-                return metrics.callback(**ctx)
-
-            elif command == "validate":
-                return validate.callback(config=ctx["config"])
-
-            elif command == "list":
-                return list_pipelines.callback(config=ctx["config"])
 
             else:
                 raise ValidationError(f"Unknown streaming command: {command}")
 
         except Exception as e:
             logger.error(f"Streaming command failed: {e}")
-            if parsed_args.verbose:
+            if getattr(parsed_args, "verbose", False):
                 logger.debug(traceback.format_exc())
             return ExitCode.EXECUTION_ERROR.value
 

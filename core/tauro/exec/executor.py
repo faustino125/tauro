@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 from loguru import logger  # type: ignore
 
-from tauro.config.contexts import Context  # Alineado con nuevo módulo de config
+from tauro.config.contexts import Context
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.node_executor import NodeExecutor
 from tauro.exec.pipeline_state import NodeType, UnifiedPipelineState
@@ -15,8 +15,6 @@ from tauro.io.output import OutputManager
 from tauro.streaming.constants import PipelineType
 from tauro.streaming.pipeline_manager import StreamingPipelineManager
 
-# Eliminado: validador duplicado de config
-
 
 class BaseExecutor:
     """Base class for pipeline executors."""
@@ -25,8 +23,9 @@ class BaseExecutor:
         self.context = context
         self.input_loader = InputLoader(self.context)
         self.output_manager = OutputManager(self.context)
-        self.is_ml_layer = self.context.is_ml_layer
-        self.max_workers = self.context.global_settings.get("max_parallel_nodes", 4)
+        self.is_ml_layer = getattr(self.context, "is_ml_layer", False)
+        gs = getattr(self.context, "global_settings", {}) or {}
+        self.max_workers = gs.get("max_parallel_nodes", 4)
         self.node_executor = NodeExecutor(
             self.context, self.input_loader, self.output_manager, self.max_workers
         )
@@ -43,33 +42,35 @@ class BaseExecutor:
         pipeline_ml_config: Dict[str, Any] = {}
 
         final_hyperparams = dict(hyperparams or {})
-        final_model_version = model_version or self.context.default_model_version
+        final_model_version = model_version or getattr(
+            self.context, "default_model_version", None
+        )
 
-        # Si el contexto expone configuración ML por pipeline, la usamos
         if hasattr(self.context, "get_pipeline_ml_config"):
-            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
+            pipeline_ml_config = (
+                self.context.get_pipeline_ml_config(pipeline_name) or {}
+            )
             final_model_version = (
                 model_version
                 or pipeline_ml_config.get("model_version")
-                or self.context.default_model_version
+                or getattr(self.context, "default_model_version", None)
             )
 
-            # Merge de hyperparams: defaults -> pipeline -> overrides
-            final_hyperparams.update(self.context.default_hyperparams or {})
-            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
+            final_hyperparams.update(
+                getattr(self.context, "default_hyperparams", {}) or {}
+            )
+            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}) or {})
             if hyperparams:
                 final_hyperparams.update(hyperparams)
 
-            # Registro de modelos (si existe en el contexto)
             if hasattr(self.context, "get_model_registry"):
                 model_registry = self.context.get_model_registry()
                 try:
                     ml_info["model"] = model_registry.get_model(
                         pipeline_ml_config.get("model_name"),
-                        version=final_model_version,  # type: ignore[arg-type]
+                        version=final_model_version,
                     )
                 except Exception:
-                    # Evitar fallo si la API del registry difiere
                     pass
 
             ml_info = {
@@ -81,8 +82,9 @@ class BaseExecutor:
             }
 
         elif self.is_ml_layer:
-            # Fallback en caso de que no exista la API específica
-            final_hyperparams.update(self.context.default_hyperparams or {})
+            final_hyperparams.update(
+                getattr(self.context, "default_hyperparams", {}) or {}
+            )
             ml_info = {
                 "model_version": final_model_version,
                 "hyperparams": final_hyperparams,

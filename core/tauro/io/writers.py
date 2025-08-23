@@ -1,11 +1,11 @@
 from typing import Any, Dict
 
-from loguru import logger
+from loguru import logger  # type: ignore
 
 from tauro.io.constants import DEFAULT_CSV_OPTIONS, WriteMode
-from tauro.io.exceptions import WriteOperationError, ConfigurationError
+from tauro.io.exceptions import ConfigurationError, WriteOperationError
 from tauro.io.factories import BaseWriter
-from tauro.io.validators import DataValidator, ConfigValidator
+from tauro.io.validators import ConfigValidator, DataValidator
 
 
 class SparkWriterMixin:
@@ -16,7 +16,6 @@ class SparkWriterMixin:
         data_validator = DataValidator()
         data_validator.validate_dataframe(df)
 
-        config_validator = ConfigValidator()
         write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
         if write_mode not in [mode.value for mode in WriteMode]:
             logger.warning(
@@ -53,7 +52,7 @@ class SparkWriterMixin:
             logger.debug("Enabled overwriteSchema option")
 
         if config.get("overwrite_strategy") == "replaceWhere":
-            self._apply_replace_where(writer, config)
+            writer = self._apply_replace_where(writer, config)
 
         if extra_options := config.get("options", {}):
             for key, value in extra_options.items():
@@ -62,7 +61,7 @@ class SparkWriterMixin:
 
         return writer
 
-    def _apply_replace_where(self, writer: Any, config: Dict[str, Any]) -> None:
+    def _apply_replace_where(self, writer: Any, config: Dict[str, Any]) -> Any:
         """Apply replaceWhere strategy for conditional overwrites."""
         partition_col = config.get("partition_col")
         start_date = config.get("start_date")
@@ -80,15 +79,15 @@ class SparkWriterMixin:
         ):
             raise ConfigurationError(f"Invalid date format: {start_date} - {end_date}")
 
-        writer.option(
+        writer = writer.option(
             "replaceWhere", f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
-        )
-        writer.option(
+        ).option(
             "overwriteSchema", "false"
         )  # Disable schema overwrite for replaceWhere
         logger.debug(
             f"Applied replaceWhere strategy for {partition_col} between {start_date} and {end_date}"
         )
+        return writer
 
     def _get_format(self) -> str:
         """Get format string for the writer."""
@@ -109,7 +108,6 @@ class DeltaWriter(BaseWriter, SparkWriterMixin):
     """Writer for Delta format."""
 
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data in Delta format."""
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing Delta data to: {destination}")
@@ -125,7 +123,6 @@ class ParquetWriter(BaseWriter, SparkWriterMixin):
     """Writer for Parquet format."""
 
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data in Parquet format."""
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing Parquet data to: {destination}")
@@ -141,20 +138,16 @@ class CSVWriter(BaseWriter, SparkWriterMixin):
     """Writer for CSV format."""
 
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data in CSV format."""
         try:
             writer = self._configure_spark_writer(data, config)
-
             csv_options = {
                 **DEFAULT_CSV_OPTIONS,
                 "quote": '"',
                 "escape": '"',
                 **config.get("options", {}),
             }
-
             for key, value in csv_options.items():
                 writer = writer.option(key, value)
-
             logger.info(f"Writing CSV data to: {destination}")
             writer.save(destination)
             logger.success(f"CSV data written successfully to: {destination}")
@@ -168,7 +161,6 @@ class JSONWriter(BaseWriter, SparkWriterMixin):
     """Writer for JSON format."""
 
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data in JSON format."""
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing JSON data to: {destination}")
@@ -184,7 +176,6 @@ class ORCWriter(BaseWriter, SparkWriterMixin):
     """Writer for ORC format."""
 
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data in ORC format."""
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing ORC data to: {destination}")

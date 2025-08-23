@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from loguru import logger  # type: ignore
 from pyspark.sql.streaming import DataStreamWriter, StreamingQuery  # type: ignore
 
-from tauro.streaming.constants import StreamingFormat
-from tauro.streaming.exceptions import StreamingFormatNotSupportedError, StreamingError
+from tauro.streaming.exceptions import StreamingError, StreamingFormatNotSupportedError
 
 
 class BaseStreamingWriter(ABC):
@@ -55,14 +54,13 @@ class ConsoleStreamingWriter(BaseStreamingWriter):
         """Write to console."""
         try:
             self._validate_config(config)
-            options = config.get("options", {})
+            options = config.get("options", {}) or {}
 
             logger.info("Starting console streaming writer")
 
             writer = write_stream.format("console")
             writer = self._apply_options(writer, options)
 
-            # Set default options for better console output
             if "numRows" not in options:
                 writer = writer.option("numRows", 20)
             if "truncate" not in options:
@@ -86,14 +84,13 @@ class DeltaStreamingWriter(BaseStreamingWriter):
             self._validate_config(config, required_fields=["path"])
 
             path = config.get("path")
-            options = config.get("options", {})
+            options = config.get("options", {}) or {}
 
             logger.info(f"Starting Delta streaming writer to path: {path}")
 
             writer = write_stream.format("delta")
             writer = self._apply_options(writer, options)
 
-            # Set default Delta options for streaming
             if "mergeSchema" not in options:
                 writer = writer.option("mergeSchema", "true")
 
