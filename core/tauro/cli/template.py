@@ -910,10 +910,10 @@ class TemplateCommand:
         logger.info("Examples:")
         logger.info("  tauro --template medallion_basic --project-name my_pipeline")
         logger.info(
-            "  tauro --template medallion_ml --project-name ml_project --format json"
+            "  tauro --template medallion_basic --project-name data_project --format json"
         )
         logger.info(
-            "  tauro --template ml_training --project-name model_training --output ./projects"
+            "  tauro --template medallion_basic --project-name streaming_project --output ./projects"
         )
 
         return ExitCode.SUCCESS.value
