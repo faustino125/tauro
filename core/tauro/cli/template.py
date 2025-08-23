@@ -21,11 +21,6 @@ class TemplateType(Enum):
     """Available template types."""
 
     MEDALLION_BASIC = "medallion_basic"
-    MEDALLION_ML = "medallion_ml"
-    ML_TRAINING = "ml_training"
-    ML_INFERENCE = "ml_inference"
-    ETL_BASIC = "etl_basic"
-    STREAMING = "streaming"
 
 
 class DataLayer(Enum):
@@ -150,554 +145,228 @@ class MedallionBasicTemplate(BaseTemplate):
                 "layers": ["bronze", "silver", "gold"],
                 "start_date": "2024-01-01",
                 "end_date": "2024-12-31",
+                "paths": {
+                    "bronze": "/mnt/data/bronze",
+                    "silver": "/mnt/data/silver", 
+                    "gold": "/mnt/data/gold"
+                }
             }
         )
         return base_settings
 
     def generate_pipelines_config(self) -> Dict[str, Any]:
         return {
-            "data_preparation": {
-                "description": "Prepare data for ML training",
-                "nodes": ["load_features", "split_data", "validate_splits"],
-                "inputs": ["feature_store"],
-                "outputs": ["train_data", "test_data", "validation_data"],
+            "bronze_ingestion": {
+                "description": "Ingest raw data into Bronze layer",
+                "nodes": ["ingest_sales_data", "ingest_customer_data"],
+                "type": "batch",
+                "inputs": ["raw_data_source"],
+                "outputs": ["bronze_sales", "bronze_customers"],
             },
-            "model_training": {
-                "description": "Train and tune ML models",
-                "nodes": [
-                    "train_baseline",
-                    "hyperparameter_tuning",
-                    "train_best_model",
-                    "cross_validate",
-                ],
-                "inputs": ["train_data", "validation_data"],
-                "outputs": ["baseline_model", "tuned_model", "best_model"],
+            "silver_processing": {
+                "description": "Clean and transform data for Silver layer",
+                "nodes": ["clean_sales_data", "clean_customer_data"],
+                "type": "batch",
+                "inputs": ["bronze_sales", "bronze_customers"],
+                "outputs": ["silver_sales", "silver_customers"],
             },
-            "model_evaluation": {
-                "description": "Evaluate and validate models",
-                "nodes": [
-                    "evaluate_models",
-                    "generate_reports",
-                    "validate_performance",
-                ],
-                "inputs": ["test_data", "best_model"],
-                "outputs": ["evaluation_metrics", "model_report"],
+            "gold_aggregation": {
+                "description": "Create business-ready aggregations for Gold layer",
+                "nodes": ["sales_summary"],
+                "type": "batch",
+                "inputs": ["silver_sales", "silver_customers"],
+                "outputs": ["gold_sales_summary"],
             },
-            "model_deployment": {
-                "description": "Register and deploy models",
-                "nodes": ["register_model", "create_endpoints", "deploy_model"],
-                "inputs": ["best_model", "evaluation_metrics"],
-                "outputs": ["registered_model", "model_endpoint"],
+            "real_time_processing": {
+                "description": "Real-time streaming data processing",
+                "nodes": ["read_stream", "transform_stream", "write_stream"],
+                "type": "streaming",
+                "inputs": ["kafka_topic"],
+                "outputs": ["delta_sink"],
             },
         }
 
     def generate_nodes_config(self) -> Dict[str, Any]:
         return {
-            # Data Preparation Nodes
-            "load_features": {
-                "description": "Load feature store data",
-                "module": "pipelines.ml.data_prep",
-                "function": "load_features",
-                "input": ["feature_store"],
-                "output": ["raw_features"],
+            # Bronze Layer Nodes (Batch Ingestion)
+            "ingest_sales_data": {
+                "description": "Ingest raw sales data into Bronze layer",
+                "module": "pipelines.bronze.ingestion",
+                "function": "ingest_sales_data",
+                "input": ["raw_data_source"],
+                "output": ["bronze_sales"],
                 "dependencies": [],
             },
-            "split_data": {
-                "description": "Split data into train/validation/test sets",
-                "module": "pipelines.ml.data_prep",
-                "function": "split_data",
-                "input": ["raw_features"],
-                "output": ["train_data", "test_data", "validation_data"],
-                "dependencies": ["load_features"],
+            "ingest_customer_data": {
+                "description": "Ingest raw customer data into Bronze layer",
+                "module": "pipelines.bronze.ingestion",
+                "function": "ingest_customer_data",
+                "input": ["raw_data_source"],
+                "output": ["bronze_customers"],
+                "dependencies": [],
             },
-            "validate_splits": {
-                "description": "Validate data splits quality",
-                "module": "pipelines.ml.validation",
-                "function": "validate_splits",
-                "input": ["train_data", "test_data", "validation_data"],
-                "output": [],
-                "dependencies": ["split_data"],
+            # Silver Layer Nodes (Batch Processing)
+            "clean_sales_data": {
+                "description": "Clean and standardize sales data for Silver layer",
+                "module": "pipelines.silver.cleaning",
+                "function": "clean_sales_data",
+                "input": ["bronze_sales"],
+                "output": ["silver_sales"],
+                "dependencies": ["ingest_sales_data"],
             },
-            # Training Nodes
-            "train_baseline": {
-                "description": "Train baseline model",
-                "module": "pipelines.ml.training",
-                "function": "train_baseline_model",
-                "input": ["train_data"],
-                "output": ["baseline_model"],
-                "model_artifacts": [
-                    {
-                        "name": "baseline_model",
-                        "type": "sklearn",
-                        "path": "models/baseline",
-                    }
-                ],
-                "dependencies": ["validate_splits"],
+            "clean_customer_data": {
+                "description": "Clean and standardize customer data for Silver layer",
+                "module": "pipelines.silver.cleaning",
+                "function": "clean_customer_data",
+                "input": ["bronze_customers"],
+                "output": ["silver_customers"],
+                "dependencies": ["ingest_customer_data"],
             },
-            "hyperparameter_tuning": {
-                "description": "Perform hyperparameter tuning",
-                "module": "pipelines.ml.tuning",
-                "function": "hyperparameter_tuning",
-                "input": ["train_data", "validation_data"],
-                "output": ["tuned_hyperparams"],
-                "dependencies": ["train_baseline"],
+            # Gold Layer Nodes (Batch Aggregation)
+            "sales_summary": {
+                "description": "Create business-ready sales summary for Gold layer",
+                "module": "pipelines.gold.aggregation",
+                "function": "sales_summary",
+                "input": ["silver_sales", "silver_customers"],
+                "output": ["gold_sales_summary"],
+                "dependencies": ["clean_sales_data", "clean_customer_data"],
             },
-            "train_best_model": {
-                "description": "Train model with best hyperparameters",
-                "module": "pipelines.ml.training",
-                "function": "train_best_model",
-                "input": ["train_data", "tuned_hyperparams"],
-                "output": ["best_model"],
-                "model_artifacts": [
-                    {"name": "best_model", "type": "sklearn", "path": "models/best"}
-                ],
-                "dependencies": ["hyperparameter_tuning"],
+            # Streaming Nodes
+            "read_stream": {
+                "description": "Read data from streaming source",
+                "module": "pipelines.streaming.processing",
+                "function": "read_stream",
+                "input": ["kafka_topic"],
+                "output": ["raw_stream"],
+                "dependencies": [],
+                "type": "streaming",
             },
-            "cross_validate": {
-                "description": "Perform cross-validation",
-                "module": "pipelines.ml.validation",
-                "function": "cross_validate_model",
-                "input": ["train_data", "best_model"],
-                "output": ["cv_scores"],
-                "dependencies": ["train_best_model"],
+            "transform_stream": {
+                "description": "Transform streaming data in real-time",
+                "module": "pipelines.streaming.processing",
+                "function": "transform_stream",
+                "input": ["raw_stream"],
+                "output": ["transformed_stream"],
+                "dependencies": ["read_stream"],
+                "type": "streaming",
             },
-            # Evaluation Nodes
-            "evaluate_models": {
-                "description": "Evaluate model performance",
-                "module": "pipelines.ml.evaluation",
-                "function": "evaluate_models",
-                "input": ["test_data", "best_model"],
-                "output": ["evaluation_metrics"],
-                "dependencies": ["cross_validate"],
-            },
-            "generate_reports": {
-                "description": "Generate model evaluation reports",
-                "module": "pipelines.ml.reporting",
-                "function": "generate_reports",
-                "input": ["evaluation_metrics", "cv_scores"],
-                "output": ["model_report"],
-                "dependencies": ["evaluate_models"],
-            },
-            "validate_performance": {
-                "description": "Validate model meets performance thresholds",
-                "module": "pipelines.ml.validation",
-                "function": "validate_performance",
-                "input": ["evaluation_metrics"],
-                "output": [],
-                "dependencies": ["generate_reports"],
-            },
-            # Deployment Nodes
-            "register_model": {
-                "description": "Register model in model registry",
-                "module": "pipelines.ml.deployment",
-                "function": "register_model",
-                "input": ["best_model", "evaluation_metrics"],
-                "output": ["registered_model"],
-                "dependencies": ["validate_performance"],
-            },
-            "create_endpoints": {
-                "description": "Create model serving endpoints",
-                "module": "pipelines.ml.deployment",
-                "function": "create_endpoints",
-                "input": ["registered_model"],
-                "output": ["model_endpoint"],
-                "dependencies": ["register_model"],
-            },
-            "deploy_model": {
-                "description": "Deploy model to production",
-                "module": "pipelines.ml.deployment",
-                "function": "deploy_model",
-                "input": ["model_endpoint"],
-                "output": [],
-                "dependencies": ["create_endpoints"],
+            "write_stream": {
+                "description": "Write processed stream to sink",
+                "module": "pipelines.streaming.processing",
+                "function": "write_stream",
+                "input": ["transformed_stream"],
+                "output": ["delta_sink"],
+                "dependencies": ["transform_stream"],
+                "type": "streaming",
             },
         }
 
     def generate_input_config(self) -> Dict[str, Any]:
         return {
-            "feature_store": {
-                "description": "Feature store with ML-ready features",
+            # Raw data sources
+            "raw_data_source": {
+                "description": "Raw data source (CSV files, databases, etc.)",
+                "format": "csv",
+                "filepath": "/mnt/data/raw",
+            },
+            # Bronze layer outputs (used as inputs for Silver)
+            "bronze_sales": {
+                "description": "Raw sales data in Bronze layer",
                 "format": "delta",
-                "filepath": "/mnt/data/features/feature_store",
+                "filepath": "/mnt/data/bronze/sales",
             },
-            "raw_features": {
-                "description": "Raw features from feature store",
+            "bronze_customers": {
+                "description": "Raw customer data in Bronze layer",
                 "format": "delta",
-                "filepath": "/mnt/data/features/raw_features",
+                "filepath": "/mnt/data/bronze/customers",
             },
-            "train_data": {
-                "description": "Training dataset",
+            # Silver layer outputs (used as inputs for Gold)
+            "silver_sales": {
+                "description": "Cleaned sales data in Silver layer",
                 "format": "delta",
-                "filepath": "/mnt/data/ml/train_data",
+                "filepath": "/mnt/data/silver/sales",
             },
-            "test_data": {
-                "description": "Test dataset",
+            "silver_customers": {
+                "description": "Cleaned customer data in Silver layer",
                 "format": "delta",
-                "filepath": "/mnt/data/ml/test_data",
+                "filepath": "/mnt/data/silver/customers",
             },
-            "validation_data": {
-                "description": "Validation dataset",
-                "format": "delta",
-                "filepath": "/mnt/data/ml/validation_data",
-            },
-            "baseline_model": {
-                "description": "Baseline model",
-                "format": "pickle",
-                "filepath": "/mnt/models/baseline/model.pkl",
-            },
-            "tuned_hyperparams": {
-                "description": "Tuned hyperparameters",
-                "format": "json",
-                "filepath": "/mnt/models/hyperparams/best_params.json",
-            },
-            "best_model": {
-                "description": "Best trained model",
-                "format": "pickle",
-                "filepath": "/mnt/models/best/model.pkl",
-            },
-            "cv_scores": {
-                "description": "Cross-validation scores",
-                "format": "json",
-                "filepath": "/mnt/models/evaluation/cv_scores.json",
-            },
-            "evaluation_metrics": {
-                "description": "Model evaluation metrics",
-                "format": "json",
-                "filepath": "/mnt/models/evaluation/metrics.json",
-            },
-            "model_report": {
-                "description": "Model evaluation report",
-                "format": "json",
-                "filepath": "/mnt/models/reports/model_report.json",
-            },
-            "registered_model": {
-                "description": "Registered model reference",
-                "format": "json",
-                "filepath": "/mnt/models/registry/registered_model.json",
+            # Streaming source
+            "kafka_topic": {
+                "description": "Kafka topic for real-time data streaming",
+                "format": "kafka",
+                "connection": {
+                    "bootstrap.servers": "localhost:9092",
+                    "topic": "real_time_events",
+                    "group.id": "tauro_consumer_group",
+                },
             },
         }
 
     def generate_output_config(self) -> Dict[str, Any]:
         return {
-            "train_data": {
-                "description": "Training data output",
+            # Bronze layer outputs
+            "bronze_sales": {
+                "description": "Bronze layer sales data output",
                 "format": "delta",
-                "table_name": "train_data",
-                "schema": "ml_training",
-                "sub_folder": "datasets",
-                "write_mode": "overwrite",
-                "vacuum": True,
-            },
-            "test_data": {
-                "description": "Test data output",
-                "format": "delta",
-                "table_name": "test_data",
-                "schema": "ml_training",
-                "sub_folder": "datasets",
-                "write_mode": "overwrite",
-                "vacuum": True,
-            },
-            "validation_data": {
-                "description": "Validation data output",
-                "format": "delta",
-                "table_name": "validation_data",
-                "schema": "ml_training",
-                "sub_folder": "datasets",
-                "write_mode": "overwrite",
-                "vacuum": True,
-            },
-            "baseline_model": {
-                "description": "Baseline model output",
-                "format": "pickle",
-                "table_name": "baseline_model",
-                "schema": "ml_models",
-                "sub_folder": "baseline",
-                "write_mode": "overwrite",
-            },
-            "tuned_hyperparams": {
-                "description": "Tuned hyperparameters output",
-                "format": "json",
-                "table_name": "hyperparams",
-                "schema": "ml_tuning",
-                "sub_folder": "hyperparams",
-                "write_mode": "overwrite",
-            },
-            "best_model": {
-                "description": "Best model output",
-                "format": "pickle",
-                "table_name": "best_model",
-                "schema": "ml_models",
-                "sub_folder": "production",
-                "write_mode": "overwrite",
-            },
-            "cv_scores": {
-                "description": "Cross-validation scores output",
-                "format": "json",
-                "table_name": "cv_scores",
-                "schema": "ml_evaluation",
-                "sub_folder": "validation",
-                "write_mode": "overwrite",
-            },
-            "evaluation_metrics": {
-                "description": "Evaluation metrics output",
-                "format": "unity_catalog",
-                "catalog_name": "ml_monitoring",
-                "table_name": "evaluation_metrics",
-                "schema": "ml_evaluation",
-                "sub_folder": "metrics",
-                "write_mode": "append",
-                "partition_col": "date",
-                "vacuum": True,
-            },
-            "model_report": {
-                "description": "Model report output",
-                "format": "json",
-                "table_name": "model_reports",
-                "schema": "ml_evaluation",
-                "sub_folder": "reports",
-                "write_mode": "overwrite",
-            },
-            "registered_model": {
-                "description": "Registered model output",
-                "format": "unity_catalog",
-                "catalog_name": "ml_registry",
-                "table_name": "registered_models",
-                "schema": "ml_registry",
-                "sub_folder": "models",
+                "table_name": "bronze_sales",
+                "schema": "bronze",
+                "sub_folder": "sales",
                 "write_mode": "append",
                 "vacuum": True,
             },
-            "model_endpoint": {
-                "description": "Model endpoint output",
-                "format": "json",
-                "table_name": "model_endpoints",
-                "schema": "ml_deployment",
-                "sub_folder": "endpoints",
+            "bronze_customers": {
+                "description": "Bronze layer customer data output",
+                "format": "delta",
+                "table_name": "bronze_customers",
+                "schema": "bronze",
+                "sub_folder": "customers",
+                "write_mode": "append",
+                "vacuum": True,
+            },
+            # Silver layer outputs
+            "silver_sales": {
+                "description": "Silver layer cleaned sales data output",
+                "format": "delta",
+                "table_name": "silver_sales",
+                "schema": "silver",
+                "sub_folder": "sales",
                 "write_mode": "overwrite",
+                "vacuum": True,
+            },
+            "silver_customers": {
+                "description": "Silver layer cleaned customer data output",
+                "format": "delta",
+                "table_name": "silver_customers",
+                "schema": "silver",
+                "sub_folder": "customers",
+                "write_mode": "overwrite",
+                "vacuum": True,
+            },
+            # Gold layer outputs
+            "gold_sales_summary": {
+                "description": "Gold layer business-ready sales summary",
+                "format": "delta",
+                "table_name": "gold_sales_summary",
+                "schema": "gold",
+                "sub_folder": "summaries",
+                "write_mode": "overwrite",
+                "vacuum": True,
+            },
+            # Streaming output
+            "delta_sink": {
+                "description": "Real-time processed data sink",
+                "format": "delta",
+                "table_name": "real_time_data",
+                "schema": "streaming",
+                "sub_folder": "real_time",
+                "write_mode": "append",
+                "checkpoint_location": "/mnt/checkpoints/real_time_processing",
             },
         }
 
 
-class MedallionMLTemplate(MedallionBasicTemplate):
-    """Template for ML-optimized Medallion architecture with Platinum layer."""
 
-    def get_template_type(self) -> TemplateType:
-        return TemplateType.MEDALLION_ML
-
-    def generate_global_settings(self) -> Dict[str, Any]:
-        base = super().generate_global_settings()
-        base.update(
-            {
-                "ml_enabled": True,
-                "feature_store_path": "/mnt/feature_store",
-                "model_registry_path": "/mnt/models",
-                "experiment_tracking": "mlflow",
-                "default_model_version": "v1",
-                "default_hyperparams": {"random_state": 42},
-            }
-        )
-        return base
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        pipelines = super().generate_pipelines_config()
-        pipelines.update(
-            {
-                "ml_feature_pipeline": {
-                    "description": "Create ML features from processed data",
-                    "nodes": ["feature_engineering"],
-                    "type": "batch",
-                },
-                "ml_training_pipeline": {
-                    "description": "Train and validate ML models",
-                    "nodes": ["train_model", "evaluate_model"],
-                    "type": "batch",
-                },
-            }
-        )
-        return pipelines
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        nodes = super().generate_nodes_config()
-        nodes.update(
-            {
-                "feature_engineering": {
-                    "description": "Create ML features from processed data",
-                    "module": "pipelines.ml.feature_engineering",
-                    "function": "create_features",
-                    "input": ["silver_data"],
-                    "output": ["features"],
-                    "dependencies": ["silver_processing"],
-                },
-                "train_model": {
-                    "description": "Train ML model",
-                    "module": "pipelines.ml.training",
-                    "function": "train_model",
-                    "input": ["features"],
-                    "output": ["model"],
-                    "dependencies": ["feature_engineering"],
-                    "hyperparameters": {"learning_rate": 0.01, "max_depth": 5},
-                },
-                "evaluate_model": {
-                    "description": "Evaluate model performance",
-                    "module": "pipelines.ml.evaluation",
-                    "function": "evaluate_model",
-                    "input": ["test_data", "model"],
-                    "output": ["evaluation_report"],
-                    "dependencies": ["train_model"],
-                },
-            }
-        )
-        return nodes
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        inputs = super().generate_input_config()
-        inputs.update(
-            {
-                "silver_data": {
-                    "description": "Cleaned and processed data in Silver layer",
-                    "format": "delta",
-                    "filepath": "/mnt/data/silver",
-                }
-            }
-        )
-        return inputs
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        outputs = super().generate_output_config()
-        outputs.update(
-            {
-                "features": {
-                    "description": "Engineered features for ML",
-                    "format": "delta",
-                    "table_name": "features",
-                    "schema": "ml_features",
-                    "write_mode": "overwrite",
-                },
-                "model": {
-                    "description": "Trained ML model",
-                    "format": "mlflow",
-                    "model_name": "churn_prediction",
-                    "experiment_name": "churn_experiment",
-                },
-                "evaluation_report": {
-                    "description": "Model evaluation metrics",
-                    "format": "json",
-                    "filepath": "/mnt/reports/evaluation.json",
-                },
-            }
-        )
-        return outputs
-
-
-class MLTrainingTemplate(MedallionMLTemplate):
-    """Template specialized for end-to-end ML training pipelines."""
-
-    def get_template_type(self) -> TemplateType:
-        return TemplateType.ML_TRAINING
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        return {
-            "data_ingestion": {
-                "description": "Ingest raw data for training",
-                "nodes": ["ingest_raw_data"],
-                "type": "batch",
-            },
-            "feature_engineering": {
-                "description": "Create features for training",
-                "nodes": ["clean_data", "feature_engineering"],
-                "type": "batch",
-            },
-            "model_training": {
-                "description": "Train and validate models",
-                "nodes": ["split_data", "train_model", "evaluate_model"],
-                "type": "batch",
-            },
-            "model_deployment": {
-                "description": "Deploy trained model",
-                "nodes": ["register_model", "deploy_model"],
-                "type": "hybrid",
-            },
-        }
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        nodes = super().generate_nodes_config()
-        nodes.update(
-            {
-                "ingest_raw_data": {
-                    "description": "Ingest raw data from source",
-                    "module": "pipelines.data.ingestion",
-                    "function": "ingest_data",
-                    "input": [],
-                    "output": ["raw_data"],
-                    "dependencies": [],
-                },
-                "clean_data": {
-                    "description": "Clean and preprocess raw data",
-                    "module": "pipelines.data.cleaning",
-                    "function": "clean_data",
-                    "input": ["raw_data"],
-                    "output": ["cleaned_data"],
-                    "dependencies": ["ingest_raw_data"],
-                },
-                "split_data": {
-                    "description": "Split data into train and test sets",
-                    "module": "pipelines.ml.data_prep",
-                    "function": "split_data",
-                    "input": ["features"],
-                    "output": ["train_data", "test_data"],
-                    "dependencies": ["feature_engineering"],
-                },
-                "register_model": {
-                    "description": "Register model in model registry",
-                    "module": "pipelines.ml.registry",
-                    "function": "register_model",
-                    "input": ["model", "evaluation_report"],
-                    "output": ["registered_model"],
-                    "dependencies": ["evaluate_model"],
-                },
-                "deploy_model": {
-                    "description": "Deploy model to production",
-                    "module": "pipelines.ml.deployment",
-                    "function": "deploy_model",
-                    "input": ["registered_model"],
-                    "output": ["deployed_model"],
-                    "dependencies": ["register_model"],
-                },
-            }
-        )
-        return nodes
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        inputs = super().generate_input_config()
-        inputs.update(
-            {
-                "raw_data": {
-                    "description": "Raw data from source systems",
-                    "format": "csv",
-                    "filepath": "/mnt/data/raw",
-                }
-            }
-        )
-        return inputs
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        outputs = super().generate_output_config()
-        outputs.update(
-            {
-                "registered_model": {
-                    "description": "Registered model in ML registry",
-                    "format": "mlflow",
-                    "model_name": "production_model",
-                    "version": "latest",
-                },
-                "deployed_model": {
-                    "description": "Deployed model endpoint",
-                    "format": "api",
-                    "endpoint": "https://api.example.com/models/churn-prediction",
-                },
-            }
-        )
-        return outputs
 
 
 class TemplateFactory:
@@ -705,11 +374,6 @@ class TemplateFactory:
 
     TEMPLATES = {
         TemplateType.MEDALLION_BASIC: MedallionBasicTemplate,
-        TemplateType.MEDALLION_ML: MedallionMLTemplate,
-        TemplateType.ML_TRAINING: MLTrainingTemplate,
-        TemplateType.ML_INFERENCE: MLTrainingTemplate,  # Usar mismo template por ahora
-        TemplateType.ETL_BASIC: MedallionBasicTemplate,  # Usar mismo template por ahora
-        TemplateType.STREAMING: MedallionBasicTemplate,  # Usar mismo template por ahora
     }
 
     @classmethod
@@ -736,17 +400,7 @@ class TemplateFactory:
             {
                 "type": TemplateType.MEDALLION_BASIC.value,
                 "name": "Medallion Basic",
-                "description": "Basic Medallion architecture with Bronze, Silver, and Gold layers",
-            },
-            {
-                "type": TemplateType.MEDALLION_ML.value,
-                "name": "Medallion ML",
-                "description": "ML-optimized Medallion architecture with Platinum layer for models",
-            },
-            {
-                "type": TemplateType.ML_TRAINING.value,
-                "name": "ML Training",
-                "description": "Specialized ML model training and evaluation pipeline",
+                "description": "Basic Medallion architecture with Bronze, Silver, Gold layers and streaming support",
             },
         ]
 
@@ -813,6 +467,7 @@ class TemplateGenerator:
             "pipelines/bronze",
             "pipelines/silver",
             "pipelines/gold",
+            "pipelines/streaming",
             "src",
             "tests",
             "docs",
@@ -822,18 +477,6 @@ class TemplateGenerator:
             "data/processed",
             "logs",
         ]
-
-        # Add ML-specific directories
-        if template_type in [TemplateType.MEDALLION_ML, TemplateType.ML_TRAINING]:
-            directories.extend(
-                [
-                    "pipelines/platinum",
-                    "pipelines/ml",
-                    "models",
-                    "experiments",
-                    "features",
-                ]
-            )
 
         for directory in directories:
             dir_path = self.output_path / directory
@@ -916,32 +559,39 @@ class TemplateGenerator:
         template_type = template.get_template_type()
 
         if template_type == TemplateType.MEDALLION_BASIC:
-            self._generate_medallion_sample_code()
-        elif template_type == TemplateType.MEDALLION_ML:
-            self._generate_medallion_ml_sample_code()
-        elif template_type == TemplateType.ML_TRAINING:
-            self._generate_ml_training_sample_code()
+            self._generate_medallion_basic_sample_code()
+        # Note: Other template types have been removed as per requirements
 
-    def _generate_medallion_sample_code(self) -> None:
-        """Generate sample code for Medallion architecture."""
+    def _generate_medallion_basic_sample_code(self) -> None:
+        """Generate sample code for basic Medallion architecture with streaming support."""
         # Bronze layer sample
         bronze_code = '''"""Bronze layer data ingestion functions."""
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from loguru import logger
 
 
 def ingest_sales_data(start_date: str, end_date: str) -> DataFrame:
     """Ingest raw sales data into Bronze layer."""
     logger.info(f"Ingesting sales data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+    spark = SparkSession.getActiveSession()
+    
+    # Example implementation - replace with actual data source
+    # df = spark.read.format("csv").option("header", "true").load("/path/to/sales/data")
+    # Add processing logic here
+    logger.info("Sales data ingestion completed")
+    # return df
 
 
 def ingest_customer_data(start_date: str, end_date: str) -> DataFrame:
     """Ingest raw customer data into Bronze layer."""
     logger.info(f"Ingesting customer data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+    spark = SparkSession.getActiveSession()
+    
+    # Example implementation - replace with actual data source
+    # df = spark.read.format("csv").option("header", "true").load("/path/to/customer/data")
+    # Add processing logic here
+    logger.info("Customer data ingestion completed")
+    # return df
 '''
 
         bronze_file = self.output_path / "pipelines" / "bronze" / "ingestion.py"
@@ -950,111 +600,137 @@ def ingest_customer_data(start_date: str, end_date: str) -> DataFrame:
         # Silver layer sample
         silver_code = '''"""Silver layer data cleaning and transformation functions."""
 from pyspark.sql import DataFrame
+from pyspark.sql.functions import col, when, isnan, isnull
 from loguru import logger
 
 
-def clean_sales_data(sales_bronze: DataFrame, start_date: str, end_date: str) -> DataFrame:
+def clean_sales_data(bronze_sales: DataFrame, start_date: str, end_date: str) -> DataFrame:
     """Clean and standardize sales data for Silver layer."""
     logger.info(f"Cleaning sales data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+    
+    # Example cleaning operations
+    # cleaned_df = bronze_sales.filter(col("amount") > 0) \\
+    #                         .fillna(0, subset=["quantity"]) \\
+    #                         .dropna(subset=["customer_id", "product_id"])
+    
+    logger.info("Sales data cleaning completed")
+    # return cleaned_df
 
 
-def clean_customer_data(customer_bronze: DataFrame, start_date: str, end_date: str) -> DataFrame:
+def clean_customer_data(bronze_customers: DataFrame, start_date: str, end_date: str) -> DataFrame:
     """Clean and standardize customer data for Silver layer."""
     logger.info(f"Cleaning customer data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+    
+    # Example cleaning operations
+    # cleaned_df = bronze_customers.filter(col("customer_id").isNotNull()) \\
+    #                             .dropDuplicates(["customer_id"]) \\
+    #                             .fillna("Unknown", subset=["city", "state"])
+    
+    logger.info("Customer data cleaning completed")
+    # return cleaned_df
 '''
 
         silver_file = self.output_path / "pipelines" / "silver" / "cleaning.py"
         self._write_text_file(silver_file, silver_code)
 
-    def _generate_medallion_ml_sample_code(self) -> None:
-        """Generate sample code for ML Medallion architecture."""
-        # Feature engineering sample
-        features_code = '''"""Gold layer feature engineering for ML."""
+        # Gold layer sample
+        gold_code = '''"""Gold layer aggregation functions for business-ready data."""
 from pyspark.sql import DataFrame
+from pyspark.sql.functions import sum, avg, count, desc
 from loguru import logger
 
 
-def create_customer_features(master_dataset: DataFrame, start_date: str, end_date: str) -> DataFrame:
-    """Engineer customer-level features for ML models."""
-    logger.info(f"Creating customer features from {start_date} to {end_date}")
-    # Implementation here
-    pass
-
-
-def create_temporal_features(master_dataset: DataFrame, start_date: str, end_date: str) -> DataFrame:
-    """Engineer time-based features for ML models."""
-    logger.info(f"Creating temporal features from {start_date} to {end_date}")
-    # Implementation here
-    pass
+def sales_summary(silver_sales: DataFrame, silver_customers: DataFrame, start_date: str, end_date: str) -> DataFrame:
+    """Create business-ready sales summary for Gold layer."""
+    logger.info(f"Creating sales summary from {start_date} to {end_date}")
+    
+    # Example aggregation operations
+    # summary_df = silver_sales.join(silver_customers, "customer_id") \\
+    #                         .groupBy("customer_id", "city", "state") \\
+    #                         .agg(
+    #                             sum("amount").alias("total_sales"),
+    #                             avg("amount").alias("avg_order_value"),
+    #                             count("order_id").alias("order_count")
+    #                         ) \\
+    #                         .orderBy(desc("total_sales"))
+    
+    logger.info("Sales summary creation completed")
+    # return summary_df
 '''
 
-        features_file = self.output_path / "pipelines" / "gold" / "features.py"
-        self._write_text_file(features_file, features_code)
+        gold_file = self.output_path / "pipelines" / "gold" / "aggregation.py"
+        self._write_text_file(gold_file, gold_code)
 
-        # ML training sample
-        ml_code = '''"""Platinum layer ML model training."""
-from pyspark.sql import DataFrame
+        # Streaming sample
+        streaming_code = '''"""Real-time streaming data processing functions."""
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.functions import from_json, col, current_timestamp
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
 from loguru import logger
-import pickle
 
 
-def train_churn_model(training_data: DataFrame, start_date: str, end_date: str) -> bytes:
-    """Train customer churn prediction model."""
-    logger.info(f"Training churn model with data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+def read_stream(kafka_topic: str, start_date: str, end_date: str) -> DataFrame:
+    """Read data from streaming source (e.g., Kafka)."""
+    logger.info(f"Starting stream reading from {kafka_topic}")
+    spark = SparkSession.getActiveSession()
+    
+    # Example Kafka stream reading
+    # stream_df = spark.readStream \\
+    #                 .format("kafka") \\
+    #                 .option("kafka.bootstrap.servers", "localhost:9092") \\
+    #                 .option("subscribe", kafka_topic) \\
+    #                 .option("startingOffsets", "latest") \\
+    #                 .load()
+    
+    logger.info("Stream reading started")
+    # return stream_df
 
 
-def train_recommendation_model(training_data: DataFrame, start_date: str, end_date: str) -> bytes:
-    """Train product recommendation model."""
-    logger.info(f"Training recommendation model with data from {start_date} to {end_date}")
-    # Implementation here
-    pass
+def transform_stream(raw_stream: DataFrame, start_date: str, end_date: str) -> DataFrame:
+    """Transform streaming data in real-time."""
+    logger.info("Transforming streaming data")
+    
+    # Example schema for JSON data
+    # schema = StructType([
+    #     StructField("event_id", StringType(), True),
+    #     StructField("user_id", StringType(), True),
+    #     StructField("event_type", StringType(), True),
+    #     StructField("timestamp", TimestampType(), True),
+    #     StructField("value", IntegerType(), True)
+    # ])
+    
+    # Example transformation
+    # transformed_df = raw_stream.select(
+    #     from_json(col("value").cast("string"), schema).alias("data")
+    # ).select("data.*") \\
+    #  .withColumn("processed_timestamp", current_timestamp()) \\
+    #  .filter(col("event_type").isNotNull())
+    
+    logger.info("Stream transformation completed")
+    # return transformed_df
+
+
+def write_stream(transformed_stream: DataFrame, start_date: str, end_date: str) -> None:
+    """Write processed stream to sink (e.g., Delta table)."""
+    logger.info("Writing stream to sink")
+    
+    # Example stream writing to Delta
+    # query = transformed_stream.writeStream \\
+    #                          .format("delta") \\
+    #                          .outputMode("append") \\
+    #                          .option("checkpointLocation", "/mnt/checkpoints/real_time_processing") \\
+    #                          .option("path", "/mnt/data/streaming/real_time_data") \\
+    #                          .start()
+    
+    logger.info("Stream writing started")
+    # return query  # Return the streaming query for monitoring
 '''
 
-        ml_file = self.output_path / "pipelines" / "platinum" / "training.py"
-        self._write_text_file(ml_file, ml_code)
-
-    def _generate_ml_training_sample_code(self) -> None:
-        """Generate sample code for ML training pipeline."""
-        training_code = '''"""ML model training pipeline functions."""
-from pyspark.sql import DataFrame
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
-from loguru import logger
-import pickle
+        streaming_file = self.output_path / "pipelines" / "streaming" / "processing.py"
+        streaming_file.parent.mkdir(parents=True, exist_ok=True)
+        self._write_text_file(streaming_file, streaming_code)
 
 
-def split_data(features: DataFrame, start_date: str, end_date: str) -> tuple:
-    """Split data into train, validation, and test sets."""
-    logger.info(f"Splitting data from {start_date} to {end_date}")
-    # Implementation here
-    pass
-
-
-def train_baseline_model(train_data: DataFrame, start_date: str, end_date: str) -> bytes:
-    """Train a baseline model."""
-    logger.info(f"Training baseline model with data from {start_date} to {end_date}")
-    # Implementation here
-    pass
-
-
-def hyperparameter_tuning(train_data: DataFrame, validation_data: DataFrame,
-                         start_date: str, end_date: str) -> dict:
-    """Perform hyperparameter tuning."""
-    logger.info(f"Tuning hyperparameters from {start_date} to {end_date}")
-    # Implementation here
-    pass
-'''
-
-        training_file = self.output_path / "pipelines" / "ml" / "training.py"
-        training_file.parent.mkdir(parents=True, exist_ok=True)
-        self._write_text_file(training_file, training_code)
 
     def _generate_project_files(self, template: BaseTemplate) -> None:
         """Generate additional project files."""
@@ -1382,39 +1058,19 @@ class TemplateCommand:
 
         # Template-specific guidance
         if template_type == TemplateType.MEDALLION_BASIC:
-            logger.info("\n🔄 Medallion Architecture:")
-            logger.info("   • Bronze: Raw data ingestion")
-            logger.info("   • Silver: Cleaned and transformed data")
-            logger.info("   • Gold: Business-ready aggregations")
+            logger.info("\n🔄 Medallion Architecture with Streaming:")
+            logger.info("   • Bronze: Raw data ingestion (batch)")
+            logger.info("   • Silver: Cleaned and transformed data (batch)")
+            logger.info("   • Gold: Business-ready aggregations (batch)")
+            logger.info("   • Streaming: Real-time processing pipeline")
 
             logger.info("\n🚀 Example usage:")
+            logger.info("   # Batch pipelines:")
             logger.info("   tauro --env dev --pipeline bronze_ingestion")
-            logger.info("   tauro --env dev --pipeline silver_transformation")
+            logger.info("   tauro --env dev --pipeline silver_processing")
             logger.info("   tauro --env dev --pipeline gold_aggregation")
-
-        elif template_type == TemplateType.MEDALLION_ML:
-            logger.info("\n🤖 ML Medallion Architecture:")
-            logger.info("   • Bronze: Raw data ingestion")
-            logger.info("   • Silver: ML preprocessing")
-            logger.info("   • Gold: Feature engineering")
-            logger.info("   • Platinum: ML models and inference")
-
-            logger.info("\n🚀 Example usage:")
-            logger.info("   tauro --env dev --pipeline bronze_ingestion")
-            logger.info("   tauro --env dev --pipeline gold_feature_engineering")
-            logger.info("   tauro --env dev --pipeline platinum_ml_training")
-
-        elif template_type == TemplateType.ML_TRAINING:
-            logger.info("\n🎯 ML Training Pipeline:")
-            logger.info("   • Data preparation and splitting")
-            logger.info("   • Model training and tuning")
-            logger.info("   • Evaluation and validation")
-            logger.info("   • Model registration and deployment")
-
-            logger.info("\n🚀 Example usage:")
-            logger.info("   tauro --env dev --pipeline data_preparation")
-            logger.info("   tauro --env dev --pipeline model_training")
-            logger.info("   tauro --env dev --pipeline model_evaluation")
+            logger.info("   # Streaming pipeline:")
+            logger.info("   tauro --env dev --pipeline real_time_processing")
 
 
 # Integration with CLI system
