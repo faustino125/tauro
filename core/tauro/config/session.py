@@ -25,7 +25,12 @@ class SparkSessionFactory:
     def reset_session(cls):
         """Reset session for testing or reconfiguration"""
         if cls._session:
-            cls._session.stop()
+            try:
+                cls._session.stop()
+            except Exception:
+                logger.warning(
+                    "Error stopping Spark session during reset", exc_info=True
+                )
         cls._session = None
 
     PROTECTED_CONFIGS = [
@@ -152,9 +157,7 @@ class SparkSessionFactory:
 
     @staticmethod
     def _validate_databricks_config(config) -> None:
-        """
-        Validate that the Databricks configuration is complete.
-        """
+        """Validate that the Databricks configuration is complete."""
         required_params = {
             "host": config.host,
             "token": config.token,

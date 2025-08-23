@@ -4,22 +4,25 @@ from typing import Any, Dict, List, Optional
 from loguru import logger  # type: ignore
 
 from tauro.streaming.constants import (
-    STREAMING_VALIDATIONS,
     STREAMING_FORMAT_CONFIGS,
-    StreamingTrigger,
-    StreamingOutputMode,
-    StreamingFormat,
+    STREAMING_VALIDATIONS,
     PipelineType,
+    StreamingFormat,
+    StreamingOutputMode,
+    StreamingTrigger,
 )
-from tauro.streaming.exceptions import (
-    StreamingValidationError,
-    StreamingConfigurationError,
-    handle_streaming_error,
-)
+from tauro.streaming.exceptions import StreamingValidationError, handle_streaming_error
 
 
 class StreamingValidator:
     """Validates streaming pipeline configurations with enhanced error handling."""
+
+    def __init__(self, format_policy: Optional[Any] = None) -> None:
+        """
+        format_policy es opcional. Si se provee, se usará para validar formatos de entrada/salida
+        (e.g., Context.format_policy). Si no, se usan los enums/constantes por defecto.
+        """
+        self.policy = format_policy
 
     @handle_streaming_error
     def validate_streaming_pipeline_config(
@@ -182,7 +185,12 @@ class StreamingValidator:
                     field="input.format",
                 )
 
-            valid_formats = [fmt.value for fmt in StreamingFormat]
+            # Usar policy si está disponible, si no usar enums por defecto
+            valid_formats = (
+                self.policy.get_supported_input_formats()
+                if self.policy
+                else [fmt.value for fmt in StreamingFormat]
+            )
             if format_type not in valid_formats:
                 raise StreamingValidationError(
                     f"Node '{node_name}' has unsupported input format '{format_type}'",
@@ -191,7 +199,7 @@ class StreamingValidator:
                     actual=format_type,
                 )
 
-            # Validate format-specific options
+            # Validate options dict
             options = input_config.get("options", {})
             if not isinstance(options, dict):
                 raise StreamingValidationError(
@@ -255,6 +263,17 @@ class StreamingValidator:
                     f"Node '{node_name}' output must specify 'format'",
                     field="output.format",
                 )
+
+            # Validación opcional contra policy de salidas soportadas
+            if self.policy:
+                valid_outputs = self.policy.get_supported_output_formats()
+                if format_type not in valid_outputs:
+                    raise StreamingValidationError(
+                        f"Node '{node_name}' has unsupported output format '{format_type}'",
+                        field="output.format",
+                        expected=str(valid_outputs),
+                        actual=format_type,
+                    )
 
             # Validate path for file-based outputs
             file_formats = ["delta", "parquet", "json", "csv"]

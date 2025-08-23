@@ -1,11 +1,6 @@
-from .cli import TauroCLI, main
-from .config import Context, SparkSessionFactory
-from .exec import PipelineExecutor
+"""
+Tauro - Scalable Data Pipeline Execution Framework
+Mantén este __init__ mínimo para evitar fallos en importación.
+"""
 
-__all__ = [
-    "TauroCLI",
-    "main",
-    "Context",
-    "SparkSessionFactory",
-    "PipelineExecutor",
-]
+__version__ = "0.1.0"

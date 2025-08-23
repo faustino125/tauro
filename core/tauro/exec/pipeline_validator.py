@@ -1,28 +1,12 @@
 from typing import Any, Dict, List, Optional, Tuple
+
 from loguru import logger  # type: ignore
+
+from tauro.config.validators import FormatPolicy
 
 
 class PipelineValidator:
     """Enhanced validator supporting hybrid batch/streaming pipelines."""
-
-    # Define streaming formats directly here to avoid circular import
-    STREAMING_INPUT_FORMATS = {
-        "kafka",
-        "kinesis",
-        "delta_stream",
-        "file_stream",
-        "socket",
-        "rate",
-        "memory",
-    }
-
-    COMPATIBLE_FORMATS = {
-        "parquet": ["file_stream"],
-        "delta": ["delta_stream"],
-        "json": ["file_stream"],
-        "csv": ["file_stream"],
-        "kafka": ["kafka"],
-    }
 
     BATCH_OUTPUT_FORMATS = {"parquet", "delta", "json", "csv", "kafka"}
 
@@ -73,9 +57,12 @@ class PipelineValidator:
 
     @staticmethod
     def validate_hybrid_pipeline(
-        pipeline: Dict[str, Any], node_configs: Dict[str, Dict[str, Any]]
+        pipeline: Dict[str, Any],
+        node_configs: Dict[str, Dict[str, Any]],
+        format_policy: Optional[FormatPolicy] = None,
     ) -> Dict[str, Any]:
         """Valida pipeline híbrido y retorna análisis detallado."""
+        policy = format_policy or FormatPolicy()
 
         validation_result = {
             "is_valid": True,
@@ -90,7 +77,7 @@ class PipelineValidator:
 
         try:
             batch_nodes, streaming_nodes = PipelineValidator._classify_nodes(
-                pipeline, node_configs
+                pipeline, node_configs, policy
             )
 
             validation_result["batch_nodes"] = batch_nodes
@@ -104,7 +91,7 @@ class PipelineValidator:
             validation_result["errors"].extend(cross_errors)
 
             format_issues = PipelineValidator._validate_format_compatibility(
-                cross_deps, node_configs
+                cross_deps, node_configs, policy
             )
 
             validation_result["format_compatibility"] = format_issues
@@ -123,7 +110,7 @@ class PipelineValidator:
             validation_result["warnings"].extend(resource_conflicts)
 
             streaming_errors = PipelineValidator._validate_streaming_requirements(
-                streaming_nodes, node_configs
+                streaming_nodes, node_configs, policy
             )
 
             validation_result["errors"].extend(streaming_errors)
@@ -140,7 +127,9 @@ class PipelineValidator:
 
     @staticmethod
     def _classify_nodes(
-        pipeline: Dict[str, Any], node_configs: Dict[str, Dict[str, Any]]
+        pipeline: Dict[str, Any],
+        node_configs: Dict[str, Dict[str, Any]],
+        policy: FormatPolicy,
     ) -> Tuple[List[str], List[str]]:
         """Clasifica nodos en batch y streaming."""
 
@@ -152,7 +141,7 @@ class PipelineValidator:
         for node_name in pipeline_nodes:
             node_config = node_configs.get(node_name, {})
 
-            if PipelineValidator._is_streaming_node(node_config):
+            if PipelineValidator._is_streaming_node(node_config, policy):
                 streaming_nodes.append(node_name)
             else:
                 batch_nodes.append(node_name)
@@ -160,13 +149,13 @@ class PipelineValidator:
         return batch_nodes, streaming_nodes
 
     @staticmethod
-    def _is_streaming_node(node_config: Dict[str, Any]) -> bool:
+    def _is_streaming_node(node_config: Dict[str, Any], policy: FormatPolicy) -> bool:
         """Determina si un nodo es de streaming (solo por entrada)"""
         input_config = node_config.get("input", {})
 
         if isinstance(input_config, dict):
             input_format = input_config.get("format", "")
-            return input_format in PipelineValidator.STREAMING_INPUT_FORMATS
+            return policy.is_supported_input(input_format)
 
         return False
 
@@ -245,10 +234,11 @@ class PipelineValidator:
     def _validate_format_compatibility(
         cross_dependencies: List[Dict[str, Any]],
         node_configs: Dict[str, Dict[str, Any]],
+        policy: FormatPolicy,
     ) -> List[Dict[str, Any]]:
         """Valida compatibilidad de formatos entre nodos batch y streaming."""
 
-        format_issues = []
+        format_issues: List[Dict[str, Any]] = []
 
         for cross_dep in cross_dependencies:
             streaming_node = cross_dep["streaming_node"]
@@ -264,18 +254,11 @@ class PipelineValidator:
                 batch_format = batch_output.get("format")
 
                 if batch_format and streaming_format:
-                    compatible_formats = PipelineValidator.COMPATIBLE_FORMATS.get(
-                        batch_format, []
-                    )
-
-                    if streaming_format not in compatible_formats:
+                    if policy.are_compatible(batch_format, streaming_format):
                         format_issues.append(
                             {
-                                "severity": "error",
-                                "message": f"Incompatible formats: batch node '{batch_dep}' outputs "
-                                f"'{batch_format}' but streaming node '{streaming_node}' expects "
-                                f"'{streaming_format}'. Compatible formats for '{batch_format}': "
-                                f"{compatible_formats}",
+                                "severity": "info",
+                                "message": f"Compatible formats: '{batch_format}' -> '{streaming_format}'",
                                 "batch_node": batch_dep,
                                 "streaming_node": streaming_node,
                                 "batch_format": batch_format,
@@ -285,8 +268,10 @@ class PipelineValidator:
                     else:
                         format_issues.append(
                             {
-                                "severity": "info",
-                                "message": f"Compatible formats: '{batch_format}' -> '{streaming_format}'",
+                                "severity": "error",
+                                "message": f"Incompatible formats: batch node '{batch_dep}' outputs "
+                                f"'{batch_format}' but streaming node '{streaming_node}' expects "
+                                f"'{streaming_format}'.",
                                 "batch_node": batch_dep,
                                 "streaming_node": streaming_node,
                                 "batch_format": batch_format,
@@ -320,7 +305,7 @@ class PipelineValidator:
     ) -> List[str]:
         """Valida conflictos de recursos entre nodos batch y streaming."""
 
-        warnings = []
+        warnings: List[str] = []
         output_paths = {}
         kafka_topics = {}
 
@@ -384,11 +369,13 @@ class PipelineValidator:
 
     @staticmethod
     def _validate_streaming_requirements(
-        streaming_nodes: List[str], node_configs: Dict[str, Dict[str, Any]]
+        streaming_nodes: List[str],
+        node_configs: Dict[str, Dict[str, Any]],
+        policy: FormatPolicy,
     ) -> List[str]:
         """Valida requerimientos específicos para nodos streaming."""
 
-        errors = []
+        errors: List[str] = []
 
         for streaming_node in streaming_nodes:
             node_config = node_configs.get(streaming_node, {})
@@ -407,10 +394,10 @@ class PipelineValidator:
                 )
                 continue
 
-            if input_format not in PipelineValidator.STREAMING_INPUT_FORMATS:
+            if not policy.is_supported_input(input_format):
                 errors.append(
                     f"Streaming node '{streaming_node}' has invalid input format '{input_format}'. "
-                    f"Valid formats: {list(PipelineValidator.STREAMING_INPUT_FORMATS)}"
+                    f"Valid formats: {policy.get_supported_input_formats()}"
                 )
 
             output_config = node_config.get("output", {})
@@ -427,7 +414,7 @@ class PipelineValidator:
                 )
 
             streaming_config = node_config.get("streaming", {})
-            if input_format in ["kafka", "kinesis", "delta_stream"]:
+            if input_format in policy.checkpoint_required_inputs:
                 checkpoint = streaming_config.get("checkpoint_location")
                 if not checkpoint:
                     errors.append(

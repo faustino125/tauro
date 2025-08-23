@@ -4,9 +4,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 from loguru import logger  # type: ignore
 
-from tauro.config.context import Context
-from tauro.config.context_factory import ContextFactory
-from tauro.config.ml_context import MLContext
+from tauro.config.contexts import Context  # Alineado con nuevo módulo de config
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.node_executor import NodeExecutor
 from tauro.exec.pipeline_state import NodeType, UnifiedPipelineState
@@ -16,14 +14,15 @@ from tauro.io.input import InputLoader
 from tauro.io.output import OutputManager
 from tauro.streaming.constants import PipelineType
 from tauro.streaming.pipeline_manager import StreamingPipelineManager
-from tauro.streaming.validators import StreamingValidator
+
+# Eliminado: validador duplicado de config
 
 
 class BaseExecutor:
     """Base class for pipeline executors."""
 
     def __init__(self, context: Context):
-        self.context = ContextFactory.create_context(context)
+        self.context = context
         self.input_loader = InputLoader(self.context)
         self.output_manager = OutputManager(self.context)
         self.is_ml_layer = self.context.is_ml_layer
@@ -40,13 +39,14 @@ class BaseExecutor:
         hyperparams: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Prepare ML-specific information."""
-        ml_info = {}
-        pipeline_ml_config = {}
+        ml_info: Dict[str, Any] = {}
+        pipeline_ml_config: Dict[str, Any] = {}
 
-        final_hyperparams = hyperparams or {}
+        final_hyperparams = dict(hyperparams or {})
         final_model_version = model_version or self.context.default_model_version
 
-        if isinstance(self.context, MLContext):
+        # Si el contexto expone configuración ML por pipeline, la usamos
+        if hasattr(self.context, "get_pipeline_ml_config"):
             pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
             final_model_version = (
                 model_version
@@ -54,38 +54,35 @@ class BaseExecutor:
                 or self.context.default_model_version
             )
 
+            # Merge de hyperparams: defaults -> pipeline -> overrides
             final_hyperparams.update(self.context.default_hyperparams or {})
             final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
             if hyperparams:
                 final_hyperparams.update(hyperparams)
 
+            # Registro de modelos (si existe en el contexto)
             if hasattr(self.context, "get_model_registry"):
                 model_registry = self.context.get_model_registry()
-                ml_info["model"] = model_registry.get_model(
-                    pipeline_ml_config.get("model_name"), version=final_model_version
-                )
+                try:
+                    ml_info["model"] = model_registry.get_model(
+                        pipeline_ml_config.get("model_name"),
+                        version=final_model_version,  # type: ignore[arg-type]
+                    )
+                except Exception:
+                    # Evitar fallo si la API del registry difiere
+                    pass
 
             ml_info = {
                 "model_version": final_model_version,
                 "hyperparams": final_hyperparams,
                 "pipeline_config": pipeline_ml_config,
-                "project_name": self.context.project_name,
+                "project_name": getattr(self.context, "project_name", ""),
                 "is_experiment": self._is_experiment_pipeline(pipeline_name),
             }
 
         elif self.is_ml_layer:
-            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name)
-            final_model_version = (
-                model_version
-                or pipeline_ml_config.get("model_version")
-                or self.context.default_model_version
-            )
-
+            # Fallback en caso de que no exista la API específica
             final_hyperparams.update(self.context.default_hyperparams or {})
-            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}))
-            if hyperparams:
-                final_hyperparams.update(hyperparams)
-
             ml_info = {
                 "model_version": final_model_version,
                 "hyperparams": final_hyperparams,
@@ -109,8 +106,7 @@ class BaseExecutor:
             logger.info("=" * 60)
             logger.info(f"🚀 Starting {pipeline_type} ML Pipeline: '{pipeline_name}'")
             logger.info(f"📦 Project: {ml_info.get('project_name', 'Unknown')}")
-            logger.info(f"🏷️  Model Version: {ml_info['model_version']}")
-            # ... resto del código de logging
+            logger.info(f"🏷️  Model Version: {ml_info.get('model_version', 'Unknown')}")
         else:
             logger.info(f"Running {pipeline_type.lower()} pipeline '{pipeline_name}'")
 
@@ -150,9 +146,6 @@ class BatchExecutor(BaseExecutor):
 
         pipeline = self._get_pipeline_config(pipeline_name)
 
-        if isinstance(self.context, MLContext):
-            self.context._validate_ml_configurations()
-
         start_date = start_date or self.context.global_settings.get("start_date")
         end_date = end_date or self.context.global_settings.get("end_date")
 
@@ -165,7 +158,7 @@ class BatchExecutor(BaseExecutor):
         try:
             self._execute_batch_flow(pipeline, node_name, start_date, end_date, ml_info)
             self.unified_state.set_pipeline_status("completed")
-        except Exception as e:
+        except Exception:
             self.unified_state.set_pipeline_status("failed")
             raise
         finally:
@@ -216,10 +209,10 @@ class StreamingExecutor(BaseExecutor):
         max_streaming_pipelines = context.global_settings.get(
             "max_streaming_pipelines", 5
         )
+        # Inyectar policy del contexto dentro del manager (el manager crea su validador con policy)
         self.streaming_manager = StreamingPipelineManager(
             context, max_streaming_pipelines
         )
-        self.streaming_validator = StreamingValidator()
 
     def execute(
         self,
@@ -229,7 +222,8 @@ class StreamingExecutor(BaseExecutor):
         logger.info(f"Executing streaming pipeline: {pipeline_name}")
 
         pipeline = self._get_pipeline_config(pipeline_name)
-        self.streaming_validator.validate_streaming_pipeline_config(pipeline)
+        # Validación con el validador del manager (único punto de verdad)
+        self.streaming_manager.validator.validate_streaming_pipeline_config(pipeline)
 
         running_pipelines = self.streaming_manager.list_running_pipelines()
         conflicts = self._check_resource_conflicts(pipeline, running_pipelines)
@@ -363,8 +357,9 @@ class HybridExecutor(BaseExecutor):
         pipeline_nodes = self._extract_pipeline_nodes(pipeline)
         node_configs = self._get_node_configs(pipeline_nodes)
 
+        # Usar la misma política de formatos del contexto via PipelineValidator (batch/streaming/híbrido)
         validation_result = PipelineValidator.validate_hybrid_pipeline(
-            pipeline, node_configs
+            pipeline, node_configs, self.context.format_policy
         )
 
         if not validation_result["is_valid"]:
@@ -513,7 +508,7 @@ class HybridExecutor(BaseExecutor):
             return self.node_executor.execute_single_node(
                 node_name, start_date, end_date, ml_info
             )
-        except Exception as e:
+        except Exception:
             if attempt < self.max_retries:
                 logger.warning(
                     f"Attempt {attempt+1} failed for node '{node_name}'. Retrying..."
@@ -646,6 +641,48 @@ class PipelineExecutor:
         else:
             raise ValueError(f"Unsupported pipeline type: {pipeline_type}")
 
+    # Helpers para CLI de streaming (status/stop/metrics/list)
+
+    def get_streaming_pipeline_status(self, execution_id: str) -> Dict[str, Any]:
+        """Return status info for a streaming pipeline execution."""
+        try:
+            return (
+                self.streaming_executor.streaming_manager.get_pipeline_status(
+                    execution_id
+                )
+                or {}
+            )
+        except Exception:
+            return {}
+
+    def list_streaming_pipelines(self) -> List[Dict[str, Any]]:
+        """List running streaming pipelines."""
+        try:
+            return self.streaming_executor.streaming_manager.list_running_pipelines()
+        except Exception:
+            return []
+
+    def stop_streaming_pipeline(self, execution_id: str, graceful: bool = True) -> bool:
+        """Stop a running streaming pipeline."""
+        try:
+            return self.streaming_executor.streaming_manager.stop_pipeline(
+                execution_id, graceful
+            )
+        except Exception:
+            return False
+
+    def get_streaming_pipeline_metrics(self, execution_id: str) -> Dict[str, Any]:
+        """Get metrics for a streaming pipeline."""
+        try:
+            return (
+                self.streaming_executor.streaming_manager.get_pipeline_metrics(
+                    execution_id
+                )
+                or {}
+            )
+        except Exception:
+            return {}
+
     def shutdown(self, timeout_seconds: int = 30) -> None:
         """Unified shutdown with resource cleanup"""
         shutdown_sequence = [
@@ -662,14 +699,29 @@ class PipelineExecutor:
             except Exception as e:
                 logger.error(f"Shutdown error in {step.__name__}: {str(e)}")
 
+    def _stop_streaming_queries(self, _):
+        """Stop active streaming queries if the manager supports it"""
+        if hasattr(self.streaming_executor, "streaming_manager"):
+            try:
+                self.streaming_executor.streaming_manager.stop_all()
+            except Exception:
+                pass
+
     def _release_connection_pools(self, _):
         """Release all database connections"""
         if hasattr(self.context, "connection_pools"):
             for pool in self.context.connection_pools.values():
                 pool.shutdown()
 
+    def _release_gpu_resources(self, _):
+        """Placeholder for GPU/accelerator cleanup"""
+        pass
+
     def _cleanup_memory(self, _):
         """Force memory cleanup"""
         gc.collect()
-        if self.context.spark:
-            self.context.spark.catalog.clearCache()
+        if getattr(self.context, "spark", None):
+            try:
+                self.context.spark.catalog.clearCache()
+            except Exception:
+                pass

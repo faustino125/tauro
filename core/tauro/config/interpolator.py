@@ -12,7 +12,7 @@ class VariableInterpolator:
             return string
 
         result = string
-
+        start = result.find("${}")
         start = result.find("${")
         while start != -1:
             end = result.find("}", start + 2)

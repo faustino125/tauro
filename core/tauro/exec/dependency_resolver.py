@@ -3,6 +3,9 @@ from typing import Any, Dict, List, Set
 
 from loguru import logger  # type: ignore
 
+from tauro.exec.utils import extract_dependency_name as _extract_dependency_name
+from tauro.exec.utils import normalize_dependencies as _normalize_dependencies
+
 
 class DependencyResolver:
     """Handles dependency resolution and topological sorting for pipeline nodes."""
@@ -19,14 +22,12 @@ class DependencyResolver:
 
         for node_name in pipeline_nodes:
             node_config = node_configs[node_name]
-            dependencies = DependencyResolver._normalize_dependencies(
-                node_config.get("dependencies", [])
-            )
+            dependencies = _normalize_dependencies(node_config.get("dependencies", []))
 
             logger.info(f"Node {node_name} dependencies: {dependencies}")
 
             for dep in dependencies:
-                dep_name = DependencyResolver._extract_dependency_name(dep)
+                dep_name = _extract_dependency_name(dep)
                 logger.info(f"Processing dependency: {dep} -> {dep_name}")
 
                 if dep_name not in pipeline_nodes:
@@ -73,47 +74,13 @@ class DependencyResolver:
         return sorted_nodes
 
     @staticmethod
-    def normalize_dependencies(dependencies: Any) -> List[Any]:
-        """Normalize dependencies to a consistent list format."""
-        if dependencies is None:
-            return []
-        elif isinstance(dependencies, str):
-            return [dependencies]
-        elif isinstance(dependencies, dict):
-            return list(dependencies.keys())
-        elif isinstance(dependencies, list):
-            return dependencies
-        else:
-            return [str(dependencies)]
-
-    @staticmethod
-    def extract_dependency_name(dependency: Any) -> str:
-        """Extract dependency name from various formats."""
-        if isinstance(dependency, str):
-            return dependency
-        elif isinstance(dependency, dict):
-            if len(dependency) != 1:
-                raise ValueError(
-                    f"Dict dependency must have exactly one key-value pair: {dependency}"
-                )
-            return next(iter(dependency.keys()))
-        elif dependency is None:
-            raise ValueError("Dependency cannot be None")
-        else:
-            raise TypeError(
-                f"Unsupported dependency type: {type(dependency)} - {dependency}"
-            )
-
-    @staticmethod
     def get_node_dependencies(node_config: Dict[str, Any]) -> List[str]:
         """Extract and normalize node dependencies."""
-        dependencies = DependencyResolver.normalize_dependencies(
-            node_config.get("dependencies", [])
-        )
+        dependencies = _normalize_dependencies(node_config.get("dependencies", []))
         normalized_deps = []
         for dep in dependencies:
             try:
-                dep_name = DependencyResolver.extract_dependency_name(dep)
+                dep_name = _extract_dependency_name(dep)
                 normalized_deps.append(dep_name)
             except (TypeError, ValueError) as e:
                 logger.error(f"Error processing dependency {dep}: {str(e)}")

@@ -5,8 +5,7 @@ from loguru import logger  # type: ignore
 
 from tauro.cli.config import AppConfigManager, ConfigManager
 from tauro.cli.core import ConfigFormat, ConfigurationError, ExecutionError, PathManager
-
-from tauro.config.context import Context
+from tauro.config.contexts import Context
 from tauro.exec.executor import PipelineExecutor as ExternalPipelineExecutor
 
 
@@ -25,29 +24,10 @@ class ContextInitializer:
             app_config = AppConfigManager(config_file_path)
             config_paths = app_config.get_env_config(env)
 
-            if self.active_format == ConfigFormat.JSON:
-                return self._init_unified_config(config_paths)
-            else:
-                return self._init_separate_files(config_paths)
+            return self._init_separate_files(config_paths)
 
         except Exception as e:
             raise ConfigurationError(f"Context initialization failed: {e}")
-
-    def _init_unified_config(self, config_paths: Dict[str, str]) -> Context:
-        """Initialize from unified JSON configuration."""
-        if "config_path" not in config_paths:
-            raise ConfigurationError("JSON config requires 'config_path'")
-
-        logger.info("Loading unified JSON configuration")
-        config_data = self.config_loader.load_config(config_paths["config_path"])
-
-        return Context.from_json_config(
-            global_settings=config_data.get("global_settings", {}),
-            pipelines_config=config_data.get("pipeline", {}),
-            nodes_config=config_data.get("node", {}),
-            input_config=config_data.get("input", {}),
-            output_config=config_data.get("output", {}),
-        )
 
     def _init_separate_files(self, config_paths: Dict[str, str]) -> Context:
         """Initialize from separate configuration files."""
@@ -63,7 +43,7 @@ class ContextInitializer:
         if missing:
             raise ConfigurationError(f"Missing config paths: {missing}")
 
-        logger.info(f"Loading separate {self.active_format.value.upper()} files")
+        logger.info("Loading configuration files (separate files mode)")
 
         return Context(
             global_settings=config_paths["global_settings_path"],
@@ -151,12 +131,17 @@ class PipelineExecutor:
             return True
 
     def validate_node(self, pipeline_name: str, node_name: str) -> bool:
-        """Check if node exists in pipeline."""
+        """Check if node exists in the specified pipeline."""
         try:
-            nodes = getattr(self.context, "nodes_config", {})
-            if hasattr(nodes, "get"):
-                pipeline_nodes = nodes.get(pipeline_name, {})
-                return node_name in pipeline_nodes
+            pipelines = getattr(self.context, "pipelines_config", {})
+            if hasattr(pipelines, "get"):
+                pipeline_config = pipelines.get(pipeline_name, {})
+                nodes = pipeline_config.get("nodes", [])
+                if isinstance(nodes, list):
+                    node_names = [
+                        n.get("name") if isinstance(n, dict) else n for n in nodes
+                    ]
+                    return node_name in node_names
             return True
         except Exception:
             return True
@@ -178,7 +163,10 @@ class PipelineExecutor:
                     info["description"] = pipeline_config.get(
                         "description", info["description"]
                     )
-                    info["nodes"] = list(pipeline_config.get("nodes", {}).keys())
+                    nodes = pipeline_config.get("nodes", [])
+                    info["nodes"] = [
+                        n.get("name") if isinstance(n, dict) else n for n in nodes
+                    ]
 
             return info
         except Exception:

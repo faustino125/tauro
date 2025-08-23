@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -8,7 +9,6 @@ from typing import Any, Callable, Dict, List, Set
 
 from loguru import logger  # type: ignore
 
-from tauro.config.ml_context import MLContext
 from tauro.exec.commands import Command, ExperimentCommand, MLNodeCommand, NodeCommand
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
@@ -33,6 +33,8 @@ class NodeExecutor:
     ) -> None:
         """Execute a single node with enhanced ML support and error handling."""
         start_time = time.perf_counter()
+        input_dfs = []
+        result_df = None
         try:
             node_config = self._get_node_config(node_name)
             function = self._load_node_function(node_config)
@@ -208,9 +210,6 @@ class NodeExecutor:
 
         if hasattr(self.context, "spark"):
             common_params["spark"] = self.context.spark
-
-        if isinstance(self.context, MLContext) and "model" in ml_info:
-            common_params["model"] = ml_info["model"]
 
         if self._is_experiment_node(node_config):
             logger.info(f"Creating experiment command for node '{node_name}'")

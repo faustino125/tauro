@@ -1,9 +1,10 @@
-import time
 import threading
+import time
 from collections import defaultdict
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set
+
 from loguru import logger  # type: ignore
 
 
@@ -42,6 +43,7 @@ class NodeExecutionInfo:
     max_retries: int = 3
     retry_delay: float = 5.0  # seconds
     execution_metadata: Dict[str, Any] = field(default_factory=dict)
+    resources: List[Any] = field(default_factory=list)
 
 
 class UnifiedPipelineState:

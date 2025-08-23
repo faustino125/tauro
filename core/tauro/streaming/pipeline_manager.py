@@ -1,43 +1,43 @@
-import uuid
 import time
-from typing import Any, Dict, List, Optional, Set
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    TimeoutError as FutureTimeoutError,
-)
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from threading import Event, Lock
+from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 from pyspark.sql.streaming import StreamingQuery  # type: ignore
 
-from tauro.streaming.constants import PipelineType, StreamingMode
+from tauro.streaming.exceptions import (
+    StreamingError,
+    StreamingPipelineError,
+    create_error_context,
+    handle_streaming_error,
+)
 from tauro.streaming.query_manager import StreamingQueryManager
 from tauro.streaming.validators import StreamingValidator
-from tauro.streaming.exceptions import (
-    StreamingPipelineError,
-    StreamingError,
-    StreamingTimeoutError,
-    handle_streaming_error,
-    create_error_context,
-)
 
 
 class StreamingPipelineManager:
     """Manages streaming pipelines with lifecycle control and monitoring."""
 
-    def __init__(self, context, max_concurrent_pipelines: int = 5):
+    def __init__(
+        self,
+        context,
+        max_concurrent_pipelines: int = 5,
+        validator: Optional[StreamingValidator] = None,
+    ):
         self.context = context
         self.max_concurrent_pipelines = max_concurrent_pipelines
-        self.query_manager = StreamingQueryManager(context)
-        self.validator = StreamingValidator()
+        policy = getattr(context, "format_policy", None)
+        self.validator = validator or StreamingValidator(policy)
+        self.query_manager = StreamingQueryManager(context, validator=self.validator)
 
-        # Estado del manager
         self._running_pipelines: Dict[str, Dict[str, Any]] = {}
         self._pipeline_threads: Dict[str, Any] = {}
         self._shutdown_event = Event()
         self._lock = Lock()
 
-        # Executor para manejo concurrente
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent_pipelines,
             thread_name_prefix="streaming_pipeline",
@@ -58,10 +58,8 @@ class StreamingPipelineManager:
         try:
             execution_id = execution_id or self._generate_execution_id(pipeline_name)
 
-            # Validate pipeline limits and conflicts
             self._validate_pipeline_start(execution_id, pipeline_name)
 
-            # Validate pipeline configuration
             self.validator.validate_streaming_pipeline_config(pipeline_config)
 
             logger.info(
@@ -245,9 +243,9 @@ class StreamingPipelineManager:
                                 "id": query.id,
                                 "runId": str(query.runId),
                                 "isActive": is_active,
-                                "lastProgress": query.lastProgress
-                                if is_active
-                                else None,
+                                "lastProgress": (
+                                    query.lastProgress if is_active else None
+                                ),
                             }
 
                             if is_active:
@@ -365,10 +363,10 @@ class StreamingPipelineManager:
                 "total_input_rate": total_input_rate,
                 "total_processing_rate": total_processing_rate,
                 "processing_efficiency": (
-                    total_processing_rate / total_input_rate * 100
-                )
-                if total_input_rate > 0
-                else 0,
+                    (total_processing_rate / total_input_rate * 100)
+                    if total_input_rate > 0
+                    else 0
+                ),
                 "health_score": self._calculate_health_score(pipeline_info),
             }
 
@@ -443,9 +441,11 @@ class StreamingPipelineManager:
             for execution_id, future in list(self._pipeline_threads.items()):
                 try:
                     future.result(
-                        timeout=timeout_seconds // len(self._pipeline_threads)
-                        if self._pipeline_threads
-                        else timeout_seconds
+                        timeout=(
+                            timeout_seconds // len(self._pipeline_threads)
+                            if self._pipeline_threads
+                            else timeout_seconds
+                        )
                     )
                     completed_threads += 1
                 except FutureTimeoutError:
@@ -643,9 +643,9 @@ class StreamingPipelineManager:
                         self._running_pipelines[execution_id][
                             "active_queries"
                         ] = active_queries
-                        self._running_pipelines[execution_id][
-                            "completed_queries"
-                        ] = len(completed_queries)
+                        self._running_pipelines[execution_id]["completed_queries"] = (
+                            len(completed_queries)
+                        )
                         self._running_pipelines[execution_id]["failed_queries"] = len(
                             failed_queries
                         )
@@ -739,11 +739,11 @@ class StreamingPipelineManager:
                     "overall_health_score": round(avg_health_score, 2),
                     "status_breakdown": status_counts,
                     "individual_health_scores": health_scores,
-                    "status": "healthy"
-                    if avg_health_score >= 80
-                    else "degraded"
-                    if avg_health_score >= 50
-                    else "critical",
+                    "status": (
+                        "healthy"
+                        if avg_health_score >= 80
+                        else "degraded" if avg_health_score >= 50 else "critical"
+                    ),
                 }
 
         except Exception as e:

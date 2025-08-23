@@ -1,7 +1,7 @@
 import os
 import time
-from typing import Any, Dict, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from loguru import logger  # type: ignore
 from pyspark.sql import DataFrame  # type: ignore
@@ -9,30 +9,30 @@ from pyspark.sql.streaming import StreamingQuery  # type: ignore
 
 from tauro.streaming.constants import (
     DEFAULT_STREAMING_CONFIG,
-    StreamingTrigger,
     StreamingOutputMode,
-    StreamingFormat,
+    StreamingTrigger,
 )
-from tauro.streaming.readers import StreamingReaderFactory
-from tauro.streaming.writers import StreamingWriterFactory
-from tauro.streaming.validators import StreamingValidator
 from tauro.streaming.exceptions import (
-    StreamingQueryError,
     StreamingConfigurationError,
     StreamingError,
-    handle_streaming_error,
+    StreamingQueryError,
     create_error_context,
+    handle_streaming_error,
 )
+from tauro.streaming.readers import StreamingReaderFactory
+from tauro.streaming.validators import StreamingValidator
+from tauro.streaming.writers import StreamingWriterFactory
 
 
 class StreamingQueryManager:
     """Manages individual streaming queries with lifecycle and configuration."""
 
-    def __init__(self, context):
+    def __init__(self, context, validator: Optional[StreamingValidator] = None):
         self.context = context
         self.reader_factory = StreamingReaderFactory(context)
         self.writer_factory = StreamingWriterFactory(context)
-        self.validator = StreamingValidator()
+        policy = getattr(context, "format_policy", None)
+        self.validator = validator or StreamingValidator(policy)
         self._active_queries = {}  # Track active queries
 
     @handle_streaming_error
@@ -41,24 +41,19 @@ class StreamingQueryManager:
     ) -> StreamingQuery:
         """Create and start a streaming query from node configuration."""
         try:
-            # Validate node configuration
             self.validator.validate_streaming_node_config(node_config)
 
             node_name = node_config.get("name", "unknown")
             logger.info(f"Creating streaming query for node '{node_name}'")
 
-            # Load input streaming DataFrame
             input_df = self._load_streaming_input(node_config)
 
-            # Apply transformations if specified
             transformed_df = self._apply_transformations(input_df, node_config)
 
-            # Configure and start streaming query
             query = self._configure_and_start_query(
                 transformed_df, node_config, execution_id, pipeline_name
             )
 
-            # Track the query
             query_key = f"{execution_id}_{node_name}"
             self._active_queries[query_key] = {
                 "query": query,
@@ -100,20 +95,16 @@ class StreamingQueryManager:
                     config_section="input",
                 )
 
-            # Get streaming format and source configuration
             format_type = input_config.get("format")
             if not format_type:
                 raise StreamingConfigurationError(
                     "Streaming input must specify format", config_section="input.format"
                 )
 
-            # Use factory to create appropriate reader
             reader = self.reader_factory.get_reader(format_type)
 
-            # Load streaming DataFrame
             streaming_df = reader.read_stream(input_config)
 
-            # Apply watermarking if configured
             watermark_config = input_config.get("watermark")
             if watermark_config:
                 streaming_df = self._apply_watermark(streaming_df, watermark_config)
@@ -145,7 +136,6 @@ class StreamingQueryManager:
                     config_section="watermark.column",
                 )
 
-            # Validate that the column exists
             if timestamp_col not in streaming_df.columns:
                 available_cols = streaming_df.columns
                 raise StreamingConfigurationError(
@@ -176,7 +166,6 @@ class StreamingQueryManager:
     ) -> DataFrame:
         """Apply transformations to the streaming DataFrame with error handling."""
         try:
-            # Get transformation function if specified
             function_config = node_config.get("function")
             if not function_config:
                 logger.info(
@@ -184,7 +173,6 @@ class StreamingQueryManager:
                 )
                 return input_df
 
-            # Load and execute transformation function
             module_path = function_config.get("module")
             function_name = function_config.get("function")
 
@@ -226,7 +214,6 @@ class StreamingQueryManager:
                 f"Applying transformation function '{function_name}' from '{module_path}'"
             )
 
-            # Call transformation function with error handling
             try:
                 transformed_df = transform_func(input_df, node_config)
             except Exception as e:
@@ -272,7 +259,6 @@ class StreamingQueryManager:
     ) -> StreamingQuery:
         """Configure and start the streaming query with comprehensive error handling."""
         try:
-            # Get output configuration
             output_config = node_config.get("output", {})
             if not output_config:
                 raise StreamingConfigurationError(
@@ -280,18 +266,15 @@ class StreamingQueryManager:
                     config_section="output",
                 )
 
-            # Merge with default streaming configuration
             streaming_config = {**DEFAULT_STREAMING_CONFIG}
             streaming_config.update(node_config.get("streaming", {}))
 
-            # Configure query name
             node_name = node_config.get("name", "unknown")
             query_name = (
                 streaming_config.get("query_name")
                 or f"{pipeline_name}_{node_name}_{execution_id}"
             )
 
-            # Configure checkpoint location
             checkpoint_location = self._get_checkpoint_location(
                 streaming_config.get("checkpoint_location"),
                 pipeline_name,
@@ -299,12 +282,10 @@ class StreamingQueryManager:
                 execution_id,
             )
 
-            # Get output mode
             output_mode = streaming_config.get(
                 "output_mode", StreamingOutputMode.APPEND.value
             )
 
-            # Configure trigger
             trigger_config = streaming_config.get("trigger", {})
             trigger = self._configure_trigger(trigger_config)
 
@@ -313,18 +294,15 @@ class StreamingQueryManager:
             logger.info(f"  - Trigger: {trigger_config}")
             logger.info(f"  - Checkpoint: {checkpoint_location}")
 
-            # Create write stream
             write_stream = (
                 df.writeStream.outputMode(output_mode)
                 .queryName(query_name)
                 .option("checkpointLocation", checkpoint_location)
             )
 
-            # Apply trigger
             if trigger:
                 write_stream = write_stream.trigger(**trigger)
 
-            # Configure output sink using factory
             output_format = output_config.get("format")
             if not output_format:
                 raise StreamingConfigurationError(
@@ -360,16 +338,13 @@ class StreamingQueryManager:
             if base_checkpoint:
                 checkpoint_base = base_checkpoint
             else:
-                # Use context output path or default
                 output_path = getattr(self.context, "output_path", "/tmp/checkpoints")
                 checkpoint_base = os.path.join(output_path, "streaming_checkpoints")
 
-            # Create unique checkpoint path
             checkpoint_path = os.path.join(
                 checkpoint_base, pipeline_name, node_name, execution_id
             )
 
-            # Ensure directory exists for local paths
             if not checkpoint_path.startswith(("s3://", "gs://", "abfs://", "hdfs://")):
                 try:
                     Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
