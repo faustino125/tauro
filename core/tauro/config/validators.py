@@ -1,9 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
-from tauro.config.streaming_context import StreamingContext
-from tauro.config.ml_context import MLContext
 from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
+
+if TYPE_CHECKING:
+    from tauro.config.streaming_context import StreamingContext
+    from tauro.config.ml_context import MLContext
 
 
 class ConfigValidator:

@@ -1,7 +1,5 @@
-from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
+from tauro.config.exceptions import ConfigValidationError
 from tauro.config.context import Context
-from tauro.config.streaming_context import StreamingContext
-from tauro.config.ml_context import MLContext
 
 
 class HybridContext(Context):
@@ -17,6 +15,10 @@ class HybridContext(Context):
         )
 
         self.base_context = base_context
+
+        from tauro.config.streaming_context import StreamingContext
+        from tauro.config.ml_context import MLContext
+
         self._streaming_ctx = StreamingContext.from_base_context(self)
         self._ml_ctx = MLContext.from_base_context(self)
 
@@ -98,33 +100,3 @@ class HybridContext(Context):
         has_ml = any(
             self._ml_ctx._is_compatible_node(self.nodes_config[n]) for n in nodes
         )
-
-        if not (has_streaming and has_ml):
-            raise ConfigValidationError(
-                f"Hybrid pipeline '{name}' must contain both streaming and ML nodes"
-            )
-
-    @property
-    def pipelines(self):
-        """Unified view of all pipelines"""
-        return self.base_context.pipelines
-
-    def execute_pipeline(self, pipeline_name: str):
-        """Execute hybrid pipeline with coordinated execution"""
-        pipeline = self.pipelines.get(pipeline_name)
-        if not pipeline:
-            raise PipelineValidationError(f"Pipeline {pipeline_name} not found")
-
-        streaming_nodes = [
-            n
-            for n in pipeline["nodes"]
-            if self._streaming_ctx._is_compatible_node(self.nodes_config[n])
-        ]
-        self._streaming_ctx.execute_nodes(streaming_nodes)
-
-        ml_nodes = [
-            n
-            for n in pipeline["nodes"]
-            if self._ml_ctx._is_compatible_node(self.nodes_config[n])
-        ]
-        self._ml_ctx.execute_nodes(ml_nodes)

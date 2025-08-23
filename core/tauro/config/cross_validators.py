@@ -1,5 +1,9 @@
-from tauro.config.context_hierarchy import HybridContext
+from typing import TYPE_CHECKING
+
 from tauro.config.exceptions import ConfigValidationError
+
+if TYPE_CHECKING:
+    from tauro.config.context_hierarchy import HybridContext
 
 
 class CrossValidator:
@@ -76,11 +80,6 @@ class HybridValidator:
                 context._ml_ctx._is_compatible_node(context.nodes_config[n])
                 for n in nodes
             )
-
-            if not (has_streaming and has_ml):
-                errors.append(
-                    f"Hybrid pipeline '{name}' must contain both streaming and ML nodes"
-                )
 
         if errors:
             raise ConfigValidationError("\n".join(errors))
