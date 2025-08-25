@@ -110,7 +110,6 @@ class CLIConfig:
     format: str = "yaml"
     no_sample_code: bool = False
     list_templates: bool = False
-    template_interactive: bool = False
     # streaming
     streaming: bool = False
     streaming_command: Optional[str] = None

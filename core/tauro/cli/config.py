@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -32,7 +33,7 @@ class YAMLConfigLoader:
             with open(file_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
                 return config or {}
-        except yaml.YAMLError as e:
+        except Exception as e:
             raise ConfigurationError(f"Invalid YAML in {file_path}: {e}")
 
     def get_format_name(self) -> str:
@@ -58,52 +59,88 @@ class JSONConfigLoader:
 
 
 class DSLConfigLoader:
-    """Loads custom DSL configuration files."""
+    """Loads hierarchical DSL configuration files."""
+
+    SECTION_RE = re.compile(r"^\[(?P<name>.+?)\]\s*$")
 
     def load_config(self, file_path: str) -> Dict[str, Any]:
-        """Load and parse DSL file."""
-        if not Path(file_path).exists():
+        """Load and parse DSL file with [section] and key=value pairs."""
+        path = Path(file_path)
+        if not path.exists():
             raise ConfigurationError(f"File not found: {file_path}")
 
-        config = {}
+        result: Dict[str, Any] = {}
+        current_path: List[str] = []
+
+        def ensure_section(root: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
+            node = root
+            for p in parts:
+                if p not in node or not isinstance(node[p], dict):
+                    node[p] = {}
+                node = node[p]
+            return node
+
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
+            with open(path, "r", encoding="utf-8") as f:
+                for line_num, raw in enumerate(f, 1):
+                    line = raw.strip()
+                    if not line or line.startswith("#"):
+                        continue
+
+                    m = self.SECTION_RE.match(line)
+                    if m:
+                        name = m.group("name").strip()
+                        current_path = [p.strip() for p in name.split(".") if p.strip()]
+                        ensure_section(result, current_path)
+                        continue
+
+                    if "=" in line:
                         key, value = line.split("=", 1)
-                        config[key.strip()] = self._parse_value(value.strip())
+                        key = key.strip()
+                        parsed = self._parse_value(value.strip())
+                        section = ensure_section(result, current_path)
+                        section[key] = parsed
+                        continue
+
+                    raise ConfigurationError(
+                        f"Unrecognized DSL syntax at {file_path}:{line_num}: {raw.strip()}"
+                    )
+        except ConfigurationError:
+            raise
         except Exception as e:
             raise ConfigurationError(f"Failed to parse DSL file: {e}")
 
-        return config
+        return result
 
-    def _parse_value(self, value: str) -> Union[str, int, float, bool, List[str]]:
-        """Convert string values to appropriate Python types."""
-        value = value.strip().strip('"').strip("'")
+    def _parse_value(self, value: str) -> Union[str, int, float, bool, List[Any]]:
+        # Quoted string
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            return value[1:-1]
 
-        # Boolean
-        if value.lower() in ("true", "false"):
-            return value.lower() == "true"
+        low = value.lower()
+        if low == "true":
+            return True
+        if low == "false":
+            return False
 
-        # Integer
         try:
             return int(value)
         except ValueError:
             pass
 
-        # Float
         try:
             return float(value)
         except ValueError:
             pass
 
-        # List
         if value.startswith("[") and value.endswith("]"):
-            items = value[1:-1].split(",")
-            return [
-                item.strip().strip('"').strip("'") for item in items if item.strip()
-            ]
+            inner = value[1:-1].strip()
+            if not inner:
+                return []
+            items = [i.strip() for i in inner.split(",")]
+            return [self._parse_value(i) for i in items if i != ""]
 
         return value
 

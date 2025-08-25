@@ -510,21 +510,42 @@ class TemplateGenerator:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     def _write_dsl_file(self, file_path: Path, data: Dict[str, Any]) -> None:
-        """Write DSL file (very simple key/value with section headers)."""
+        """Write DSL file using [section] and [parent.child] headers."""
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(f"# Configuration file generated on {datetime.now()}\n\n")
-            self._write_dsl_dict(f, data, 0)
+            for top_key, top_val in data.items():
+                if isinstance(top_val, dict):
+                    self._write_dsl_sections(f, [top_key], top_val)
+                else:
+                    f.write(f"{top_key} = {self._fmt_dsl_value(top_val)}\n")
 
-    def _write_dsl_dict(self, f, data: Dict[str, Any], indent: int) -> None:
-        """Recursively write dictionary to DSL format."""
-        for key, value in data.items():
-            if isinstance(value, dict):
-                f.write("  " * indent + f"[{key}]\n")
-                self._write_dsl_dict(f, value, indent + 1)
-            elif isinstance(value, list):
-                f.write("  " * indent + f"{key} = {value}\n")
+    def _write_dsl_sections(self, f, path: List[str], obj: Dict[str, Any]) -> None:
+        """Escribe una sección [a.b.c] y sus claves escalares, luego recurre por sub-dicts."""
+        section_name = ".".join(path)
+        f.write(f"[{section_name}]\n")
+        nested_items: List[tuple[str, Any]] = []
+        for k, v in obj.items():
+            if isinstance(v, dict):
+                nested_items.append((k, v))
             else:
-                f.write("  " * indent + f"{key} = {value}\n")
+                f.write(f"{k} = {self._fmt_dsl_value(v)}\n")
+        f.write("\n")
+        for k, v in nested_items:
+            self._write_dsl_sections(f, path + [k], v)
+
+    def _fmt_dsl_value(self, v: Any) -> str:
+        """Formatea valores para DSL (strings con comillas, bool en minúsculas, listas con elementos formateados)."""
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, (int, float)):
+            return str(v)
+        if isinstance(v, list):
+            items = ", ".join(self._fmt_dsl_value(x) for x in v)
+            return f"[{items}]"
+        if isinstance(v, dict):
+            return json.dumps(v, ensure_ascii=False)
+        s = str(v).replace('"', '\\"')
+        return f'"{s}"'
 
     def _generate_sample_code(self) -> None:
         """Generate minimal sample Python code for batch and streaming."""
@@ -978,5 +999,4 @@ def handle_template_command(parsed_args) -> int:
         config_format=parsed_args.format,
         create_sample_code=not parsed_args.no_sample_code,
         list_templates=parsed_args.list_templates,
-        interactive=parsed_args.template_interactive,
     )

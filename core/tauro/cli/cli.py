@@ -122,7 +122,7 @@ class ArgumentParser:
         )
         parser.add_argument(
             "--format",
-            choices=["yaml", "json"],
+            choices=["yaml", "json", "dsl"],
             default="yaml",
             help="Config format for generated template",
         )
@@ -133,11 +133,6 @@ class ArgumentParser:
         )
         parser.add_argument(
             "--list-templates", action="store_true", help="List available templates"
-        )
-        parser.add_argument(
-            "--template-interactive",
-            action="store_true",
-            help="Interactive template generation",
         )
 
         # Streaming toggle to delegate to streaming CLI if needed
@@ -374,7 +369,6 @@ class TauroCLI:
             if (
                 parsed_args.template
                 or parsed_args.list_templates
-                or parsed_args.template_interactive
             ):
                 return handle_template_command(parsed_args)
 

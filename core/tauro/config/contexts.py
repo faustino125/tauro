@@ -1,12 +1,17 @@
 from abc import ABC, abstractmethod
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from loguru import logger  # type: ignore
 
 from tauro.config.exceptions import ConfigLoadError, ConfigValidationError
 from tauro.config.interpolator import VariableInterpolator
-from tauro.config.loaders import ConfigLoaderFactory, DSLLoader
+from tauro.config.loaders import (
+    ConfigLoaderFactory,
+    DSLConfigLoader,
+    PythonConfigLoader,
+)
 from tauro.config.session import SparkSessionFactory
 from tauro.config.validators import (
     ConfigValidator,
@@ -231,9 +236,29 @@ class Context:
 
     @classmethod
     def from_dsl(cls, path: str) -> "Context":
-        """Create Context instance from a DSL file (.tdsl[.yml|.yaml]) or Python DSL (.py)."""
-        dsl_loader = DSLLoader()
-        config_data = dsl_loader.load(path)
+        """Create Context instance from a DSL file (.dsl|.tdsl) or Python module (.py) that returns a monolithic config dict with the 5 required sections."""
+        p = Path(path)
+        if p.suffix.lower() == ".py":
+            loader = PythonConfigLoader()
+            config_data = loader.load(p)
+        else:
+            loader = DSLConfigLoader()
+            config_data = loader.load(p)
+
+        # Esperamos un dict monolítico con las secciones requeridas
+        required_keys = [
+            "global_settings",
+            "pipelines_config",
+            "nodes_config",
+            "input_config",
+            "output_config",
+        ]
+        missing = [k for k in required_keys if k not in config_data]
+        if missing:
+            raise ConfigValidationError(
+                f"DSL/Python config is missing required sections: {', '.join(missing)}"
+            )
+
         return cls(
             global_settings=config_data["global_settings"],
             pipelines_config=config_data["pipelines_config"],
