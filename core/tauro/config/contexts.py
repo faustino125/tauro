@@ -194,6 +194,10 @@ class Context:
             "description": pipeline.get("description", ""),
         }
 
+    @property
+    def default_model_version(self) -> Optional[str]:
+        return (self.global_settings or {}).get("default_model_version")
+
     def get_node_ml_config(self, node_name: str) -> Dict[str, Any]:
         """Get ML-specific configuration for a node."""
         node = self.nodes_config.get(node_name, {})
@@ -210,6 +214,10 @@ class Context:
         merged = self.default_hyperparams.copy()
         merged.update(pipeline_hyperparams)
         return merged
+
+    @property
+    def default_hyperparams(self) -> Dict[str, Any]:
+        return dict((self.global_settings or {}).get("default_hyperparams", {}) or {})
 
     @property
     def is_ml_layer(self) -> bool:

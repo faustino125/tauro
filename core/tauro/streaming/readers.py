@@ -11,6 +11,7 @@ from tauro.streaming.exceptions import (
     StreamingFormatNotSupportedError,
 )
 
+
 class _StreamingSparkMixin:
     """Helper mixin to access SparkSession from dict or object context."""
 

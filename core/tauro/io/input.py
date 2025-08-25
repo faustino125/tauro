@@ -85,8 +85,15 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
 
     def load_inputs(self, input_keys: List[str], fail_fast: bool = True) -> List[Any]:
         """Load datasets in parallel using Spark."""
-        if not self._spark_available():
-            logger.warning("Spark not available, falling back to sequential loading")
+        if not self._spark_available() or self._is_spark_connect():
+            if self._is_spark_connect():
+                logger.warning(
+                    "Spark Connect session detected (no RDD). Falling back to sequential loading."
+                )
+            else:
+                logger.warning(
+                    "Spark not available, falling back to sequential loading"
+                )
             sequential_strategy = SequentialLoadingStrategy(
                 self.context, self.reader_factory
             )

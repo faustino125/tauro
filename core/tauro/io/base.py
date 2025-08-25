@@ -70,6 +70,14 @@ class BaseIO:
         logger.debug(f"Spark availability: {is_available}")
         return is_available
 
+    def _is_spark_connect(self) -> bool:
+        """Detect if the active SparkSession is a Spark Connect session."""
+        spark = self._ctx_spark()
+        try:
+            return spark is not None and "pyspark.sql.connect" in type(spark).__module__
+        except Exception:
+            return False
+
     def _parse_output_key(self, out_key: str) -> Dict[str, str]:
         """Parse output key using validator."""
         return self.config_validator.validate_output_key(out_key)

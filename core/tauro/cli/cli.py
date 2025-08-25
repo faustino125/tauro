@@ -366,10 +366,7 @@ class TauroCLI:
             )
 
             # Handle template commands
-            if (
-                parsed_args.template
-                or parsed_args.list_templates
-            ):
+            if parsed_args.template or parsed_args.list_templates:
                 return handle_template_command(parsed_args)
 
             # Handle streaming commands

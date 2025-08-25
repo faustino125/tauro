@@ -9,7 +9,8 @@ from loguru import logger  # type: ignore
 
 
 class NodeFunction(Protocol):
-    def __call__(self, *dfs: Any, start_date: str, end_date: str) -> Any: ...
+    def __call__(self, *dfs: Any, start_date: str, end_date: str) -> Any:
+        ...
 
 
 class Command(ABC):
