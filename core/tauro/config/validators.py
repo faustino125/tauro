@@ -1,3 +1,10 @@
+"""
+Configuration and pipeline validation for Tauro.
+
+This module provides validators for configuration data, pipeline structures,
+format policies, and specialized validations for ML, streaming, and hybrid workflows.
+"""
+
 from typing import Any, Dict, List, Optional
 
 from tauro.config.exceptions import ConfigValidationError, PipelineValidationError

@@ -1,3 +1,10 @@
+"""
+Input loading strategies and management for Tauro pipelines.
+
+This module provides strategies for loading pipeline inputs with support for
+sequential and parallel loading, validation, and error handling.
+"""
+
 import os
 from typing import Any, Dict, List, Optional, Tuple
 

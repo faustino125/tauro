@@ -1,3 +1,10 @@
+"""
+Dependency resolution and topological sorting for pipeline execution.
+
+This module handles dependency graph construction and ordering of pipeline nodes
+to ensure proper execution sequence while detecting circular dependencies.
+"""
+
 from collections import defaultdict, deque
 from typing import Any, Dict, List, Set
 

@@ -643,9 +643,9 @@ class StreamingPipelineManager:
                         self._running_pipelines[execution_id][
                             "active_queries"
                         ] = active_queries
-                        self._running_pipelines[execution_id][
-                            "completed_queries"
-                        ] = len(completed_queries)
+                        self._running_pipelines[execution_id]["completed_queries"] = (
+                            len(completed_queries)
+                        )
                         self._running_pipelines[execution_id]["failed_queries"] = len(
                             failed_queries
                         )
@@ -742,9 +742,7 @@ class StreamingPipelineManager:
                     "status": (
                         "healthy"
                         if avg_health_score >= 80
-                        else "degraded"
-                        if avg_health_score >= 50
-                        else "critical"
+                        else "degraded" if avg_health_score >= 50 else "critical"
                     ),
                 }
 

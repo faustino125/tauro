@@ -1,3 +1,10 @@
+"""
+Command pattern implementation for pipeline node execution.
+
+This module provides command abstractions for executing data pipeline nodes,
+including standard nodes, ML nodes with hyperparameter support, and experiment commands.
+"""
+
 import json
 import random
 import time
@@ -9,8 +16,7 @@ from loguru import logger  # type: ignore
 
 
 class NodeFunction(Protocol):
-    def __call__(self, *dfs: Any, start_date: str, end_date: str) -> Any:
-        ...
+    def __call__(self, *dfs: Any, start_date: str, end_date: str) -> Any: ...
 
 
 class Command(ABC):

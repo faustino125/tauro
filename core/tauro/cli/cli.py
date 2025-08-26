@@ -12,7 +12,6 @@ the license agreement for details.
 import argparse
 import sys
 import traceback
-from datetime import datetime
 from typing import List, Optional
 
 from loguru import logger  # type: ignore

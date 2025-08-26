@@ -1,3 +1,12 @@
+"""
+Spark session factory with ML optimizations and thread-safe singleton pattern.
+
+This module provides a factory for creating and managing Spark sessions across
+different execution modes (local, databricks, distributed) with ML-specific
+configurations and thread-safe initialization.
+"""
+
+import threading
 from typing import Any, Dict, List, Literal
 
 from loguru import logger  # type: ignore
@@ -9,6 +18,7 @@ class SparkSessionFactory:
     """
 
     _session = None
+    _lock = threading.Lock()
 
     @classmethod
     def get_session(
@@ -18,20 +28,24 @@ class SparkSessionFactory:
     ):
         """Singleton Spark session with thread-safe initialization"""
         if cls._session is None:
-            cls._session = SparkSessionFactory.create_session(mode, ml_config)
+            with cls._lock:
+                # Double-checked locking pattern
+                if cls._session is None:
+                    cls._session = SparkSessionFactory.create_session(mode, ml_config)
         return cls._session
 
     @classmethod
     def reset_session(cls):
         """Reset session for testing or reconfiguration"""
-        if cls._session:
-            try:
-                cls._session.stop()
-            except Exception:
-                logger.warning(
-                    "Error stopping Spark session during reset", exc_info=True
-                )
-        cls._session = None
+        with cls._lock:
+            if cls._session:
+                try:
+                    cls._session.stop()
+                except Exception:
+                    logger.warning(
+                        "Error stopping Spark session during reset", exc_info=True
+                    )
+            cls._session = None
 
     PROTECTED_CONFIGS = [
         "spark.sql.shuffle.partitions",

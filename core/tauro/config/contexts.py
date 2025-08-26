@@ -1,3 +1,11 @@
+"""
+Configuration context management for Tauro data pipelines.
+
+This module provides context classes that orchestrate the entire configuration
+lifecycle, manage specialized contexts (ML, Streaming, Hybrid), and coordinate
+with Spark session management.
+"""
+
 from abc import ABC, abstractmethod
 from functools import cached_property
 from pathlib import Path
@@ -244,7 +252,10 @@ class Context:
 
     @classmethod
     def from_dsl(cls, path: str) -> "Context":
-        """Create Context instance from a DSL file (.dsl|.tdsl) or Python module (.py) that returns a monolithic config dict with the 5 required sections."""
+        """
+        Create Context instance from a DSL file (.dsl|.tdsl) or Python module (.py)
+        that returns a monolithic config dict with the 5 required sections.
+        """
         p = Path(path)
         if p.suffix.lower() == ".py":
             loader = PythonConfigLoader()

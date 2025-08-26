@@ -297,7 +297,7 @@ def _display_pipeline_status_table(status: Dict[str, Any]) -> None:
 
 
 def _display_multiple_pipelines_status_table(
-    status_list: Union[List[Dict[str, Any]], Dict[str, Any]]
+    status_list: Union[List[Dict[str, Any]], Dict[str, Any]],
 ) -> None:
     """Render multiple pipeline statuses in a compact table."""
     pipelines: List[Dict[str, Any]] = []
