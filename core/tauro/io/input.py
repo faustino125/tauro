@@ -1,5 +1,6 @@
+import glob
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -74,9 +75,24 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
         if not path:
             raise ConfigurationError(f"Missing filepath for '{input_key}'")
 
-        # Verify file existence in local mode
-        if self._is_local() and not os.path.exists(path):
-            raise FileNotFoundError(f"File '{path}' does not exist in local mode")
+        cloud_schemes = ("s3://", "abfss://", "gs://", "dbfs:/")
+        if any(str(path).startswith(pfx) for pfx in cloud_schemes):
+            return path
+
+        if self._is_local():
+            if os.path.isdir(path):
+                return path
+            if os.path.isfile(path):
+                return path
+            if any(ch in str(path) for ch in ("*", "?", "[")):
+                matches = glob.glob(path)
+                if matches:
+                    return path
+                raise FileNotFoundError(
+                    f"Pattern '{path}' matched no files in local mode"
+                )
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"File '{path}' does not exist in local mode")
         return path
 
 
@@ -173,26 +189,43 @@ class InputLoader(BaseIO):
             return SequentialLoadingStrategy(self.context, self.reader_factory)
 
     def _register_custom_formats(self) -> None:
-        """Register custom format handlers if available."""
-        format_checks = {"delta": self._try_import_delta, "xml": self._try_import_xml}
+        """Register custom format handlers if available only when used."""
+        configured_formats = self._get_configured_formats()
 
-        for format_name, check_method in format_checks.items():
+        if "delta" in configured_formats:
             try:
-                check_method()
-                logger.debug(f"Format {format_name} registered successfully")
-            except Exception as e:
-                logger.error(f"Error registering format {format_name}: {e}")
+                self._try_import_delta()
+                logger.debug("Format delta registered successfully")
+            except ImportError:
+                logger.warning(
+                    "Input format 'delta' configured but package 'delta-spark' is not installed. "
+                    "Install with: pip install delta-spark"
+                )
+
+        if "xml" in configured_formats:
+            self._try_import_xml()
+            logger.debug("Format xml registration attempted")
+
+    def _get_configured_formats(self) -> Set[str]:
+        """Inspect input_config and return the set of formats in use."""
+        input_cfg = self._ctx_get("input_config", {}) or {}
+        formats = set()
+        for key, cfg in input_cfg.items():
+            try:
+                fmt = str((cfg or {}).get("format", "")).lower().strip()
+                if fmt:
+                    formats.add(fmt)
+            except Exception:
+                logger.debug(
+                    f"Skipping format detection for malformed input_config key: {key}"
+                )
+        return formats
 
     def _try_import_delta(self) -> None:
-        """Try to import Delta Lake dependencies."""
+        """Try to import Delta Lake dependencies; don't raise at registration time."""
         try:
-            from delta import (  # type: ignore # noqa: F401
-                configure_spark_with_delta_pip,
-            )
-        except ImportError:
-            logger.error(
-                "Package 'delta-spark' not installed. Install it with: pip install delta-spark"
-            )
+            from delta import configure_spark_with_delta_pip  # type: ignore  # noqa: F401
+        except ImportError as e:
             raise
 
     def _try_import_xml(self) -> None:

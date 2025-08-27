@@ -185,6 +185,9 @@ class ModelArtifactManager(BaseIO):
 
     def save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
         """Save model artifacts to the model registry."""
+        import json
+        from datetime import datetime
+
         self._validate_inputs(node, model_version)
 
         global_settings = self._ctx_get("global_settings", {}) or {}
@@ -203,6 +206,17 @@ class ModelArtifactManager(BaseIO):
                     model_registry_path, artifact, model_version
                 )
                 self._create_artifact_directory(artifact_path)
+
+                metadata = {
+                    "artifact": artifact.get("name"),
+                    "version": model_version,
+                    "node": node.get("name"),
+                    "saved_at": datetime.utcnow().isoformat() + "Z",
+                }
+                (artifact_path / "metadata.json").write_text(
+                    json.dumps(metadata, ensure_ascii=False, indent=2)
+                )
+
                 logger.info(
                     f"Artifact '{artifact.get('name', 'unnamed')}' saved to: {artifact_path}"
                 )
@@ -276,8 +290,14 @@ class UnityCatalogOperations(BaseIO):
         spark = self._ctx_spark()
         try:
             spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
-            # Basic create schema; LOCATION can be appended if desired
-            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
+            if output_path_override:
+                base = str(output_path_override).rstrip("/")
+                location = f"{base}/{schema}"
+                spark.sql(
+                    f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema} LOCATION '{location}'"
+                )
+            else:
+                spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
             logger.info(f"Verified/created {catalog}.{schema}")
         except Exception as e:
             logger.error(f"Error ensuring schema {catalog}.{schema}: {e}")
@@ -580,6 +600,15 @@ class OutputManager(BaseIO):
         dataset_config = output_cfg.get(out_key)
         if not dataset_config:
             raise ConfigurationError(f"Output configuration '{out_key}' not found")
+
+        if (
+            dataset_config.get("format") == SupportedFormats.UNITY_CATALOG.value
+            and not self.unity_catalog_manager.uc_operations._unity_catalog_enabled
+        ):
+            raise ConfigurationError(
+                "Unity Catalog is configured for this output but not enabled in Spark. "
+                "Set spark.databricks.unityCatalog.enabled=true or change the format."
+            )
 
         try:
             if self._should_use_unity_catalog(dataset_config):

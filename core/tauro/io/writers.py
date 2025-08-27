@@ -34,30 +34,36 @@ class SparkWriterMixin:
             )
             data_validator.validate_columns_exist(df, partition_columns)
             writer = writer.partitionBy(*partition_columns)
-            logger.debug(f"Partitioning by columns: {partition_columns}")
+            logger.debug(f"Applied partitionBy on columns: {partition_columns}")
 
-        overwrite_schema = config.get(
-            "overwrite_schema", self._get_default_overwrite_schema()
+        overwrite_schema = bool(
+            config.get("overwrite_schema", self._get_default_overwrite_schema())
         )
-        if not isinstance(overwrite_schema, bool):
-            raise ConfigurationError(
-                f"overwrite_schema must be boolean, got {type(overwrite_schema)}"
-            )
-        if overwrite_schema and not self._supports_overwrite_schema():
-            logger.warning(
-                f"overwriteSchema not supported for format {self._get_format()}. Ignoring."
-            )
-        elif overwrite_schema:
+        if overwrite_schema and self._supports_overwrite_schema():
             writer = writer.option("overwriteSchema", "true")
-            logger.debug("Enabled overwriteSchema option")
+            logger.debug("Applied overwriteSchema=true")
 
-        if config.get("overwrite_strategy") == "replaceWhere":
-            writer = self._apply_replace_where(writer, config)
+        if (
+            config.get("overwrite_strategy") == "replaceWhere"
+            and write_mode == WriteMode.OVERWRITE.value
+        ):
+            part_col = config.get("partition_col")
+            start = config.get("start_date")
+            end = config.get("end_date")
+            if part_col and start is not None and end is not None:
+                predicate = f"{part_col} >= '{start}' AND {part_col} <= '{end}'"
+                writer = writer.option("replaceWhere", predicate)
+                logger.debug(f"Applied replaceWhere predicate: {predicate}")
+            else:
+                logger.warning(
+                    "overwrite_strategy=replaceWhere configured but partition_col/start_date/end_date are missing; "
+                    "skipping replaceWhere"
+                )
 
-        if extra_options := config.get("options", {}):
-            for key, value in extra_options.items():
-                writer = writer.option(key, value)
-                logger.debug(f"Applied option {key}={value}")
+        extra_options = config.get("options", {})
+        for key, value in extra_options.items():
+            writer = writer.option(key, value)
+            logger.debug(f"Applied option {key}={value}")
 
         return writer
 
