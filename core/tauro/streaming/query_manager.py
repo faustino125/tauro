@@ -9,6 +9,7 @@ from pyspark.sql.streaming import StreamingQuery  # type: ignore
 
 from tauro.streaming.constants import (
     DEFAULT_STREAMING_CONFIG,
+    STREAMING_VALIDATIONS,
     StreamingOutputMode,
     StreamingTrigger,
 )
@@ -47,20 +48,19 @@ class StreamingQueryManager:
             logger.info(f"Creating streaming query for node '{node_name}'")
 
             input_df = self._load_streaming_input(node_config)
-
             transformed_df = self._apply_transformations(input_df, node_config)
-
             query = self._configure_and_start_query(
                 transformed_df, node_config, execution_id, pipeline_name
             )
 
-            query_key = f"{execution_id}_{node_name}"
+            query_key = f"{pipeline_name}:{execution_id}:{node_name}"
             self._active_queries[query_key] = {
                 "query": query,
                 "node_config": node_config,
                 "start_time": time.time(),
                 "execution_id": execution_id,
                 "pipeline_name": pipeline_name,
+                "node_name": node_name,
             }
 
             logger.info(f"Streaming query '{node_name}' started with ID: {query.id}")
@@ -125,7 +125,7 @@ class StreamingQueryManager:
     def _apply_watermark(
         self, streaming_df: DataFrame, watermark_config: Dict[str, Any]
     ) -> DataFrame:
-        """Apply watermarking with validation."""
+        """Apply watermarking with validation and safe casting to timestamp."""
         try:
             timestamp_col = watermark_config.get("column")
             delay_threshold = watermark_config.get("delay", "10 seconds")
@@ -144,10 +144,18 @@ class StreamingQueryManager:
                     config_value=timestamp_col,
                 )
 
+            dtype = dict(streaming_df.dtypes).get(timestamp_col)
+            if dtype not in ("timestamp", "date"):
+                logger.warning(
+                    f"Watermark column '{timestamp_col}' is type '{dtype}', casting to timestamp"
+                )
+                streaming_df = streaming_df.withColumn(
+                    timestamp_col, F.col(timestamp_col).cast("timestamp")
+                )
+
             logger.info(
                 f"Applying watermark on column '{timestamp_col}' with delay '{delay_threshold}'"
             )
-
             return streaming_df.withWatermark(timestamp_col, delay_threshold)
 
         except Exception as e:
@@ -345,7 +353,15 @@ class StreamingQueryManager:
                 checkpoint_base, pipeline_name, node_name, execution_id
             )
 
-            if not checkpoint_path.startswith(("s3://", "gs://", "abfs://", "hdfs://")):
+            non_local_prefixes = (
+                "s3://",
+                "gs://",
+                "abfs://",
+                "abfss://",
+                "hdfs://",
+                "dbfs:/",
+            )
+            if not checkpoint_path.startswith(non_local_prefixes):
                 try:
                     Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
                 except OSError as e:
@@ -372,13 +388,12 @@ class StreamingQueryManager:
     def _configure_trigger(
         self, trigger_config: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Configure streaming trigger with validation."""
+        """Configure streaming trigger with minimum interval validation."""
         try:
-            trigger_type = trigger_config.get(
-                "type", StreamingTrigger.PROCESSING_TIME.value
-            )
+            trigger_type = str(
+                trigger_config.get("type", StreamingTrigger.PROCESSING_TIME.value)
+            ).lower()
 
-            # Validate trigger type
             valid_triggers = [t.value for t in StreamingTrigger]
             if trigger_type not in valid_triggers:
                 raise StreamingConfigurationError(
@@ -388,22 +403,29 @@ class StreamingQueryManager:
                 )
 
             if trigger_type == StreamingTrigger.PROCESSING_TIME.value:
-                interval = trigger_config.get("interval", "10 seconds")
+                interval = str(trigger_config.get("interval", "10 seconds"))
+                min_sec = int(
+                    STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
+                )
+                if interval.strip().isdigit() and int(interval.strip()) < min_sec:
+                    raise StreamingConfigurationError(
+                        f"processing_time interval must be >= {min_sec} seconds",
+                        config_section="trigger.interval",
+                        config_value=interval,
+                    )
                 return {"processingTime": interval}
 
-            elif trigger_type == StreamingTrigger.ONCE.value:
+            if trigger_type == StreamingTrigger.ONCE.value:
                 return {"once": True}
 
-            elif trigger_type == StreamingTrigger.CONTINUOUS.value:
-                interval = trigger_config.get("interval", "1 second")
+            if trigger_type == StreamingTrigger.CONTINUOUS.value:
+                interval = str(trigger_config.get("interval", "1 second"))
                 return {"continuous": interval}
 
-            elif trigger_type == StreamingTrigger.AVAILABLE_NOW.value:
+            if trigger_type == StreamingTrigger.AVAILABLE_NOW.value:
                 return {"availableNow": True}
 
-            else:
-                logger.warning(f"Unknown trigger type '{trigger_type}', using default")
-                return {"processingTime": "10 seconds"}
+            return {"processingTime": "10 seconds"}
 
         except Exception as e:
             logger.error(f"Error configuring trigger: {str(e)}")
@@ -444,7 +466,6 @@ class StreamingQueryManager:
                     )
                     return False
 
-            # Remove from active queries tracking
             query_key = None
             for key, info in self._active_queries.items():
                 if info["query"].id == query.id:

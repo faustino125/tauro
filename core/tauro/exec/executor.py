@@ -1,4 +1,5 @@
 import gc
+import json
 import time
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -282,39 +283,70 @@ class StreamingExecutor(BaseExecutor):
         self, pipeline: Dict[str, Any]
     ) -> Dict[str, Set[str]]:
         """Extract critical resources from pipeline configuration."""
-        resources = {"kafka_topics": set(), "file_paths": set(), "delta_tables": set()}
+        resources: Dict[str, Set[str]] = {
+            "kafka_topics": set(),
+            "file_paths": set(),
+            "delta_tables": set(),
+        }
 
         pipeline_nodes = self._extract_pipeline_nodes(pipeline)
         for node_name in pipeline_nodes:
-            node_config = self.context.nodes_config.get(node_name, {})
+            node_config = self.context.nodes_config.get(node_name, {}) or {}
 
-            # Input resources
-            input_config = node_config.get("input", {})
-            input_format = input_config.get("format")
+            input_config = node_config.get("input", {}) or {}
+            input_format = (input_config.get("format") or "").lower()
+
             if input_format == "kafka":
-                topics = input_config.get("options", {}).get("topics", [])
-                if isinstance(topics, str):
-                    topics = [topics]
-                resources["kafka_topics"].update(topics)
-            elif input_format == "file_stream":
-                path = input_config.get("options", {}).get("path")
+                opts = input_config.get("options", {}) or {}
+                if "subscribe" in opts:
+                    topics = opts["subscribe"]
+                    if isinstance(topics, str):
+                        topics = [t.strip() for t in topics.split(",") if t.strip()]
+                    for t in topics:
+                        resources["kafka_topics"].add(t)
+                elif "assign" in opts:
+                    try:
+                        assign = opts["assign"]
+                        mapping = (
+                            json.loads(assign) if isinstance(assign, str) else assign
+                        )
+                        for t in mapping.keys():
+                            resources["kafka_topics"].add(t)
+                    except Exception:
+                        pass
+                elif "subscribePattern" in opts:
+                    pattern = str(opts["subscribePattern"]).strip()
+                    if pattern:
+                        resources["kafka_topics"].add(f"pattern:{pattern}")
+
+            elif input_format in ("file_stream",):
+                path = input_config.get("path") or input_config.get("options", {}).get(
+                    "path"
+                )
                 if path:
                     resources["file_paths"].add(path)
-            elif input_format == "delta":
-                path = input_config.get("options", {}).get("path")
+
+            elif input_format in ("delta_stream", "delta"):
+                path = input_config.get("path") or input_config.get("options", {}).get(
+                    "path"
+                )
                 if path:
                     resources["delta_tables"].add(path)
 
-            output_config = node_config.get("output", {})
-            output_format = output_config.get("format")
+            output_config = node_config.get("output", {}) or {}
+            output_format = (output_config.get("format") or "").lower()
+
             if output_format == "kafka":
-                topic = output_config.get("options", {}).get("topic")
+                opar = output_config.get("options", {}) or {}
+                topic = opar.get("topic") or opar.get("kafka.topic")
                 if topic:
-                    resources["kafka_topics"].add(topic)
+                    resources["kafka_topics"].add(str(topic))
             elif output_format == "delta":
-                path = output_config.get("options", {}).get("path")
-                if path:
-                    resources["delta_tables"].add(path)
+                out_path = output_config.get("path") or output_config.get(
+                    "options", {}
+                ).get("path")
+                if out_path:
+                    resources["delta_tables"].add(out_path)
 
         return resources
 
@@ -324,8 +356,13 @@ class StreamingExecutor(BaseExecutor):
         """Wait for streaming pipeline to complete."""
         start_time = time.time()
         while time.time() - start_time < timeout_seconds:
-            status = self.streaming_manager.get_pipeline_status(execution_id)
-            if status in ["completed", "error", "stopped"]:
+            status_info = self.streaming_manager.get_pipeline_status(execution_id)
+            state = (
+                status_info.get("state")
+                if isinstance(status_info, dict)
+                else str(status_info)
+            )
+            if state in ["completed", "error", "stopped"]:
                 break
             time.sleep(5)
 

@@ -436,7 +436,6 @@ class TauroCLI:
     def _handle_streaming_command(self, parsed_args) -> int:
         """Execute streaming pipeline commands."""
         try:
-            # Import streaming commands only when needed
             from tauro.cli.streaming_cli import run as cmd_run
             from tauro.cli.streaming_cli import status as cmd_status
             from tauro.cli.streaming_cli import stop as cmd_stop
@@ -448,34 +447,42 @@ class TauroCLI:
                     raise ValidationError(
                         "--streaming-pipeline required for 'run' command"
                     )
-                # Click commands expose .callback for direct invocation
-                return cmd_run.callback(
+                result = cmd_run.callback(
                     config=parsed_args.streaming_config,
                     pipeline=parsed_args.streaming_pipeline,
                     mode=parsed_args.streaming_mode,
                     model_version=parsed_args.model_version,
                     hyperparams=parsed_args.hyperparams,
                 )
+                return result if isinstance(result, int) else ExitCode.SUCCESS.value
 
             elif command == "status":
-                # Default to table format when invoked from main CLI
-                return cmd_status.callback(
+                result = cmd_status.callback(
                     config=parsed_args.streaming_config,
                     execution_id=parsed_args.execution_id,
                     format="table",
                 )
+                return result if isinstance(result, int) else ExitCode.SUCCESS.value
 
             elif command == "stop":
                 if not parsed_args.execution_id:
                     raise ValidationError("--execution-id required for 'stop' command")
-                return cmd_stop.callback(
+                result = cmd_stop.callback(
                     config=parsed_args.streaming_config,
                     execution_id=parsed_args.execution_id,
                     timeout=60,
                 )
+                return result if isinstance(result, int) else ExitCode.SUCCESS.value
 
             else:
                 raise ValidationError(f"Unknown streaming command: {command}")
+
+        except SystemExit as se:
+            try:
+                code = int(getattr(se, "code", ExitCode.GENERAL_ERROR.value))
+            except Exception:
+                code = ExitCode.GENERAL_ERROR.value
+            return code
 
         except Exception as e:
             logger.error(f"Streaming command failed: {e}")

@@ -16,32 +16,28 @@ def _load_context_from_dsl(config_path: str) -> Context:
     return ContextFactory.create_context(base_ctx)
 
 
+def _in_click_context() -> bool:
+    """Detect if command is invoked under a click context (standalone CLI)."""
+    try:
+        return click.get_current_context(silent=True) is not None
+    except Exception:
+        return False
+
+
 @click.group()
 def streaming():
     """Streaming pipeline management commands."""
     pass
 
 
-@streaming.command()
-@click.option("--config", "-c", required=True, help="Path to configuration file")
-@click.option("--pipeline", "-p", required=True, help="Pipeline name to execute")
-@click.option(
-    "--mode",
-    "-m",
-    default="async",
-    type=click.Choice(["sync", "async"]),
-    help="Execution mode for streaming pipelines",
-)
-@click.option("--model-version", help="Model version for ML pipelines")
-@click.option("--hyperparams", help="Hyperparameters as JSON string")
-def run(
+def _run_impl(
     config: str,
     pipeline: str,
     mode: str,
     model_version: Optional[str],
     hyperparams: Optional[str],
-):
-    """Run a streaming pipeline."""
+) -> int:
+    """Core implementation for 'run' that returns an exit code."""
     try:
         parsed_hyperparams = None
         if hyperparams:
@@ -49,7 +45,7 @@ def run(
                 parsed_hyperparams = json.loads(hyperparams)
             except json.JSONDecodeError as e:
                 click.echo(f"Error parsing hyperparameters: {e}", err=True)
-                sys.exit(ExitCode.VALIDATION_ERROR.value)
+                return ExitCode.VALIDATION_ERROR.value
 
         context = _load_context_from_dsl(config)
 
@@ -77,27 +73,47 @@ def run(
         else:
             click.echo("Batch pipeline completed successfully.")
 
+        return ExitCode.SUCCESS.value
+
     except ValidationError as e:
         click.echo(str(e), err=True)
-        sys.exit(ExitCode.VALIDATION_ERROR.value)
+        logger.exception("Validation error during streaming run")
+        return ExitCode.VALIDATION_ERROR.value
+
     except Exception as e:
         click.echo(f"Error running pipeline: {e}", err=True)
         logger.exception("Pipeline execution failed")
-        sys.exit(ExitCode.EXECUTION_ERROR.value)
+        return ExitCode.EXECUTION_ERROR.value
 
 
 @streaming.command()
 @click.option("--config", "-c", required=True, help="Path to configuration file")
-@click.option("--execution-id", "-e", help="Specific execution ID to check")
+@click.option("--pipeline", "-p", required=True, help="Pipeline name to execute")
 @click.option(
-    "--format",
-    "-f",
-    default="table",
-    type=click.Choice(["table", "json"]),
-    help="Output format",
+    "--mode",
+    "-m",
+    default="async",
+    type=click.Choice(["sync", "async"]),
+    help="Execution mode for streaming pipelines",
 )
-def status(config: str, execution_id: Optional[str], format: str):
-    """Check status of streaming pipelines."""
+@click.option("--model-version", help="Model version for ML pipelines")
+@click.option("--hyperparams", help="Hyperparameters as JSON string")
+def run(
+    config: str,
+    pipeline: str,
+    mode: str,
+    model_version: Optional[str],
+    hyperparams: Optional[str],
+):
+    """Run a streaming pipeline."""
+    code = _run_impl(config, pipeline, mode, model_version, hyperparams)
+    if _in_click_context():
+        sys.exit(code)
+    return code
+
+
+def _status_impl(config: str, execution_id: Optional[str], format: str) -> int:
+    """Core implementation for 'status' that returns an exit code."""
     try:
         context = _load_context_from_dsl(config)
 
@@ -112,7 +128,7 @@ def status(config: str, execution_id: Optional[str], format: str):
                 click.echo(
                     f"Pipeline with execution_id '{execution_id}' not found", err=True
                 )
-                sys.exit(ExitCode.VALIDATION_ERROR.value)
+                return ExitCode.VALIDATION_ERROR.value
 
             if format == "json":
                 click.echo(json.dumps(status_info, indent=2, default=str))
@@ -126,18 +142,34 @@ def status(config: str, execution_id: Optional[str], format: str):
             else:
                 _display_multiple_pipelines_status_table(status_list)
 
+        return ExitCode.SUCCESS.value
+
     except Exception as e:
         click.echo(f"Error fetching status: {e}", err=True)
         logger.exception("Status retrieval failed")
-        sys.exit(ExitCode.GENERAL_ERROR.value)
+        return ExitCode.GENERAL_ERROR.value
 
 
 @streaming.command()
 @click.option("--config", "-c", required=True, help="Path to configuration file")
-@click.option("--execution-id", "-e", required=True, help="Execution ID to stop")
-@click.option("--timeout", "-t", default=60, help="Timeout in seconds")
-def stop(config: str, execution_id: str, timeout: int):
-    """Stop a streaming pipeline gracefully."""
+@click.option("--execution-id", "-e", help="Specific execution ID to check")
+@click.option(
+    "--format",
+    "-f",
+    default="table",
+    type=click.Choice(["table", "json"]),
+    help="Output format",
+)
+def status(config: str, execution_id: Optional[str], format: str):
+    """Check status of streaming pipelines."""
+    code = _status_impl(config, execution_id, format)
+    if _in_click_context():
+        sys.exit(code)
+    return code
+
+
+def _stop_impl(config: str, execution_id: str, timeout: int) -> int:
+    """Core implementation for 'stop' that returns an exit code."""
     try:
         context = _load_context_from_dsl(config)
 
@@ -148,16 +180,29 @@ def stop(config: str, execution_id: str, timeout: int):
         stopped = executor.stop_streaming_pipeline(execution_id, timeout=timeout)
         if stopped:
             click.echo(f"Pipeline '{execution_id}' stopped successfully.")
+            return ExitCode.SUCCESS.value
         else:
             click.echo(
                 f"Failed to stop pipeline '{execution_id}' within {timeout}s.", err=True
             )
-            sys.exit(ExitCode.EXECUTION_ERROR.value)
+            return ExitCode.EXECUTION_ERROR.value
 
     except Exception as e:
         click.echo(f"Error stopping pipeline: {e}", err=True)
         logger.exception("Stop pipeline failed")
-        sys.exit(ExitCode.EXECUTION_ERROR.value)
+        return ExitCode.EXECUTION_ERROR.value
+
+
+@streaming.command()
+@click.option("--config", "-c", required=True, help="Path to configuration file")
+@click.option("--execution-id", "-e", required=True, help="Execution ID to stop")
+@click.option("--timeout", "-t", default=60, help="Timeout in seconds")
+def stop(config: str, execution_id: str, timeout: int):
+    """Stop a streaming pipeline gracefully."""
+    code = _stop_impl(config, execution_id, timeout)
+    if _in_click_context():
+        sys.exit(code)
+    return code
 
 
 def _list_all_pipelines_status(executor: Any) -> List[Dict[str, Any]]:
