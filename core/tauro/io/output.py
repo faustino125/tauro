@@ -56,11 +56,10 @@ class DataFrameConverter(BaseIO):
 
     def _is_spark_dataframe(self, df: Any) -> bool:
         """Check if DataFrame is a Spark DataFrame."""
-        return (
-            hasattr(df, "sql_ctx")
-            or hasattr(df, "sparkSession")
-            or "pyspark.sql" in str(type(df))
-        )
+        try:
+            return isinstance(df, DataFrame)
+        except Exception:
+            return hasattr(df, "sparkSession")
 
 
 class PathResolver(BaseIO):
@@ -128,7 +127,6 @@ class PathResolver(BaseIO):
         sub_folder = components["sub_folder"]
         table_name = components["table_name"]
 
-        # Keep as string for cloud URIs; Path still works for local
         if base_path.startswith(("s3://", "abfss://", "gs://", "dbfs:/")):
             return f"{base_path.rstrip('/')}/{schema}/{sub_folder}/{table_name}"
         return Path(base_path) / schema / sub_folder / table_name
@@ -251,7 +249,6 @@ class ModelArtifactManager(BaseIO):
 
     def _create_artifact_directory(self, path: Path) -> None:
         """Create the artifact directory if it doesn't exist (local mode)."""
-        # Reuse BaseIO helper to create parent dirs in local mode
         self._prepare_local_directory(str(path))
         try:
             path.mkdir(parents=True, exist_ok=True)
@@ -279,6 +276,10 @@ class UnityCatalogOperations(BaseIO):
             ).lower()
             == "true"
         )
+
+    def is_enabled(self) -> bool:
+        """Public helper to check if Unity Catalog is enabled."""
+        return self._unity_catalog_enabled
 
     def ensure_schema_exists(
         self, catalog: str, schema: str, output_path_override: Optional[str] = None
@@ -398,13 +399,11 @@ class UnityCatalogManager(BaseIO):
         table_name = config.get("table_name", parsed["table_name"])
         full_table_name = f"{catalog}.{schema}.{table_name}"
 
-        output_path = self._ctx_get("output_path", "")
-        storage_location = f"{output_path}/{schema}" if output_path else ""
+        base_output = config.get("output_path") or self._ctx_get("output_path", "")
+        storage_location = f"{base_output}/{schema}" if base_output else ""
 
         try:
-            self.uc_operations.ensure_schema_exists(
-                catalog, schema, config.get("output_path")
-            )
+            self.uc_operations.ensure_schema_exists(catalog, schema, base_output)
             writer_config = self._prepare_writer_config(config, start_date, end_date)
             writer = self.writer_factory.get_writer("delta")
             self._execute_write_operation(
@@ -468,7 +467,6 @@ class UnityCatalogManager(BaseIO):
         if not table_name or not full_table_name:
             raise ConfigurationError("Incomplete configuration to determine table name")
 
-        # Determine destination path for Delta files
         if not storage_location:
             raise ConfigurationError(
                 "Storage location cannot be empty for Unity Catalog writes"
@@ -478,7 +476,6 @@ class UnityCatalogManager(BaseIO):
         logger.info(f"Writing Delta data to path: {destination_path}")
         writer.write(df, destination_path, config)
 
-        # Create table if not exists and point to destination
         try:
             spark = self._ctx_spark()
             spark.sql(
@@ -506,19 +503,16 @@ class UnityCatalogManager(BaseIO):
         description = config.get("description")
         partition_col = config.get("partition_col")
 
-        # Table comment
         self.uc_operations.add_table_comment(
             full_table_name, description, partition_col
         )
 
-        # Optimize (when date range provided or configured overwrite strategy)
         should_optimize = config.get("optimize", True)
         if should_optimize and partition_col and start_date and end_date:
             self.uc_operations.optimize_table(
                 full_table_name, partition_col, start_date, end_date
             )
 
-        # Vacuum
         retention_hours = config.get("vacuum_retention_hours")
         if retention_hours is not None or config.get("vacuum", False):
             self.uc_operations.execute_vacuum(full_table_name, retention_hours)
@@ -603,7 +597,7 @@ class OutputManager(BaseIO):
 
         if (
             dataset_config.get("format") == SupportedFormats.UNITY_CATALOG.value
-            and not self.unity_catalog_manager.uc_operations._unity_catalog_enabled
+            and not self.unity_catalog_manager.uc_operations.is_enabled()
         ):
             raise ConfigurationError(
                 "Unity Catalog is configured for this output but not enabled in Spark. "
@@ -629,7 +623,7 @@ class OutputManager(BaseIO):
         return (
             dataset_config
             and dataset_config.get("format") == SupportedFormats.UNITY_CATALOG.value
-            and self.unity_catalog_manager.uc_operations._unity_catalog_enabled
+            and self.unity_catalog_manager.uc_operations.is_enabled()
         )
 
 

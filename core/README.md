@@ -1,5 +1,53 @@
 # Tauro
 
+Tauro es un framework poderoso y flexible para la ejecución y gestión de pipelines de datos, diseñado para ser accesible tanto para usuarios no técnicos como para desarrolladores avanzados. Proporciona una interfaz unificada para:
+
+- Ejecución de jobs batch (procesamiento por lotes)
+- Gestión de pipelines streaming (procesamiento en tiempo real)
+- Configuración basada en archivos (YAML/JSON/Python)
+- Generación de proyectos desde templates predefinidos
+- Soporte para arquitectura Medallion (Bronze → Silver → Gold)
+
+## Arquitectura del Proyecto
+
+Tauro está organizado en módulos principales:
+
+### 🔧 CLI (`tauro.cli`)
+- Interfaz de línea de comandos principal
+- Gestión de configuración y descubrimiento automático
+- Validación de seguridad y manejo de paths
+- Logging centralizado
+
+### ⚙️ Config (`tauro.config`)
+- Gestión de configuración cohesiva
+- Soporte para múltiples formatos (YAML/JSON/Python)
+- Interpolación de variables
+- Validación de configuración
+- Gestión de sesiones Spark
+
+### 🔄 Exec (`tauro.exec`)
+- Ejecución de pipelines
+- Resolución de dependencias
+- Validación de pipelines
+- Estado y monitoreo de ejecución
+
+### 📝 IO (`tauro.io`)
+- Manejo unificado de entrada/salida
+- Soporte para múltiples formatos
+- Validación de datos
+- Factories para readers/writers
+
+### 🌊 Streaming (`tauro.streaming`)
+- Gestión de pipelines en tiempo real
+- Manejo de queries
+- Validación específica para streaming
+- Lectores y escritores especializados
+
+## Requisitos
+
+- Python 3.9+
+- pyspark (opcional, para procesamiento con Spark)
+- Databricks Connect (opcional, para modo Databricks/Distributed)
 Tauro helps you run data pipelines without needing to be a developer. Think of it as a “remote control” to:
 - Run batch jobs (for files or tables that update on a schedule)
 - Start and monitor streaming jobs (for real‑time data)

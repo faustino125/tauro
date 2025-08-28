@@ -10,7 +10,7 @@ class BaseIO:
     """Base class for input/output operations with enhanced validation and error handling."""
 
     def __init__(self, context: Dict[str, Any]):
-        """Initialize BaseIO with application context (dict u objeto Context)."""
+        """Initialize BaseIO with application context (dict or Context object)."""
         self.context = context
         self.config_validator = ConfigValidator()
         logger.debug("BaseIO initialized with context")
@@ -53,6 +53,11 @@ class BaseIO:
     def _prepare_local_directory(self, path: str) -> None:
         """Create local directories if necessary."""
         if self._is_local():
+            if "://" in path or path.startswith("dbfs:/"):
+                logger.debug(
+                    f"Skipping local directory creation for non-local path: {path}"
+                )
+                return
             try:
                 dir_path = os.path.dirname(path)
                 if dir_path and not os.path.isdir(dir_path):

@@ -3,7 +3,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -50,22 +50,17 @@ class UnifiedPipelineState:
     """Unified state for coordinating batch and streaming pipeline execution."""
 
     def __init__(self, circuit_breaker_threshold: int = 3):
-        """
-        Initialize the unified pipeline state.
-
-        Args:
-            circuit_breaker_threshold: Number of failures before circuit breaker opens
-        """
+        """Initialize the unified pipeline state."""
         self._lock = threading.RLock()
         self._nodes: Dict[str, NodeExecutionInfo] = {}
         self._circuit_breaker_threshold = circuit_breaker_threshold
         self._failure_counts: Dict[str, int] = defaultdict(int)
         self._circuit_open: bool = False
 
-        # State tracking
         self._pipeline_status: str = "initializing"
         self._batch_outputs: Dict[str, str] = {}
         self._streaming_queries: Dict[str, Any] = {}
+        self._streaming_stopper: Optional[Callable[[str], bool]] = None
         self._cross_dependencies: Dict[str, Set[str]] = {}
 
     def register_node(
@@ -74,14 +69,7 @@ class UnifiedPipelineState:
         node_type: NodeType,
         dependencies: Optional[List[str]] = None,
     ) -> None:
-        """
-        Register a node in the unified state.
-
-        Args:
-            node_name: Name of the node
-            node_type: Type of the node (batch or streaming)
-            dependencies: List of dependency node names
-        """
+        """Register a node in the unified state."""
         with self._lock:
             if node_name in self._nodes:
                 raise ValueError(f"Node '{node_name}' already registered")
@@ -92,12 +80,10 @@ class UnifiedPipelineState:
                 dependencies=dependencies or [],
             )
 
-            # Register reverse dependencies
             for dep in dependencies or []:
                 if dep in self._nodes:
                     self._nodes[dep].dependents.add(node_name)
 
-            # Identify cross-dependencies (streaming -> batch)
             if node_type == NodeType.STREAMING:
                 batch_deps = [
                     dep
@@ -113,15 +99,7 @@ class UnifiedPipelineState:
             )
 
     def start_node_execution(self, node_name: str) -> bool:
-        """
-        Start execution of a node if dependencies are ready.
-
-        Args:
-            node_name: Name of the node to start
-
-        Returns:
-            True if node was started, False if dependencies not ready
-        """
+        """Start execution of a node if dependencies are ready."""
         with self._lock:
             if node_name not in self._nodes:
                 raise ValueError(f"Node '{node_name}' not registered")
@@ -146,14 +124,7 @@ class UnifiedPipelineState:
         output_path: Optional[str] = None,
         execution_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """
-        Mark a node as completed successfully.
-
-        Args:
-            node_name: Name of the completed node
-            output_path: Path to node's output (for batch nodes)
-            execution_metadata: Additional execution metadata
-        """
+        """Mark a node as completed successfully."""
         with self._lock:
             if node_name not in self._nodes:
                 raise ValueError(f"Node '{node_name}' not registered")
@@ -164,7 +135,6 @@ class UnifiedPipelineState:
             node.output_path = output_path
             node.execution_metadata = execution_metadata or {}
 
-            # Register output for batch nodes
             if node.node_type == NodeType.BATCH and output_path:
                 self._batch_outputs[node_name] = output_path
 
@@ -173,17 +143,10 @@ class UnifiedPipelineState:
                 f"Completed {node.node_type.value} node '{node_name}' in {execution_time:.2f}s"
             )
 
-            # Notify dependents
             self._notify_dependents(node_name)
 
     def fail_node_execution(self, node_name: str, error: str) -> None:
-        """
-        Handle node failure with retry logic and circuit breaker.
-
-        Args:
-            node_name: Name of the failed node
-            error: Error message
-        """
+        """Handle node failure with retry logic and circuit breaker."""
         with self._lock:
             if node_name not in self._nodes:
                 raise ValueError(f"Node '{node_name}' not registered")
@@ -191,7 +154,6 @@ class UnifiedPipelineState:
             node = self._nodes[node_name]
             self._failure_counts[node_name] += 1
 
-            # Circuit breaker check
             if self._failure_counts[node_name] > self._circuit_breaker_threshold:
                 logger.critical(f"Circuit breaker triggered for node '{node_name}'")
                 self._circuit_open = True
@@ -201,7 +163,6 @@ class UnifiedPipelineState:
                 self._propagate_failure(node_name)
                 return
 
-            # Retry logic
             if node.retry_count < node.max_retries:
                 node.retry_count += 1
                 node.status = NodeStatus.RETRYING
@@ -230,64 +191,34 @@ class UnifiedPipelineState:
                 logger.info(f"Retrying node '{node_name}'")
 
     def register_streaming_query(self, node_name: str, query: Any) -> None:
-        """
-        Register a streaming query for tracking.
-
-        Args:
-            node_name: Name of the node
-            query: Streaming query object
-        """
+        """Register a streaming query for tracking."""
         with self._lock:
             self._streaming_queries[node_name] = query
             logger.debug(f"Registered streaming query for node '{node_name}'")
 
+    def set_streaming_stopper(self, stopper: Callable[[str], bool]) -> None:
+        """Register a stopper function to stop queries by execution_id (string)."""
+        with self._lock:
+            self._streaming_stopper = stopper
+
     def get_batch_output_path(self, node_name: str) -> Optional[str]:
-        """
-        Get the output path of a batch node.
-
-        Args:
-            node_name: Name of the batch node
-
-        Returns:
-            Output path if available, None otherwise
-        """
+        """Get the output path of a batch node."""
         with self._lock:
             return self._batch_outputs.get(node_name)
 
     def is_node_ready(self, node_name: str) -> bool:
-        """
-        Check if a node is ready to execute.
-
-        Args:
-            node_name: Name of the node
-
-        Returns:
-            True if node is ready, False otherwise
-        """
+        """Check if a node is ready to execute."""
         with self._lock:
             return self._are_dependencies_ready(node_name)
 
     def get_node_status(self, node_name: str) -> Optional[NodeStatus]:
-        """
-        Get the status of a node.
-
-        Args:
-            node_name: Name of the node
-
-        Returns:
-            Node status if node exists, None otherwise
-        """
+        """Get the status of a node."""
         with self._lock:
             node = self._nodes.get(node_name)
             return node.status if node else None
 
     def get_ready_nodes(self) -> List[str]:
-        """
-        Get list of nodes ready for execution.
-
-        Returns:
-            List of node names that are ready to execute
-        """
+        """Get list of nodes ready for execution."""
         with self._lock:
             ready_nodes = []
             for node_name, node in self._nodes.items():
@@ -298,12 +229,7 @@ class UnifiedPipelineState:
             return ready_nodes
 
     def get_pipeline_summary(self) -> Dict[str, Any]:
-        """
-        Get summary of the pipeline state.
-
-        Returns:
-            Dictionary with pipeline summary information
-        """
+        """Get summary of the pipeline state."""
         with self._lock:
             summary = {
                 "total_nodes": len(self._nodes),
@@ -330,12 +256,7 @@ class UnifiedPipelineState:
             return summary
 
     def validate_cross_dependencies(self) -> List[str]:
-        """
-        Validate cross-dependencies between batch and streaming nodes.
-
-        Returns:
-            List of validation warnings
-        """
+        """Validate cross-dependencies between batch and streaming nodes."""
         warnings = []
 
         with self._lock:
@@ -356,34 +277,49 @@ class UnifiedPipelineState:
         return warnings
 
     def stop_dependent_streaming_nodes(self, failed_batch_node: str) -> List[str]:
-        """
-        Stop streaming nodes that depend on a failed batch node.
-
-        Args:
-            failed_batch_node: Name of the failed batch node
-
-        Returns:
-            List of stopped streaming node names
-        """
+        """Stop streaming nodes that depend on a failed batch node."""
         stopped_nodes = []
 
         with self._lock:
             for streaming_node, batch_deps in self._cross_dependencies.items():
                 if failed_batch_node in batch_deps:
                     streaming_query = self._streaming_queries.get(streaming_node)
-                    if streaming_query and hasattr(streaming_query, "stop"):
-                        try:
-                            streaming_query.stop()
-                            self._nodes[streaming_node].status = NodeStatus.CANCELLED
-                            stopped_nodes.append(streaming_node)
-                            logger.warning(
-                                f"Stopped streaming node '{streaming_node}' due to "
-                                f"failed dependency '{failed_batch_node}'"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to stop streaming node '{streaming_node}': {e}"
-                            )
+                    if streaming_query:
+                        if hasattr(streaming_query, "stop"):
+                            try:
+                                streaming_query.stop()
+                                self._nodes[
+                                    streaming_node
+                                ].status = NodeStatus.CANCELLED
+                                stopped_nodes.append(streaming_node)
+                                logger.warning(
+                                    f"Stopped streaming node '{streaming_node}' due to "
+                                    f"failed dependency '{failed_batch_node}'"
+                                )
+                                continue
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to stop streaming node '{streaming_node}': {e}"
+                                )
+                        if isinstance(streaming_query, str) and self._streaming_stopper:
+                            try:
+                                if self._streaming_stopper(streaming_query):
+                                    self._nodes[
+                                        streaming_node
+                                    ].status = NodeStatus.CANCELLED
+                                    stopped_nodes.append(streaming_node)
+                                    logger.warning(
+                                        f"Stopped streaming node '{streaming_node}' by id due to "
+                                        f"failed dependency '{failed_batch_node}'"
+                                    )
+                                else:
+                                    logger.error(
+                                        f"Stopper failed to stop streaming node '{streaming_node}'"
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error invoking stopper for '{streaming_node}': {e}"
+                                )
 
         return stopped_nodes
 
@@ -413,12 +349,7 @@ class UnifiedPipelineState:
                 )
 
     def _propagate_failure(self, failed_node: str) -> None:
-        """
-        Propagate failure to dependent nodes with circuit breaker awareness.
-
-        Args:
-            failed_node: Name of the failed node
-        """
+        """Propagate failure to dependent nodes with circuit breaker awareness."""
         if self._circuit_open:
             logger.error("Circuit open - propagating failure to all dependent nodes")
 
@@ -428,12 +359,7 @@ class UnifiedPipelineState:
             self.stop_dependent_streaming_nodes(failed_node)
 
     def set_pipeline_status(self, status: str) -> None:
-        """
-        Set the overall pipeline status.
-
-        Args:
-            status: New pipeline status
-        """
+        """Set the overall pipeline status."""
         with self._lock:
             self._pipeline_status = status
             logger.info(f"Pipeline status changed to: {status}")
@@ -452,9 +378,16 @@ class UnifiedPipelineState:
         with self._lock:
             for node_name, query in self._streaming_queries.items():
                 try:
-                    if hasattr(query, "isActive") and query.isActive:
+                    if hasattr(query, "isActive") and getattr(query, "isActive"):
                         query.stop()
-                        logger.info(f"Stopped streaming query for node '{node_name}'")
+                        logger.info(
+                            f"Stopped streaming query handle for node '{node_name}'"
+                        )
+                    elif isinstance(query, str) and self._streaming_stopper:
+                        self._streaming_stopper(query)
+                        logger.info(
+                            f"Requested stop by id for streaming node '{node_name}'"
+                        )
                 except Exception as e:
                     logger.warning(f"Error stopping streaming query: {e}")
 

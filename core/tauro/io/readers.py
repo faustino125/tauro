@@ -30,8 +30,12 @@ class SparkReaderMixin:
         return "distributed" if mode == "databricks" else mode
 
     def _spark_read(self, fmt: str, filepath: str, config: Dict[str, Any]) -> Any:
-        """Generic Spark read method."""
+        """Generic Spark read method with Spark presence validation."""
         spark = self._get_spark()
+        if spark is None:
+            raise ReadOperationError(
+                f"Spark session is not available in context; cannot read {fmt.upper()} from {filepath}"
+            )
         logger.info(f"Reading {fmt.upper()} data from: {filepath}")
         return (
             spark.read.options(**config.get("options", {})).format(fmt).load(filepath)
@@ -78,10 +82,16 @@ class DeltaReader(BaseReader, SparkReaderMixin):
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         try:
             spark = self._get_spark()
+            if spark is None:
+                raise ReadOperationError(
+                    f"Spark session is not available in context; cannot read DELTA from {source}"
+                )
             reader = spark.read.options(**config.get("options", {})).format("delta")
-            if version := config.get("version"):
+            version = config.get("versionAsOf") or config.get("version")
+            timestamp = config.get("timestampAsOf") or config.get("timestamp")
+            if version is not None:
                 return reader.option("versionAsOf", version).load(source)
-            if timestamp := config.get("timestamp"):
+            if timestamp is not None:
                 return reader.option("timestampAsOf", timestamp).load(source)
             return reader.load(source)
         except Exception as e:
@@ -93,36 +103,82 @@ class PickleReader(BaseReader, SparkReaderMixin):
 
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         try:
-            use_pandas = config.get("use_pandas", False)
-            mode = self._get_execution_mode()
-            if mode == "local" or use_pandas:
+            if not bool(config.get("allow_untrusted_pickle", False)):
+                raise ReadOperationError(
+                    "Reading pickle requires allow_untrusted_pickle=True due to security risks (arbitrary code execution)."
+                )
+
+            use_pandas = bool(config.get("use_pandas", False))
+            spark = self._get_spark()
+
+            if spark is None or use_pandas:
                 return self._read_local_pickle(source, config)
-            else:
-                return self._read_distributed_pickle(source, config)
+
+            return self._read_distributed_pickle(source, config)
         except Exception as e:
             raise ReadOperationError(f"Failed to read Pickle from {source}: {e}") from e
 
     def _read_local_pickle(self, source: str, config: Dict[str, Any]) -> Any:
-        with open(source, "rb") as f:
-            data = pickle.load(f)
+        import os
 
-        # Convert Pandas -> Spark si procede
+        if not os.path.exists(source):
+            raise ReadOperationError(f"Pickle file not found: {source}")
+
+        try:
+            with open(source, "rb") as f:
+                data = pickle.load(f)
+        except (IOError, OSError) as e:
+            raise ReadOperationError(f"Failed to read pickle file {source}: {e}") from e
+
         if not config.get("use_pandas", False):
             try:
                 import pandas as pd  # type: ignore
 
                 if isinstance(data, pd.DataFrame):
                     spark = self._get_spark()
-                    return spark.createDataFrame(data)
+                    if spark is not None:
+                        return spark.createDataFrame(data)
             except Exception:
                 pass
         return data
 
     def _read_distributed_pickle(self, source: str, config: Dict[str, Any]) -> Any:
         spark = self._get_spark()
-        rdd = spark.sparkContext.binaryFiles(source).map(lambda x: pickle.loads(x[1]))  # type: ignore[attr-defined]
         to_dataframe = config.get("to_dataframe", True)
-        return spark.createDataFrame(rdd) if to_dataframe else rdd
+        try:
+            bf_df = spark.read.format("binaryFile").load(source)
+        except Exception as e:
+            raise ReadOperationError(
+                f"binaryFile datasource is unavailable; cannot read pickle(s): {e}"
+            )
+
+        try:
+            rows = bf_df.select("content").collect()
+        except Exception as e:
+            raise ReadOperationError(f"Failed to read binary content: {e}")
+
+        objects = []
+        for r in rows:
+            try:
+                data = pickle.loads(bytes(r[0]))
+            except Exception as e:
+                raise ReadOperationError(f"Failed to unpickle object: {e}")
+            objects.append(data)
+
+        if not to_dataframe:
+            return objects
+
+        if not objects:
+            raise ReadOperationError(
+                "No pickled objects found to create a DataFrame; set to_dataframe=False to get a list."
+            )
+
+        first = objects[0]
+        if not isinstance(first, (dict, tuple, list)):
+            raise ReadOperationError(
+                "Cannot create DataFrame from pickled objects; expected dict/tuple/list rows. Set to_dataframe=False."
+            )
+        return spark.createDataFrame(objects)
 
 
 class AvroReader(BaseReader, SparkReaderMixin):
@@ -152,6 +208,16 @@ class XMLReader(BaseReader, SparkReaderMixin):
         try:
             row_tag = config.get("rowTag", "row")
             spark = self._get_spark()
+            if spark is None:
+                raise ReadOperationError(
+                    f"Spark session is not available in context; cannot read XML from {source}"
+                )
+            try:
+                _ = spark._jvm.com.databricks.spark.xml
+            except Exception:
+                raise ConfigurationError(
+                    "XML reader requires the com.databricks:spark-xml package. Install the jar or add --packages com.databricks:spark-xml:latest_2.12"
+                )
             logger.info(f"Reading XML file with row tag '{row_tag}': {source}")
             return (
                 spark.read.format("com.databricks.spark.xml")
@@ -169,10 +235,16 @@ class QueryReader(BaseReader, SparkReaderMixin):
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         try:
             query = config.get("query")
-            if not query:
-                raise ConfigurationError("Query format specified without SQL query")
+            if not query or not query.strip():
+                raise ConfigurationError(
+                    "Query format specified without SQL query or query is empty"
+                )
 
             spark = self._get_spark()
+            if spark is None:
+                raise ReadOperationError(
+                    "Spark session is not available in context; cannot execute SQL query"
+                )
             logger.info(f"Executing SQL query: {query[:100]}...")
             return spark.sql(query)
         except Exception as e:

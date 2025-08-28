@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Set
 
 from loguru import logger  # type: ignore
 
-from tauro.exec.commands import Command, ExperimentCommand, MLNodeCommand, NodeCommand
+from tauro.exec.commands import Command, MLNodeCommand, NodeCommand
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
 
@@ -212,10 +212,10 @@ class NodeExecutor:
             common_params["spark"] = self.context.spark
 
         if self._is_experiment_node(node_config):
-            logger.info(f"Creating experiment command for node '{node_name}'")
-            return ExperimentCommand(**common_params)
-        else:
-            return MLNodeCommand(**common_params)
+            logger.info(
+                f"Node '{node_name}' marked experimental but ExperimentCommand is disabled; running as MLNodeCommand"
+            )
+        return MLNodeCommand(**common_params)
 
     def _is_experiment_node(self, node_config: Dict[str, Any]) -> bool:
         """Check if a node is configured for experimentation using explicit flag."""
@@ -486,9 +486,6 @@ class NodeExecutor:
         if self.is_ml_layer:
             output_params["model_version"] = ml_info["model_version"]
             output_params["project_name"] = ml_info.get("project_name", "")
-
-            if hasattr(command, "get_execution_metadata"):
-                output_params["execution_metadata"] = command.get_execution_metadata()
 
         self.output_manager.save_output(**output_params)
         logger.info(f"Output saved successfully for node '{node_name}'")

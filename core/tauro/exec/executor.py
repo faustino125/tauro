@@ -413,6 +413,9 @@ class HybridExecutor(BaseExecutor):
                 validation_result["streaming_nodes"],
                 node_configs,
             )
+            self.unified_state.set_streaming_stopper(
+                lambda eid: self.streaming_manager.stop_pipeline(eid, graceful=True)
+            )
             return self._execute_unified_hybrid_pipeline(
                 validation_result["batch_nodes"],
                 validation_result["streaming_nodes"],
@@ -513,11 +516,11 @@ class HybridExecutor(BaseExecutor):
 
             for attempt in range(self.max_retries + 1):
                 try:
-                    output_path = self._execute_node_with_retry(
+                    self._execute_node_with_retry(
                         node, start_date, end_date, ml_info, attempt
                     )
-                    results[node] = {"status": "completed", "output_path": output_path}
-                    self.unified_state.complete_node_execution(node, output_path)
+                    results[node] = {"status": "completed"}
+                    self.unified_state.complete_node_execution(node)
                     break
 
                 except Exception as e:
@@ -541,10 +544,10 @@ class HybridExecutor(BaseExecutor):
         end_date: str,
         ml_info: Dict[str, Any],
         attempt: int,
-    ) -> Any:
+    ) -> None:
         """Execute a node with retry logic."""
         try:
-            return self.node_executor.execute_single_node(
+            self.node_executor.execute_single_node(
                 node_name, start_date, end_date, ml_info
             )
         except Exception:

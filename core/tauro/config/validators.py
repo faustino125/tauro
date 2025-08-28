@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+from loguru import logger  # type: ignore
 
 from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
 
@@ -131,7 +132,11 @@ class MLValidator:
     REQUIRED_NODE_FIELDS = ["model", "input", "output"]
 
     def validate_ml_pipeline_config(
-        self, pipelines_config: Dict[str, Any], nodes_config: Dict[str, Any]
+        self,
+        pipelines_config: Dict[str, Any],
+        nodes_config: Dict[str, Any],
+        *,
+        strict: bool = True,
     ) -> None:
         for pipeline_name, pipeline in pipelines_config.items():
             for node_name in pipeline.get("nodes", []):
@@ -141,50 +146,61 @@ class MLValidator:
                         f"is not defined in global nodes configuration"
                     )
                 node_config = nodes_config[node_name]
-                self._validate_node_config(node_config, node_name)
-            self._validate_spark_ml_config(pipeline.get("spark_config", {}))
+                self._validate_node_config(node_config, node_name, strict=strict)
+            self._validate_spark_ml_config(
+                pipeline.get("spark_config", {}), strict=strict
+            )
 
     def _validate_node_config(
-        self, node_config: Dict[str, Any], node_name: str
+        self, node_config: Dict[str, Any], node_name: str, *, strict: bool = True
     ) -> None:
         missing_fields = [
             field for field in self.REQUIRED_NODE_FIELDS if field not in node_config
         ]
         if missing_fields:
-            raise ConfigValidationError(
-                f"ML node '{node_name}' is missing required fields: {', '.join(missing_fields)}"
-            )
+            msg = f"ML node '{node_name}' is missing required fields: {', '.join(missing_fields)}"
+            if strict:
+                raise ConfigValidationError(msg)
+            logger.warning(msg)
 
         model_config = node_config.get("model", {})
         model_type = model_config.get("type")
         if model_type and model_type not in self.SUPPORTED_MODEL_TYPES:
-            raise ConfigValidationError(
+            msg = (
                 f"Node '{node_name}' has unsupported model type: {model_type}. "
                 f"Supported: {', '.join(self.SUPPORTED_MODEL_TYPES)}"
             )
+            if strict:
+                raise ConfigValidationError(msg)
+            logger.warning(msg)
 
         hyperparams = node_config.get("hyperparams", {})
         if hyperparams and not isinstance(hyperparams, dict):
-            raise ConfigValidationError(
-                f"Node '{node_name}' has invalid hyperparams format; expected dict, got {type(hyperparams).__name__}"
-            )
+            msg = f"Node '{node_name}' has invalid hyperparams format; expected dict, got {type(hyperparams).__name__}"
+            if strict:
+                raise ConfigValidationError(msg)
+            logger.warning(msg)
 
         metrics = node_config.get("metrics", [])
         if metrics and not isinstance(metrics, list):
-            raise ConfigValidationError(
-                f"Node '{node_name}' has invalid metrics format; expected list, got {type(metrics).__name__}"
-            )
+            msg = f"Node '{node_name}' has invalid metrics format; expected list, got {type(metrics).__name__}"
+            if strict:
+                raise ConfigValidationError(msg)
+            logger.warning(msg)
 
-    def _validate_spark_ml_config(self, spark_config: Dict[str, Any]) -> None:
+    def _validate_spark_ml_config(
+        self, spark_config: Dict[str, Any], *, strict: bool = True
+    ) -> None:
         required_configs = [
             "spark.ml.pipeline.cacheStorageLevel",
             "spark.ml.feature.pipeline.enabled",
         ]
         for config in required_configs:
             if config not in spark_config:
-                raise ConfigValidationError(
-                    f"Missing required Spark ML config: {config}"
-                )
+                msg = f"Missing recommended Spark ML config: {config}"
+                if strict:
+                    raise ConfigValidationError(msg)
+                logger.warning(msg)
 
     def validate_pipeline_compatibility(
         self,
@@ -221,13 +237,17 @@ class StreamingValidator:
         self.policy = format_policy or FormatPolicy()
 
     def validate_streaming_pipeline_config(
-        self, pipeline_config: Dict[str, Any]
+        self, pipeline_config: Dict[str, Any], *, strict: bool = True
     ) -> None:
         spark_config = pipeline_config.get("spark_config", {})
-        self._validate_spark_streaming_config(spark_config)
+        self._validate_spark_streaming_config(spark_config, strict=strict)
 
     def validate_streaming_pipeline_with_nodes(
-        self, pipeline_config: Dict[str, Any], nodes_config: Dict[str, Any]
+        self,
+        pipeline_config: Dict[str, Any],
+        nodes_config: Dict[str, Any],
+        *,
+        strict: bool = True,
     ) -> None:
         pipeline_name = pipeline_config.get("name", "unnamed_pipeline")
 
@@ -238,12 +258,12 @@ class StreamingValidator:
                     f"is not defined in global nodes configuration"
                 )
             node_config = nodes_config[node_name]
-            self._validate_node_formats(node_config, node_name)
+            self._validate_node_formats(node_config, node_name, strict=strict)
 
-        self.validate_streaming_pipeline_config(pipeline_config)
+        self.validate_streaming_pipeline_config(pipeline_config, strict=strict)
 
     def _validate_node_formats(
-        self, node_config: Dict[str, Any], node_name: str
+        self, node_config: Dict[str, Any], node_name: str, *, strict: bool = True
     ) -> None:
         input_config = node_config.get("input", {})
         output_config = node_config.get("output", {})
@@ -251,29 +271,38 @@ class StreamingValidator:
         if isinstance(input_config, dict):
             input_format = input_config.get("format")
             if input_format and not self.policy.is_supported_input(input_format):
-                raise ConfigValidationError(
+                msg = (
                     f"Node '{node_name}' has unsupported streaming input format: {input_format}. "
                     f"Supported: {self.policy.get_supported_input_formats()}"
                 )
+                if strict:
+                    raise ConfigValidationError(msg)
+                logger.warning(msg)
 
         if isinstance(output_config, dict):
             output_format = output_config.get("format")
             if output_format and not self.policy.is_supported_output(output_format):
-                raise ConfigValidationError(
+                msg = (
                     f"Node '{node_name}' has unsupported streaming output format: {output_format}. "
                     f"Supported: {self.policy.get_supported_output_formats()}"
                 )
+                if strict:
+                    raise ConfigValidationError(msg)
+                logger.warning(msg)
 
-    def _validate_spark_streaming_config(self, spark_config: Dict[str, Any]) -> None:
+    def _validate_spark_streaming_config(
+        self, spark_config: Dict[str, Any], *, strict: bool = True
+    ) -> None:
         required_configs = [
             "spark.streaming.backpressure.enabled",
             "spark.streaming.receiver.maxRate",
         ]
         for config in required_configs:
             if config not in spark_config:
-                raise ConfigValidationError(
-                    f"Missing required Spark streaming config: {config}"
-                )
+                msg = f"Missing recommended Spark streaming config: {config}"
+                if strict:
+                    raise ConfigValidationError(msg)
+                logger.warning(msg)
 
     def validate_pipeline_compatibility(
         self,

@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
@@ -66,13 +67,9 @@ class ConfigValidator(BaseValidator):
             return False
 
         try:
-            year, month, day = date_str.split("-")
-            return (
-                1900 <= int(year) <= 2100
-                and 1 <= int(month) <= 12
-                and 1 <= int(day) <= 31
-            )
-        except (ValueError, IndexError):
+            datetime.strptime(date_str, "%Y-%m-%d")
+            return True
+        except ValueError:
             return False
 
 

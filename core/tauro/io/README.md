@@ -2,19 +2,29 @@
 
 A lightweight, modular IO layer for reading and writing data in Tauro pipelines. It supports both local and distributed (Spark) environments, multiple file formats, Delta Lake, and Databricks Unity Catalog, with clear configuration and sane defaults.
 
-This document explains how to set up the context, read and write data, and use advanced features like schema overwrite, replaceWhere, and model artifact handling.
+This module provides a robust and flexible I/O system for handling various data formats and storage systems, with built-in support for both local and distributed processing modes.
 
 ---
 
 ## Key Features
 
-- Unified context model: works with both a plain Python dict or Tauro Config Context objects.
-- Readers for Parquet, CSV, JSON, Delta, Avro, ORC, XML, Pickle, and SQL queries.
-- Writers for Delta, Parquet, CSV, JSON, ORC; plus a Unity Catalog manager.
-- Parallel input loading using Spark when available.
-- Safe, consistent helpers for Spark and environment access.
-- Robust validation and error handling.
-- Pluggable factory patterns for readers and writers.
+- Unified context model: works with both a plain Python dict or Tauro Config Context objects
+- Support for multiple data formats:
+  - Read/Write: Parquet, JSON, CSV, Delta, Pickle, Avro, ORC, XML
+  - Additional support for SQL queries and Unity Catalog
+- Execution modes:
+  - Local execution for development and testing
+  - Distributed execution with Spark support
+  - Special handling for Databricks environments
+- Enhanced validation and error handling:
+  - Robust configuration validation
+  - Comprehensive error handling with detailed logging
+  - Support for both fail-fast and continue-on-error modes
+- Advanced features:
+  - Automatic directory creation in local mode
+  - Cloud storage URI support (s3://, dbfs:/, etc.)
+  - Spark Connect detection and handling
+  - Delta Lake integration with vacuum support
 
 ---
 
@@ -86,12 +96,13 @@ context = {
             "table_name": "fact_sales",
             "partition_col": "event_date",
             "overwrite_strategy": "replaceWhere",
+            "vacuum_retention_hours": 168  # 7 days (minimum allowed)
         },
     },
     "output_path": "/data/output",
     "execution_mode": "local",  # or "distributed" / "databricks"
     "spark": spark_session,     # optional unless you use Spark-based operations
-    "global_settings": {"fail_on_error": True, "model_registry_path": "/data/models"},
+    "global_settings": {"fail_on_error": True}
 }
 ```
 
@@ -140,13 +151,31 @@ outputs.save_output(node, df, start_date="2025-01-01", end_date="2025-01-31")
 
 ### File/Object storage (DataWriter)
 
-- Supported formats: delta, parquet, csv, json, orc (see SupportedFormats).
+- Supported formats (SupportedFormats enum):
+  - PARQUET
+  - JSON
+  - CSV
+  - DELTA
+  - PICKLE
+  - AVRO
+  - ORC
+  - XML
+  - QUERY
+  - UNITY_CATALOG
+
+- Write modes (WriteMode enum):
+  - OVERWRITE (default)
+  - APPEND
+  - IGNORE
+  - ERROR
+
 - Common writer config:
   - format: required, e.g., "delta"
-  - write_mode: "overwrite" (default) or "append" (see WriteMode)
+  - write_mode: corresponds to WriteMode enum values
   - overwrite_schema: True (format dependent; default True for Delta)
   - partition: "col" or ["col1", "col2"]
   - options: dict of format-specific options
+    - CSV default options: {"header": "true"}
 
 Example output_config:
 
@@ -244,25 +273,54 @@ In local mode, directories are created if missing.
 
 ---
 
-## Error Handling
+## Error Handling and Logging
 
-OutputManager uses ErrorHandler:
-- global_settings.fail_on_error (default True) controls whether to raise on error.
-- Errors in individual outputs are isolated; logs include context.
+The module uses loguru for comprehensive logging and includes robust error handling:
 
-Best practice: keep fail_on_error=True in production to avoid silent failures.
+- Validation errors through ConfigValidator
+- IO operation errors with detailed context
+- Directory creation errors in local mode
+- Spark context availability errors
+- Detailed logging of operations and state changes
+
+Best Practices:
+- Use try-catch blocks around IO operations
+- Check Spark availability before distributed operations
+- Validate paths and permissions before writing
+- Monitor logs for operation status and errors
+- Keep fail_on_error=True in production to avoid silent failures
 
 ---
 
-## Configuration Recap
+## Configuration and Context
 
-- input_config: keyed by dataset name. Each entry describes a source with a format.
-- output_config: keyed by output key (e.g., out_parquet:schema/sub/table). Each entry describes format and write options.
-- context-level:
-  - output_path: base directory/URI for outputs.
-  - execution_mode: "local", "distributed", or "databricks" (normalized internally).
-  - spark: SparkSession (optional, required for Spark operations).
-  - global_settings: general flags (fail_on_error, model_registry_path, etc).
+The BaseIO class provides a flexible context handling system that supports both dictionary and object-based configurations:
+
+### Context Properties
+- `execution_mode`: 
+  - "local" for local execution
+  - "distributed" for Spark-based execution
+  - "databricks" (automatically normalized to "distributed")
+- `spark`: SparkSession object (optional, required for Spark operations)
+- `input_config`: Input dataset configurations
+- `output_config`: Output configurations
+- `output_path`: Base directory/URI for outputs
+- `global_settings`: General configuration flags
+
+### Context Access Methods (BaseIO)
+- `_ctx_get(key, default=None)`: Safe context access for both dict and object
+- `_ctx_has(key)`: Check key existence
+- `_ctx_spark()`: Get SparkSession if available
+- `_ctx_mode()`: Get normalized execution mode
+- `_is_local()`: Check if running in local mode
+- `_spark_available()`: Check Spark context availability
+- `_is_spark_connect()`: Detect Spark Connect sessions
+
+### Configuration Validation
+- Required fields validation
+- Output key format validation
+- Configuration type checking
+- Directory structure validation in local mode
 
 ---
 
@@ -317,18 +375,5 @@ OutputManager(context).save_output({"output": ["out_delta:demo/raw/events"]}, in
   - save_model_artifacts(node, model_version)
 
 Implementation uses BaseIO helpers to access context consistently.
-
----
-
-## Troubleshooting
-
-- Spark not available:
-  - Ensure context["spark"] or context.spark is set when required.
-- Delta errors:
-  - Install delta-spark or ensure the cluster has Delta enabled.
-- UC errors:
-  - Check that UC is enabled in Spark (spark.databricks.unityCatalog.enabled=true) and you have permissions for catalog/schema/table.
-- File not found (local):
-  - Verify file paths and that execution_mode is set correctly.
 
 ---
