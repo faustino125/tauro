@@ -1,6 +1,6 @@
-import os
 import glob
-from typing import Any, Dict, List, Optional, Tuple, Set
+import os
+from typing import Any, Dict, List, Optional, Set, Tuple, Set
 
 from loguru import logger  # type: ignore
 
@@ -78,14 +78,22 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
         if not path:
             raise ConfigurationError(f"Missing filepath for '{input_key}'")
 
+        cloud_schemes = ("s3://", "abfss://", "gs://", "dbfs:/")
+        if any(str(path).startswith(pfx) for pfx in cloud_schemes):
+            return path
+
         if self._is_local():
-            if self._is_glob_path(path):
-                matches = glob.glob(path)
-                if not matches:
-                    raise FileNotFoundError(
-                        f"Glob pattern '{path}' did not match any files in local mode"
-                    )
+            if os.path.isdir(path):
                 return path
+            if os.path.isfile(path):
+                return path
+            if any(ch in str(path) for ch in ("*", "?", "[")):
+                matches = glob.glob(path)
+                if matches:
+                    return path
+                raise FileNotFoundError(
+                    f"Pattern '{path}' matched no files in local mode"
+                )
             if not os.path.exists(path):
                 raise FileNotFoundError(f"File '{path}' does not exist in local mode")
         return path
@@ -223,6 +231,21 @@ class InputLoader(BaseIO):
         if "xml" in configured_formats:
             self._try_import_xml()
             logger.debug("Format xml registration attempted")
+
+    def _get_configured_formats(self) -> Set[str]:
+        """Inspect input_config and return the set of formats in use."""
+        input_cfg = self._ctx_get("input_config", {}) or {}
+        formats = set()
+        for key, cfg in input_cfg.items():
+            try:
+                fmt = str((cfg or {}).get("format", "")).lower().strip()
+                if fmt:
+                    formats.add(fmt)
+            except Exception:
+                logger.debug(
+                    f"Skipping format detection for malformed input_config key: {key}"
+                )
+        return formats
 
     def _try_import_delta(self) -> None:
         """Try to import Delta Lake dependencies; don't raise at registration time."""
