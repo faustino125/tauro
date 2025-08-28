@@ -30,8 +30,12 @@ class SparkReaderMixin:
         return "distributed" if mode == "databricks" else mode
 
     def _spark_read(self, fmt: str, filepath: str, config: Dict[str, Any]) -> Any:
-        """Generic Spark read method."""
+        """Generic Spark read method with Spark presence validation."""
         spark = self._get_spark()
+        if spark is None:
+            raise ReadOperationError(
+                f"Spark session is not available in context; cannot read {fmt.upper()} from {filepath}"
+            )
         logger.info(f"Reading {fmt.upper()} data from: {filepath}")
         return (
             spark.read.options(**config.get("options", {})).format(fmt).load(filepath)
@@ -78,10 +82,16 @@ class DeltaReader(BaseReader, SparkReaderMixin):
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         try:
             spark = self._get_spark()
+            if spark is None:
+                raise ReadOperationError(
+                    f"Spark session is not available in context; cannot read DELTA from {source}"
+                )
             reader = spark.read.options(**config.get("options", {})).format("delta")
-            if version := config.get("version"):
+            version = config.get("versionAsOf") or config.get("version")
+            timestamp = config.get("timestampAsOf") or config.get("timestamp")
+            if version is not None:
                 return reader.option("versionAsOf", version).load(source)
-            if timestamp := config.get("timestamp"):
+            if timestamp is not None:
                 return reader.option("timestampAsOf", timestamp).load(source)
             return reader.load(source)
         except Exception as e:
@@ -106,7 +116,6 @@ class PickleReader(BaseReader, SparkReaderMixin):
         with open(source, "rb") as f:
             data = pickle.load(f)
 
-        # Convert Pandas -> Spark si procede
         if not config.get("use_pandas", False):
             try:
                 import pandas as pd  # type: ignore
@@ -152,6 +161,10 @@ class XMLReader(BaseReader, SparkReaderMixin):
         try:
             row_tag = config.get("rowTag", "row")
             spark = self._get_spark()
+            if spark is None:
+                raise ReadOperationError(
+                    f"Spark session is not available in context; cannot read XML from {source}"
+                )
             logger.info(f"Reading XML file with row tag '{row_tag}': {source}")
             return (
                 spark.read.format("com.databricks.spark.xml")
@@ -173,6 +186,10 @@ class QueryReader(BaseReader, SparkReaderMixin):
                 raise ConfigurationError("Query format specified without SQL query")
 
             spark = self._get_spark()
+            if spark is None:
+                raise ReadOperationError(
+                    "Spark session is not available in context; cannot execute SQL query"
+                )
             logger.info(f"Executing SQL query: {query[:100]}...")
             return spark.sql(query)
         except Exception as e:

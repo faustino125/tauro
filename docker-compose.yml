@@ -23,10 +23,10 @@ services:
       resources:
         limits:
           cpus: '1'        # Limita el uso a 0.5 nucleos de CPU (la mitad de un nucleo)
-          memory: 500M        # Limita la memoria a 256 Megabytes
+          memory: 512M        # Limita la memoria a 512 Megabytes
         reservations:
-          cpus: '1'       # Reserva 0.25 nucleos de CPU
-          memory: 500M       # Reserva 128 Megabytes de memoria
+          cpus: '0.5'       # Reserva 0.5 nucleos de CPU
+          memory: 512M       # Reserva 512 Megabytes de memoria
 
 networks:
   tauro-network:

@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
+import threading
 
 from loguru import logger  # type: ignore
 
@@ -9,16 +10,19 @@ class SparkSessionFactory:
     """
 
     _session = None
+    _lock = threading.Lock()
 
     @classmethod
     def get_session(
         cls,
         mode: Literal["local", "databricks", "distributed"] = "databricks",
-        ml_config: Dict[str, Any] = None,
+    ml_config: Optional[Dict[str, Any]] = None,
     ):
         """Singleton Spark session with thread-safe initialization"""
         if cls._session is None:
-            cls._session = SparkSessionFactory.create_session(mode, ml_config)
+            with cls._lock:
+                if cls._session is None:  # double-checked locking
+                    cls._session = SparkSessionFactory.create_session(mode, ml_config)
         return cls._session
 
     @classmethod
@@ -51,7 +55,7 @@ class SparkSessionFactory:
     @staticmethod
     def create_session(
         mode: Literal["local", "databricks", "distributed"] = "databricks",
-        ml_config: Dict[str, Any] = None,
+    ml_config: Optional[Dict[str, Any]] = None,
     ):
         """Create a Spark session based on the specified mode with ML configurations."""
         logger.info(f"Attempting to create Spark session in {mode} mode")
@@ -70,7 +74,7 @@ class SparkSessionFactory:
             )
 
     @staticmethod
-    def _create_databricks_session(ml_config: Dict[str, Any] = None):
+    def _create_databricks_session(ml_config: Optional[Dict[str, Any]] = None):
         """
         Create a Databricks Connect session for remote execution with ML configs.
         """
@@ -106,7 +110,7 @@ class SparkSessionFactory:
             raise RuntimeError("Critical error creating session") from e
 
     @staticmethod
-    def _create_local_session(ml_config: Dict[str, Any] = None):
+    def _create_local_session(ml_config: Optional[Dict[str, Any]] = None):
         """Create a local Spark session with ML optimizations."""
         try:
             from pyspark.sql import SparkSession  # type: ignore
@@ -132,7 +136,13 @@ class SparkSessionFactory:
     @staticmethod
     def _apply_ml_configs(builder: Any, ml_config: Dict[str, Any]) -> Any:
         """Apply ML-related configurations to the Spark builder."""
+        protected = set(SparkSessionFactory.PROTECTED_CONFIGS or [])
         for k, v in (ml_config or {}).items():
+            if k in protected:
+                logger.warning(
+                    f"Skipping ML config '{k}' because it's in PROTECTED_CONFIGS"
+                )
+                continue
             try:
                 builder = builder.config(k, v)
             except Exception:

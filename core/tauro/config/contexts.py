@@ -78,12 +78,14 @@ class Context:
         nodes_config: Union[str, Dict],
         input_config: Union[str, Dict],
         output_config: Union[str, Dict],
+        *,
+        ml_info: Optional[Union[str, Dict[str, Any]]] = None,
+        spark_session: Optional[Any] = None,
     ):
         """Initialize the context with configuration sources."""
         self._config_loader = ConfigLoaderFactory()
         self._validator = ConfigValidator()
         self._interpolator = VariableInterpolator()
-
         self._load_configurations(
             global_settings,
             pipelines_config,
@@ -92,9 +94,13 @@ class Context:
             output_config,
         )
 
+        # Load ML info from explicit source or global_settings (dict or path)
+        self._load_ml_info(ml_info)
+
         self.format_policy = FormatPolicy(self.global_settings.get("format_policy", {}))
 
-        self.spark = SparkSessionFactory.get_session(
+        # Reuse provided Spark session if given; otherwise create lazily via factory
+        self.spark = spark_session or SparkSessionFactory.get_session(
             self.execution_mode, ml_config=self._get_spark_ml_config()
         )
         self._process_configurations()
@@ -132,6 +138,62 @@ class Context:
             output_config, "output config"
         )
 
+    def _load_ml_info(
+        self, ml_info_source: Optional[Union[str, Dict[str, Any]]]
+    ) -> None:
+        """Load ML info from file/dict or from global_settings['ml_info'].
+
+        - If provided a string path, use ConfigLoaderFactory to load it.
+        - If provided a dict, use it directly.
+        - Else, look for global_settings['ml_info'] (dict or path).
+        - Apply variable interpolation and sensible defaults.
+        """
+        source = ml_info_source
+        if source is None and isinstance(self.global_settings, dict):
+            source = self.global_settings.get("ml_info")
+
+        ml_info_data: Dict[str, Any] = {}
+        if isinstance(source, dict):
+            ml_info_data = source
+        elif isinstance(source, str):
+            try:
+                ml_info_data = self._config_loader.load_config(source)
+            except Exception as e:
+                logger.error(f"Failed to load ml_info from {source}: {e}")
+                raise
+        else:
+            ml_info_data = {}
+
+        if not isinstance(ml_info_data, dict):
+            raise ConfigValidationError(
+                f"ml_info must be a dict (or path to a dict), got {type(ml_info_data).__name__}"
+            )
+
+        # Interpolate strings with global_settings as variables
+        try:
+            VariableInterpolator.interpolate_structure(ml_info_data, self.global_settings)
+        except Exception:
+            logger.debug("ML info interpolation skipped due to error", exc_info=True)
+
+        # Apply defaults
+        base_hyperparams = dict(self.default_hyperparams)
+        provided_hyperparams = dict(ml_info_data.get("hyperparams", {}) or {})
+        base_hyperparams.update(provided_hyperparams)
+
+        if "hyperparams" not in ml_info_data or not isinstance(
+            ml_info_data.get("hyperparams"), dict
+        ):
+            ml_info_data["hyperparams"] = base_hyperparams
+        else:
+            ml_info_data["hyperparams"] = base_hyperparams
+
+        if "model_version" not in ml_info_data or not ml_info_data.get("model_version"):
+            mv = self.default_model_version
+            if mv is not None:
+                ml_info_data["model_version"] = mv
+
+        self.ml_info: Dict[str, Any] = ml_info_data
+
     def _load_and_validate_config(
         self, source: Union[str, Dict], config_name: str
     ) -> Dict[str, Any]:
@@ -153,10 +215,18 @@ class Context:
         """Process and prepare configurations after loading."""
         self.layer = self.global_settings.get("layer", "").lower()
         try:
+            # Legacy targeted interpolation for 'filepath'
             self._interpolator.interpolate_config_paths(
                 self.input_config, self.global_settings
             )
             self._interpolator.interpolate_config_paths(
+                self.output_config, self.global_settings
+            )
+            # New recursive interpolation across all string fields
+            VariableInterpolator.interpolate_structure(
+                self.input_config, self.global_settings
+            )
+            VariableInterpolator.interpolate_structure(
                 self.output_config, self.global_settings
             )
         except Exception:
@@ -192,6 +262,27 @@ class Context:
             "model_version": pipeline.get("model_version", self.default_model_version),
             "hyperparams": self._merge_hyperparams(pipeline.get("hyperparams", {})),
             "description": pipeline.get("description", ""),
+        }
+
+    def get_pipeline_ml_info(self, pipeline_name: str) -> Dict[str, Any]:
+        """Combine base ml_info with pipeline-specific ML config."""
+        base = dict(getattr(self, "ml_info", {}) or {})
+        pconf = self.get_pipeline_ml_config(pipeline_name)
+
+        merged_hyper = dict(base.get("hyperparams", {}) or {})
+        merged_hyper.update(pconf.get("hyperparams", {}) or {})
+
+        model_version = (
+            pconf.get("model_version")
+            or base.get("model_version")
+            or self.default_model_version
+        )
+
+        return {
+            **base,
+            "model_version": model_version,
+            "hyperparams": merged_hyper,
+            "pipeline_config": pconf,
         }
 
     @property
@@ -377,16 +468,7 @@ class MLContext(BaseSpecializedContext):
     """Context for managing machine learning pipelines and configurations."""
 
     def __init__(self, *args, **kwargs):
-        existing_spark = kwargs.pop("spark_session", None)
         super().__init__(*args, **kwargs)
-
-        self.spark = (
-            existing_spark
-            if existing_spark
-            else SparkSessionFactory.get_session(
-                self.execution_mode, ml_config=self._get_spark_ml_config()
-            )
-        )
 
     @classmethod
     def from_base_context(cls, base_context: Context) -> "MLContext":
@@ -414,22 +496,21 @@ class MLContext(BaseSpecializedContext):
         return self.ml_nodes
 
     def _is_compatible_node(self, node_config: Dict[str, Any]) -> bool:
-        return (
-            "model" in node_config
-            or "hyperparams" in node_config
-            or "metrics" in node_config
-        )
+    return "model" in node_config
 
     def _get_context_type_name(self) -> str:
         return "ML"
 
     def _validate_configurations(self) -> None:
         super()._validate_configurations()
-        # Validación de pipelines ML
-        self._validator.validate_ml_pipeline_config(
-            self.ml_pipelines, self.nodes_config
+        strict_ml = bool(
+            (self.global_settings or {}).get("validators", {})
+            .get("ml", {})
+            .get("strict", True)
         )
-        # Compatibilidad con pipelines batch
+        self._validator.validate_ml_pipeline_config(
+            self.ml_pipelines, self.nodes_config, strict=strict_ml
+        )
         batch_pipelines = {
             name: pipeline
             for name, pipeline in self.pipelines_config.items()
@@ -473,7 +554,6 @@ class StreamingContext(BaseSpecializedContext):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._validate_streaming_configurations()
 
     @classmethod
     def from_base_context(cls, base_context: Context) -> "StreamingContext":
@@ -483,6 +563,7 @@ class StreamingContext(BaseSpecializedContext):
             nodes_config=base_context.nodes_config,
             input_config=base_context.input_config,
             output_config=base_context.output_config,
+            spark_session=getattr(base_context, "spark", None),
         )
 
     @cached_property
@@ -508,11 +589,18 @@ class StreamingContext(BaseSpecializedContext):
 
     def _validate_configurations(self) -> None:
         super()._validate_configurations()
+        strict_streaming = bool(
+            (self.global_settings or {}).get("validators", {})
+            .get("streaming", {})
+            .get("strict", True)
+        )
         for pipeline_name, pipeline_config in self.streaming_pipelines.items():
             pipeline_with_name = {**pipeline_config, "name": pipeline_name}
-            self._validator.validate_streaming_pipeline_config(pipeline_with_name)
+            self._validator.validate_streaming_pipeline_config(
+                pipeline_with_name, strict=strict_streaming
+            )
             self._validator.validate_streaming_pipeline_with_nodes(
-                pipeline_with_name, self.nodes_config
+                pipeline_with_name, self.nodes_config, strict=strict_streaming
             )
 
     @cached_property
@@ -579,6 +667,7 @@ class HybridContext(Context):
             nodes_config=base_context.nodes_config,
             input_config=base_context.input_config,
             output_config=base_context.output_config,
+            spark_session=getattr(base_context, "spark", None),
         )
 
         self.base_context = base_context

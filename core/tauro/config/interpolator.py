@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 class VariableInterpolator:
@@ -51,3 +51,21 @@ class VariableInterpolator:
                 config_item["filepath"] = VariableInterpolator.interpolate(
                     config_item["filepath"], variables
                 )
+
+    @staticmethod
+    def interpolate_structure(value: Any, variables: Dict[str, Any]) -> Any:
+        """Recursively interpolate variables in any nested structure of dicts/lists/strings.
+
+        Returns a new structure with strings interpolated; mutates lists/dicts when passed in for convenience.
+        """
+        if isinstance(value, str):
+            return VariableInterpolator.interpolate(value, variables)
+        if isinstance(value, list):
+            for i in range(len(value)):
+                value[i] = VariableInterpolator.interpolate_structure(value[i], variables)
+            return value
+        if isinstance(value, dict):
+            for k, v in list(value.items()):
+                value[k] = VariableInterpolator.interpolate_structure(v, variables)
+            return value
+        return value

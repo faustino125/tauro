@@ -1,5 +1,6 @@
 import os
-from typing import Any, Dict, List, Optional, Tuple
+import glob
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 from loguru import logger  # type: ignore
 
@@ -68,15 +69,25 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
             raise ConfigurationError(f"Missing configuration for '{input_key}'")
         return config
 
+    def _is_glob_path(self, path: str) -> bool:
+        return any(sym in path for sym in ("*", "?", "["))
+
     def _get_filepath(self, config: Dict[str, Any], input_key: str) -> str:
-        """Get filepath for a dataset."""
+        """Get filepath for a dataset, supporting glob patterns in local mode."""
         path = config.get("filepath")
         if not path:
             raise ConfigurationError(f"Missing filepath for '{input_key}'")
 
-        # Verify file existence in local mode
-        if self._is_local() and not os.path.exists(path):
-            raise FileNotFoundError(f"File '{path}' does not exist in local mode")
+        if self._is_local():
+            if self._is_glob_path(path):
+                matches = glob.glob(path)
+                if not matches:
+                    raise FileNotFoundError(
+                        f"Glob pattern '{path}' did not match any files in local mode"
+                    )
+                return path
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"File '{path}' does not exist in local mode")
         return path
 
 
@@ -105,7 +116,7 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
         rdd = sc.parallelize(input_keys)
         results = rdd.map(lambda k: self._parallel_load_single(k)).collect()
 
-        return self._process_parallel_results(results, fail_fast)
+        return self._process_parallel_results(results, input_keys, fail_fast)
 
     def _parallel_load_single(
         self, input_key: str
@@ -119,25 +130,33 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
             return input_key, None, str(e)
 
     def _process_parallel_results(
-        self, results: List[Tuple[str, Any, Optional[str]]], fail_fast: bool
+        self,
+        results: List[Tuple[str, Any, Optional[str]]],
+        input_keys: List[str],
+        fail_fast: bool,
     ) -> List[Any]:
-        """Process the results of parallel loading operations."""
-        loaded_data: List[Any] = []
-        errors: List[str] = []
+        """Process the results of parallel loading operations with stable ordering."""
+        data_by_key: Dict[str, Any] = {}
+        errors: Dict[str, str] = {}
 
         for input_key, data, error in results:
             if error:
-                error_msg = f"Error loading '{input_key}': {error}"
-                errors.append(error_msg)
-                if fail_fast:
-                    raise ReadOperationError(f"Parallel loading errors: {errors}")
+                errors[input_key] = f"Error loading '{input_key}': {error}"
             else:
-                loaded_data.append(data)
+                data_by_key[input_key] = data
 
         if errors:
-            logger.warning(f"Errors encountered during parallel loading: {errors}")
+            if fail_fast:
+                raise ReadOperationError(
+                    f"Parallel loading errors: {list(errors.values())}"
+                )
+            else:
+                logger.warning(
+                    f"Errors encountered during parallel loading: {list(errors.values())}"
+                )
 
-        return loaded_data
+        ordered = [data_by_key[k] for k in input_keys if k in data_by_key]
+        return ordered
 
 
 class InputLoader(BaseIO):
@@ -172,27 +191,44 @@ class InputLoader(BaseIO):
         else:
             return SequentialLoadingStrategy(self.context, self.reader_factory)
 
-    def _register_custom_formats(self) -> None:
-        """Register custom format handlers if available."""
-        format_checks = {"delta": self._try_import_delta, "xml": self._try_import_xml}
-
-        for format_name, check_method in format_checks.items():
+    def _get_configured_formats(self) -> Set[str]:
+        """Inspect input_config and return the set of formats in use."""
+        input_cfg = self._ctx_get("input_config", {}) or {}
+        formats = set()
+        for key, cfg in input_cfg.items():
             try:
-                check_method()
-                logger.debug(f"Format {format_name} registered successfully")
-            except Exception as e:
-                logger.error(f"Error registering format {format_name}: {e}")
+                fmt = str((cfg or {}).get("format", "")).lower().strip()
+                if fmt:
+                    formats.add(fmt)
+            except Exception:
+                logger.debug(
+                    f"Skipping format detection for malformed input_config key: {key}"
+                )
+        return formats
+
+    def _register_custom_formats(self) -> None:
+        """Register custom format handlers if available only when used."""
+        configured_formats = self._get_configured_formats()
+
+        if "delta" in configured_formats:
+            try:
+                self._try_import_delta()
+                logger.debug("Format delta registered successfully")
+            except ImportError:
+                logger.warning(
+                    "Input format 'delta' configured but package 'delta-spark' is not installed. "
+                    "Install with: pip install delta-spark"
+                )
+
+        if "xml" in configured_formats:
+            self._try_import_xml()
+            logger.debug("Format xml registration attempted")
 
     def _try_import_delta(self) -> None:
-        """Try to import Delta Lake dependencies."""
+        """Try to import Delta Lake dependencies; don't raise at registration time."""
         try:
-            from delta import (  # type: ignore # noqa: F401
-                configure_spark_with_delta_pip,
-            )
-        except ImportError:
-            logger.error(
-                "Package 'delta-spark' not installed. Install it with: pip install delta-spark"
-            )
+            from delta import configure_spark_with_delta_pip  # type: ignore  # noqa: F401
+        except ImportError as e:
             raise
 
     def _try_import_xml(self) -> None:
