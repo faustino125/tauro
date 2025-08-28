@@ -16,7 +16,7 @@ class SparkSessionFactory:
     def get_session(
         cls,
         mode: Literal["local", "databricks", "distributed"] = "databricks",
-    ml_config: Optional[Dict[str, Any]] = None,
+        ml_config: Optional[Dict[str, Any]] = None,
     ):
         """Singleton Spark session with thread-safe initialization"""
         if cls._session is None:
@@ -55,7 +55,7 @@ class SparkSessionFactory:
     @staticmethod
     def create_session(
         mode: Literal["local", "databricks", "distributed"] = "databricks",
-    ml_config: Optional[Dict[str, Any]] = None,
+        ml_config: Optional[Dict[str, Any]] = None,
     ):
         """Create a Spark session based on the specified mode with ML configurations."""
         logger.info(f"Attempting to create Spark session in {mode} mode")
@@ -116,6 +116,11 @@ class SparkSessionFactory:
             from pyspark.sql import SparkSession  # type: ignore
 
             builder = SparkSession.builder.appName("TauroLocal")
+            try:
+                builder = builder.master("local[*]")
+            except Exception:
+                pass
+            builder = builder.master("local[*]")
 
             if ml_config:
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)

@@ -65,14 +65,15 @@ class MLNodeCommand(NodeCommand):
         start_date: str,
         end_date: str,
         node_name: str,
-        model_version: str,
+        model_version: Optional[str],
         hyperparams: Optional[Dict[str, Any]] = None,
         node_config: Optional[Dict[str, Any]] = None,
         pipeline_config: Optional[Dict[str, Any]] = None,
         spark=None,
     ):
         super().__init__(function, input_dfs, start_date, end_date, node_name)
-        self.model_version = model_version
+
+        self.model_version = model_version or "unknown"
         self.hyperparams = hyperparams or {}
         self.node_config = node_config or {}
         self.pipeline_config = pipeline_config or {}
@@ -170,19 +171,27 @@ class MLNodeCommand(NodeCommand):
                 )
                 return self.function(
                     *self.input_dfs,
-                    self.start_date,
-                    self.end_date,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
                     ml_context=ml_context,
                 )
             else:
                 logger.debug("Function uses standard parameters")
-                return self.function(*self.input_dfs, self.start_date, self.end_date)
+                return self.function(
+                    *self.input_dfs,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
+                )
 
         except Exception as e:
             logger.warning(
                 f"Error analyzing function signature: {e}, falling back to standard execution"
             )
-            return self.function(*self.input_dfs, self.start_date, self.end_date)
+            return self.function(
+                *self.input_dfs,
+                start_date=self.start_date,
+                end_date=self.end_date,
+            )
 
     def _merge_hyperparams(self) -> Dict[str, Any]:
         """Merge hyperparameters from pipeline and node levels."""

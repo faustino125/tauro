@@ -1,6 +1,6 @@
 import glob
 import os
-from typing import Any, Dict, List, Optional, Set, Tuple, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -30,6 +30,9 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
         """Load datasets sequentially."""
         results: List[Any] = []
         errors: List[str] = []
+        fill_none = bool(
+            self._ctx_get("global_settings", {}).get("fill_none_on_error", False)
+        )
 
         logger.info(f"Loading {len(input_keys)} datasets sequentially")
         for key in input_keys:
@@ -38,10 +41,12 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
                 results.append(self._load_single_dataset(key))
             except Exception as e:
                 msg = f"Error loading '{key}': {e}"
-                logger.error(msg, exc_info=True)
+                logger.exception(msg)
                 if fail_fast:
                     raise ReadOperationError(msg) from e
                 errors.append(msg)
+                if fill_none:
+                    results.append(None)
 
         if errors:
             logger.warning(f"Completed with errors: {errors}")
@@ -103,28 +108,14 @@ class ParallelLoadingStrategy(InputLoadingStrategy):
     """Parallel input loading strategy using Spark."""
 
     def load_inputs(self, input_keys: List[str], fail_fast: bool = True) -> List[Any]:
-        """Load datasets in parallel using Spark."""
-        if not self._spark_available() or self._is_spark_connect():
-            if self._is_spark_connect():
-                logger.warning(
-                    "Spark Connect session detected (no RDD). Falling back to sequential loading."
-                )
-            else:
-                logger.warning(
-                    "Spark not available, falling back to sequential loading"
-                )
-            sequential_strategy = SequentialLoadingStrategy(
-                self.context, self.reader_factory
-            )
-            return sequential_strategy.load_inputs(input_keys, fail_fast)
-
-        sc = self._ctx_spark().sparkContext  # type: ignore[attr-defined]
-        logger.info(f"Loading {len(input_keys)} datasets in parallel")
-
-        rdd = sc.parallelize(input_keys)
-        results = rdd.map(lambda k: self._parallel_load_single(k)).collect()
-
-        return self._process_parallel_results(results, input_keys, fail_fast)
+        """Attempt to load datasets in parallel, but safely fallback to sequential."""
+        logger.warning(
+            "Parallel loading strategy is not supported for Spark reads; falling back to sequential."
+        )
+        sequential_strategy = SequentialLoadingStrategy(
+            self.context, self.reader_factory
+        )
+        return sequential_strategy.load_inputs(input_keys, fail_fast)
 
     def _parallel_load_single(
         self, input_key: str
@@ -231,21 +222,6 @@ class InputLoader(BaseIO):
         if "xml" in configured_formats:
             self._try_import_xml()
             logger.debug("Format xml registration attempted")
-
-    def _get_configured_formats(self) -> Set[str]:
-        """Inspect input_config and return the set of formats in use."""
-        input_cfg = self._ctx_get("input_config", {}) or {}
-        formats = set()
-        for key, cfg in input_cfg.items():
-            try:
-                fmt = str((cfg or {}).get("format", "")).lower().strip()
-                if fmt:
-                    formats.add(fmt)
-            except Exception:
-                logger.debug(
-                    f"Skipping format detection for malformed input_config key: {key}"
-                )
-        return formats
 
     def _try_import_delta(self) -> None:
         """Try to import Delta Lake dependencies; don't raise at registration time."""

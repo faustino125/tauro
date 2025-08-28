@@ -9,6 +9,7 @@ from pyspark.sql.streaming import StreamingQuery  # type: ignore
 
 from tauro.streaming.constants import (
     DEFAULT_STREAMING_CONFIG,
+    STREAMING_VALIDATIONS,
     StreamingOutputMode,
     StreamingTrigger,
 )
@@ -338,14 +339,39 @@ class StreamingQueryManager:
             if base_checkpoint:
                 checkpoint_base = base_checkpoint
             else:
-                output_path = getattr(self.context, "output_path", "/tmp/checkpoints")
-                checkpoint_base = os.path.join(output_path, "streaming_checkpoints")
+                checkpoints_base = None
+                try:
+                    gs = getattr(self.context, "global_settings", {}) or {}
+                    if isinstance(gs, dict):
+                        checkpoints_base = gs.get("checkpoints_base")
+                except Exception:
+                    checkpoints_base = None
 
-            checkpoint_path = os.path.join(
-                checkpoint_base, pipeline_name, node_name, execution_id
+                if checkpoints_base:
+                    checkpoint_base = str(checkpoints_base)
+                else:
+                    output_path = getattr(
+                        self.context, "output_path", "/tmp/checkpoints"
+                    )
+                    checkpoint_base = os.path.join(output_path, "streaming_checkpoints")
+
+            cloud_schemes = (
+                "s3://",
+                "gs://",
+                "abfs://",
+                "abfss://",
+                "hdfs://",
+                "dbfs:/",
             )
 
-            if not checkpoint_path.startswith(("s3://", "gs://", "abfs://", "hdfs://")):
+            if str(checkpoint_base).startswith(cloud_schemes):
+                checkpoint_path = f"{checkpoint_base.rstrip('/')}/{pipeline_name}/{node_name}/{execution_id}"
+            else:
+                checkpoint_path = os.path.join(
+                    checkpoint_base, pipeline_name, node_name, execution_id
+                )
+
+            if not checkpoint_path.startswith(cloud_schemes):
                 try:
                     Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
                 except OSError as e:
@@ -389,6 +415,21 @@ class StreamingQueryManager:
 
             if trigger_type == StreamingTrigger.PROCESSING_TIME.value:
                 interval = trigger_config.get("interval", "10 seconds")
+                if not self.validator._validate_time_interval(interval):
+                    raise StreamingConfigurationError(
+                        f"Invalid processingTime interval '{interval}'",
+                        config_section="trigger.interval",
+                        config_value=interval,
+                    )
+                min_interval = STREAMING_VALIDATIONS.get(
+                    "min_trigger_interval_seconds", 1
+                )
+                if self.validator._parse_time_to_seconds(interval) < min_interval:
+                    raise StreamingConfigurationError(
+                        f"processingTime interval '{interval}' is below minimum of {min_interval} seconds",
+                        config_section="trigger.interval",
+                        config_value=interval,
+                    )
                 return {"processingTime": interval}
 
             elif trigger_type == StreamingTrigger.ONCE.value:
@@ -396,6 +437,21 @@ class StreamingQueryManager:
 
             elif trigger_type == StreamingTrigger.CONTINUOUS.value:
                 interval = trigger_config.get("interval", "1 second")
+                if not self.validator._validate_time_interval(interval):
+                    raise StreamingConfigurationError(
+                        f"Invalid continuous interval '{interval}'",
+                        config_section="trigger.interval",
+                        config_value=interval,
+                    )
+                min_interval = STREAMING_VALIDATIONS.get(
+                    "min_trigger_interval_seconds", 1
+                )
+                if self.validator._parse_time_to_seconds(interval) < min_interval:
+                    raise StreamingConfigurationError(
+                        f"continuous interval '{interval}' is below minimum of {min_interval} seconds",
+                        config_section="trigger.interval",
+                        config_value=interval,
+                    )
                 return {"continuous": interval}
 
             elif trigger_type == StreamingTrigger.AVAILABLE_NOW.value:

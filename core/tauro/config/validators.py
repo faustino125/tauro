@@ -158,9 +158,7 @@ class MLValidator:
             field for field in self.REQUIRED_NODE_FIELDS if field not in node_config
         ]
         if missing_fields:
-            msg = (
-                f"ML node '{node_name}' is missing required fields: {', '.join(missing_fields)}"
-            )
+            msg = f"ML node '{node_name}' is missing required fields: {', '.join(missing_fields)}"
             if strict:
                 raise ConfigValidationError(msg)
             logger.warning(msg)
@@ -178,18 +176,14 @@ class MLValidator:
 
         hyperparams = node_config.get("hyperparams", {})
         if hyperparams and not isinstance(hyperparams, dict):
-            msg = (
-                f"Node '{node_name}' has invalid hyperparams format; expected dict, got {type(hyperparams).__name__}"
-            )
+            msg = f"Node '{node_name}' has invalid hyperparams format; expected dict, got {type(hyperparams).__name__}"
             if strict:
                 raise ConfigValidationError(msg)
             logger.warning(msg)
 
         metrics = node_config.get("metrics", [])
         if metrics and not isinstance(metrics, list):
-            msg = (
-                f"Node '{node_name}' has invalid metrics format; expected list, got {type(metrics).__name__}"
-            )
+            msg = f"Node '{node_name}' has invalid metrics format; expected list, got {type(metrics).__name__}"
             if strict:
                 raise ConfigValidationError(msg)
             logger.warning(msg)

@@ -53,19 +53,34 @@ class VariableInterpolator:
                 )
 
     @staticmethod
-    def interpolate_structure(value: Any, variables: Dict[str, Any]) -> Any:
-        """Recursively interpolate variables in any nested structure of dicts/lists/strings.
-
-        Returns a new structure with strings interpolated; mutates lists/dicts when passed in for convenience.
-        """
+    def interpolate_structure(
+        value: Any, variables: Dict[str, Any], *, copy: bool = False
+    ) -> Any:
+        """Recursively interpolate variables in any nested structure of dicts/lists/strings."""
         if isinstance(value, str):
             return VariableInterpolator.interpolate(value, variables)
         if isinstance(value, list):
+            if copy:
+                return [
+                    VariableInterpolator.interpolate_structure(v, variables, copy=True)
+                    for v in value
+                ]
             for i in range(len(value)):
-                value[i] = VariableInterpolator.interpolate_structure(value[i], variables)
+                value[i] = VariableInterpolator.interpolate_structure(
+                    value[i], variables, copy=False
+                )
             return value
         if isinstance(value, dict):
+            if copy:
+                return {
+                    k: VariableInterpolator.interpolate_structure(
+                        v, variables, copy=True
+                    )
+                    for k, v in value.items()
+                }
             for k, v in list(value.items()):
-                value[k] = VariableInterpolator.interpolate_structure(v, variables)
+                value[k] = VariableInterpolator.interpolate_structure(
+                    v, variables, copy=False
+                )
             return value
         return value

@@ -171,7 +171,9 @@ class Context:
 
         # Interpolate strings with global_settings as variables
         try:
-            VariableInterpolator.interpolate_structure(ml_info_data, self.global_settings)
+            VariableInterpolator.interpolate_structure(
+                ml_info_data, self.global_settings
+            )
         except Exception:
             logger.debug("ML info interpolation skipped due to error", exc_info=True)
 
@@ -496,7 +498,8 @@ class MLContext(BaseSpecializedContext):
         return self.ml_nodes
 
     def _is_compatible_node(self, node_config: Dict[str, Any]) -> bool:
-    return "model" in node_config
+        """An ML node is compatible if it declares a 'model' section."""
+        return "model" in node_config
 
     def _get_context_type_name(self) -> str:
         return "ML"
@@ -504,7 +507,8 @@ class MLContext(BaseSpecializedContext):
     def _validate_configurations(self) -> None:
         super()._validate_configurations()
         strict_ml = bool(
-            (self.global_settings or {}).get("validators", {})
+            (self.global_settings or {})
+            .get("validators", {})
             .get("ml", {})
             .get("strict", True)
         )
@@ -590,7 +594,8 @@ class StreamingContext(BaseSpecializedContext):
     def _validate_configurations(self) -> None:
         super()._validate_configurations()
         strict_streaming = bool(
-            (self.global_settings or {}).get("validators", {})
+            (self.global_settings or {})
+            .get("validators", {})
             .get("streaming", {})
             .get("strict", True)
         )

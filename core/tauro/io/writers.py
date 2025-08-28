@@ -47,50 +47,32 @@ class SparkWriterMixin:
             config.get("overwrite_strategy") == "replaceWhere"
             and write_mode == WriteMode.OVERWRITE.value
         ):
-            part_col = config.get("partition_col")
-            start = config.get("start_date")
-            end = config.get("end_date")
-            if part_col and start is not None and end is not None:
-                predicate = f"{part_col} >= '{start}' AND {part_col} <= '{end}'"
-                writer = writer.option("replaceWhere", predicate)
-                logger.debug(f"Applied replaceWhere predicate: {predicate}")
-            else:
-                logger.warning(
-                    "overwrite_strategy=replaceWhere configured but partition_col/start_date/end_date are missing; "
-                    "skipping replaceWhere"
+            partition_col = config.get("partition_col")
+            start_date = config.get("start_date")
+            end_date = config.get("end_date")
+            if not all([partition_col, start_date, end_date]):
+                raise ConfigurationError(
+                    "overwrite_strategy=replaceWhere requires partition_col, start_date and end_date"
                 )
+            cfg_val = ConfigValidator()
+            if not (
+                cfg_val.validate_date_format(start_date)
+                and cfg_val.validate_date_format(end_date)
+            ):
+                raise ConfigurationError(
+                    f"Invalid date format for replaceWhere: {start_date} - {end_date}; expected YYYY-MM-DD"
+                )
+            predicate = f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
+            writer = writer.option("replaceWhere", predicate).option(
+                "overwriteSchema", "false"
+            )
+            logger.debug(f"Applied replaceWhere predicate: {predicate}")
 
         extra_options = config.get("options", {})
         for key, value in extra_options.items():
             writer = writer.option(key, value)
             logger.debug(f"Applied option {key}={value}")
 
-        return writer
-
-    def _apply_replace_where(self, writer: Any, config: Dict[str, Any]) -> Any:
-        """Apply replaceWhere strategy for conditional overwrites."""
-        partition_col = config.get("partition_col")
-        start_date = config.get("start_date")
-        end_date = config.get("end_date")
-
-        if not all([partition_col, start_date, end_date]):
-            raise ConfigurationError(
-                "partition_col, start_date, and end_date are required for replaceWhere strategy"
-            )
-
-        config_validator = ConfigValidator()
-        if not (
-            config_validator.validate_date_format(start_date)
-            and config_validator.validate_date_format(end_date)
-        ):
-            raise ConfigurationError(f"Invalid date format: {start_date} - {end_date}")
-
-        writer = writer.option(
-            "replaceWhere", f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
-        ).option("overwriteSchema", "false")
-        logger.debug(
-            f"Applied replaceWhere strategy for {partition_col} between {start_date} and {end_date}"
-        )
         return writer
 
     def _get_format(self) -> str:
