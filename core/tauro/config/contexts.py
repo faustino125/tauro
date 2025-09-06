@@ -141,13 +141,7 @@ class Context:
     def _load_ml_info(
         self, ml_info_source: Optional[Union[str, Dict[str, Any]]]
     ) -> None:
-        """Load ML info from file/dict or from global_settings['ml_info'].
-
-        - If provided a string path, use ConfigLoaderFactory to load it.
-        - If provided a dict, use it directly.
-        - Else, look for global_settings['ml_info'] (dict or path).
-        - Apply variable interpolation and sensible defaults.
-        """
+        """Load ML info from file/dict or from global_settings['ml_info']."""
         source = ml_info_source
         if source is None and isinstance(self.global_settings, dict):
             source = self.global_settings.get("ml_info")
