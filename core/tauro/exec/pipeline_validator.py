@@ -237,7 +237,6 @@ class PipelineValidator:
         policy: FormatPolicy,
     ) -> List[Dict[str, Any]]:
         """Valida compatibilidad de formatos entre nodos batch y streaming."""
-
         format_issues: List[Dict[str, Any]] = []
 
         for cross_dep in cross_dependencies:
@@ -245,57 +244,78 @@ class PipelineValidator:
             batch_deps = cross_dep["batch_dependencies"]
 
             streaming_config = node_configs.get(streaming_node, {})
-            streaming_input = streaming_config.get("input", {})
-            streaming_format = streaming_input.get("format")
-
             for batch_dep in batch_deps:
                 batch_config = node_configs.get(batch_dep, {})
-                batch_output = batch_config.get("output", {})
-                batch_format = batch_output.get("format")
-
-                if batch_format and streaming_format:
-                    if policy.are_compatible(batch_format, streaming_format):
-                        format_issues.append(
-                            {
-                                "severity": "info",
-                                "message": f"Compatible formats: '{batch_format}' -> '{streaming_format}'",
-                                "batch_node": batch_dep,
-                                "streaming_node": streaming_node,
-                                "batch_format": batch_format,
-                                "streaming_format": streaming_format,
-                            }
-                        )
-                    else:
-                        format_issues.append(
-                            {
-                                "severity": "error",
-                                "message": f"Incompatible formats: batch node '{batch_dep}' outputs "
-                                f"'{batch_format}' but streaming node '{streaming_node}' expects "
-                                f"'{streaming_format}'.",
-                                "batch_node": batch_dep,
-                                "streaming_node": streaming_node,
-                                "batch_format": batch_format,
-                                "streaming_format": streaming_format,
-                            }
-                        )
-
-                if streaming_format == "file_stream":
-                    batch_path = batch_output.get("path")
-                    streaming_path = streaming_input.get("options", {}).get("path")
-
-                    if batch_path and streaming_path and batch_path != streaming_path:
-                        format_issues.append(
-                            {
-                                "severity": "warning",
-                                "message": f"Path mismatch: batch node '{batch_dep}' writes to "
-                                f"'{batch_path}' but streaming node '{streaming_node}' reads from "
-                                f"'{streaming_path}'. Ensure paths are coordinated.",
-                                "batch_node": batch_dep,
-                                "streaming_node": streaming_node,
-                            }
-                        )
+                # Delegate pairwise checks to helper to reduce cognitive complexity
+                PipelineValidator._check_batch_stream_compatibility(
+                    batch_dep,
+                    batch_config,
+                    streaming_node,
+                    streaming_config,
+                    policy,
+                    format_issues,
+                )
 
         return format_issues
+
+    @staticmethod
+    def _check_batch_stream_compatibility(
+        batch_dep: str,
+        batch_config: Dict[str, Any],
+        streaming_node: str,
+        streaming_config: Dict[str, Any],
+        policy: FormatPolicy,
+        issues: List[Dict[str, Any]],
+    ) -> None:
+        """Helper that checks format compatibility and file_stream path mismatches for a batch/stream pair."""
+        batch_output = batch_config.get("output", {})
+        batch_format = batch_output.get("format")
+
+        streaming_input = streaming_config.get("input", {})
+        streaming_format = streaming_input.get("format")
+
+        # Check explicit format compatibility
+        if batch_format and streaming_format:
+            if policy.are_compatible(batch_format, streaming_format):
+                issues.append(
+                    {
+                        "severity": "info",
+                        "message": f"Compatible formats: '{batch_format}' -> '{streaming_format}'",
+                        "batch_node": batch_dep,
+                        "streaming_node": streaming_node,
+                        "batch_format": batch_format,
+                        "streaming_format": streaming_format,
+                    }
+                )
+            else:
+                issues.append(
+                    {
+                        "severity": "error",
+                        "message": f"Incompatible formats: batch node '{batch_dep}' outputs "
+                        f"'{batch_format}' but streaming node '{streaming_node}' expects "
+                        f"'{streaming_format}'.",
+                        "batch_node": batch_dep,
+                        "streaming_node": streaming_node,
+                        "batch_format": batch_format,
+                        "streaming_format": streaming_format,
+                    }
+                )
+
+        # Check file_stream path coordination
+        if streaming_format == "file_stream":
+            batch_path = batch_output.get("path")
+            streaming_path = streaming_input.get("options", {}).get("path")
+            if batch_path and streaming_path and batch_path != streaming_path:
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "message": f"Path mismatch: batch node '{batch_dep}' writes to "
+                        f"'{batch_path}' but streaming node '{streaming_node}' reads from "
+                        f"'{streaming_path}'. Ensure paths are coordinated.",
+                        "batch_node": batch_dep,
+                        "streaming_node": streaming_node,
+                    }
+                )
 
     @staticmethod
     def _validate_resource_conflicts(
@@ -304,10 +324,54 @@ class PipelineValidator:
         node_configs: Dict[str, Dict[str, Any]],
     ) -> List[str]:
         """Valida conflictos de recursos entre nodos batch y streaming."""
+        # Collect batch-side resources and any immediate batch conflicts
+        (
+            output_paths,
+            kafka_topics,
+            warnings,
+        ) = PipelineValidator._collect_batch_resources(batch_nodes, node_configs)
 
+        # Check streaming nodes against collected batch resources
+        for streaming_node in streaming_nodes:
+            node_config = node_configs.get(streaming_node, {})
+            warnings.extend(
+                PipelineValidator._check_streaming_conflicts_for_node(
+                    streaming_node, node_config, output_paths, kafka_topics
+                )
+            )
+
+        return warnings
+
+    @staticmethod
+    def _collect_batch_resources(
+        batch_nodes: List[str], node_configs: Dict[str, Dict[str, Any]]
+    ) -> Tuple[Dict[str, str], Dict[str, str], List[str]]:
+        """Collects output paths and kafka topics used by batch nodes and reports conflicts."""
+        output_paths: Dict[str, str] = {}
+        kafka_topics: Dict[str, str] = {}
         warnings: List[str] = []
-        output_paths = {}
-        kafka_topics = {}
+
+        def _register_output_path(path: str, node: str) -> None:
+            """Register an output path and record a warning if already used."""
+            existing = output_paths.get(path)
+            if existing:
+                warnings.append(
+                    f"Output path conflict: batch nodes '{existing}' and "
+                    f"'{node}' both write to '{path}'"
+                )
+            else:
+                output_paths[path] = node
+
+        def _register_kafka_topic(topic: str, node: str) -> None:
+            """Register a kafka topic and record a warning if already used."""
+            existing = kafka_topics.get(topic)
+            if existing:
+                warnings.append(
+                    f"Kafka topic conflict: batch nodes '{existing}' and "
+                    f"'{node}' both write to topic '{topic}'"
+                )
+            else:
+                kafka_topics[topic] = node
 
         for batch_node in batch_nodes:
             node_config = node_configs.get(batch_node, {})
@@ -315,55 +379,52 @@ class PipelineValidator:
 
             output_path = output_config.get("path")
             if output_path:
-                if output_path in output_paths:
-                    warnings.append(
-                        f"Output path conflict: batch nodes '{output_paths[output_path]}' and "
-                        f"'{batch_node}' both write to '{output_path}'"
-                    )
-                else:
-                    output_paths[output_path] = batch_node
+                _register_output_path(output_path, batch_node)
 
             if output_config.get("format") == "kafka":
                 topic = output_config.get("options", {}).get("topic")
                 if topic:
-                    if topic in kafka_topics:
-                        warnings.append(
-                            f"Kafka topic conflict: batch nodes '{kafka_topics[topic]}' and "
-                            f"'{batch_node}' both write to topic '{topic}'"
-                        )
-                    else:
-                        kafka_topics[topic] = batch_node
+                    _register_kafka_topic(topic, batch_node)
 
-        for streaming_node in streaming_nodes:
-            node_config = node_configs.get(streaming_node, {})
+        return output_paths, kafka_topics, warnings
 
-            input_config = node_config.get("input", {})
-            if input_config.get("format") == "file_stream":
-                input_path = input_config.get("options", {}).get("path")
-                if input_path and input_path in output_paths:
-                    pass
+    @staticmethod
+    def _check_streaming_conflicts_for_node(
+        streaming_node: str,
+        node_config: Dict[str, Any],
+        output_paths: Dict[str, str],
+        kafka_topics: Dict[str, str],
+    ) -> List[str]:
+        """Checks a single streaming node for conflicts against batch resources."""
+        warnings: List[str] = []
 
-            output_config = node_config.get("output", {})
-            output_path = output_config.get("path")
-            if output_path:
-                if output_path in output_paths:
-                    warnings.append(
-                        f"Output path conflict: batch node '{output_paths[output_path]}' and "
-                        f"streaming node '{streaming_node}' both write to '{output_path}'"
-                    )
+        input_config = node_config.get("input", {})
+        # Preserve original behavior: no-op for file_stream input path matching
+        if input_config.get("format") == "file_stream":
+            input_path = input_config.get("options", {}).get("path")
+            if input_path and input_path in output_paths:
+                # Intentionally no warning here per original logic (kept for compatibility)
+                pass
 
-            kafka_options = [
-                input_config.get("options", {}),
-                output_config.get("options", {}),
-            ]
-            for options in kafka_options:
-                if options.get("topic"):
-                    topic = options["topic"]
-                    if topic in kafka_topics:
-                        warnings.append(
-                            f"Kafka topic conflict: batch node '{kafka_topics[topic]}' and "
-                            f"streaming node '{streaming_node}' both use topic '{topic}'"
-                        )
+        output_config = node_config.get("output", {})
+        output_path = output_config.get("path")
+        if output_path and output_path in output_paths:
+            warnings.append(
+                f"Output path conflict: batch node '{output_paths[output_path]}' and "
+                f"streaming node '{streaming_node}' both write to '{output_path}'"
+            )
+
+        kafka_options = [
+            input_config.get("options", {}),
+            output_config.get("options", {}),
+        ]
+        for options in kafka_options:
+            topic = options.get("topic")
+            if topic and topic in kafka_topics:
+                warnings.append(
+                    f"Kafka topic conflict: batch node '{kafka_topics[topic]}' and "
+                    f"streaming node '{streaming_node}' both use topic '{topic}'"
+                )
 
         return warnings
 
@@ -374,55 +435,68 @@ class PipelineValidator:
         policy: FormatPolicy,
     ) -> List[str]:
         """Valida requerimientos específicos para nodos streaming."""
-
         errors: List[str] = []
-
         for streaming_node in streaming_nodes:
             node_config = node_configs.get(streaming_node, {})
-
-            input_config = node_config.get("input", {})
-            if not input_config:
-                errors.append(
-                    f"Streaming node '{streaming_node}' must have input configuration"
+            errors.extend(
+                PipelineValidator._validate_single_streaming_node(
+                    streaming_node, node_config, policy
                 )
-                continue
-
-            input_format = input_config.get("format")
-            if not input_format:
-                errors.append(
-                    f"Streaming node '{streaming_node}' must specify input format"
-                )
-                continue
-
-            if not policy.is_supported_input(input_format):
-                errors.append(
-                    f"Streaming node '{streaming_node}' has invalid input format '{input_format}'. "
-                    f"Valid formats: {policy.get_supported_input_formats()}"
-                )
-
-            output_config = node_config.get("output", {})
-            if not output_config:
-                errors.append(
-                    f"Streaming node '{streaming_node}' must have output configuration"
-                )
-                continue
-
-            output_format = output_config.get("format")
-            if not output_format:
-                errors.append(
-                    f"Streaming node '{streaming_node}' must specify output format"
-                )
-
-            streaming_config = node_config.get("streaming", {})
-            if input_format in policy.checkpoint_required_inputs:
-                checkpoint = streaming_config.get("checkpoint_location")
-                if not checkpoint:
-                    errors.append(
-                        f"Streaming node '{streaming_node}' with format '{input_format}' "
-                        f"must specify checkpoint_location"
-                    )
-
+            )
         return errors
+
+    @staticmethod
+    def _validate_single_streaming_node(
+        streaming_node: str,
+        node_config: Dict[str, Any],
+        policy: FormatPolicy,
+    ) -> List[str]:
+        """Validate a single streaming node and return list of errors."""
+        node_errors: List[str] = []
+
+        input_config = node_config.get("input", {})
+        if not input_config:
+            node_errors.append(
+                f"Streaming node '{streaming_node}' must have input configuration"
+            )
+            return node_errors
+
+        input_format = input_config.get("format")
+        if not input_format:
+            node_errors.append(
+                f"Streaming node '{streaming_node}' must specify input format"
+            )
+            return node_errors
+
+        if not policy.is_supported_input(input_format):
+            node_errors.append(
+                f"Streaming node '{streaming_node}' has invalid input format '{input_format}'. "
+                f"Valid formats: {policy.get_supported_input_formats()}"
+            )
+
+        output_config = node_config.get("output", {})
+        if not output_config:
+            node_errors.append(
+                f"Streaming node '{streaming_node}' must have output configuration"
+            )
+            return node_errors
+
+        output_format = output_config.get("format")
+        if not output_format:
+            node_errors.append(
+                f"Streaming node '{streaming_node}' must specify output format"
+            )
+
+        if input_format in policy.checkpoint_required_inputs:
+            streaming_config = node_config.get("streaming", {})
+            checkpoint = streaming_config.get("checkpoint_location")
+            if not checkpoint:
+                node_errors.append(
+                    f"Streaming node '{streaming_node}' with format '{input_format}' "
+                    f"must specify checkpoint_location"
+                )
+
+        return node_errors
 
     @staticmethod
     def _get_node_dependencies(node_config: Dict[str, Any]) -> List[str]:
@@ -454,23 +528,17 @@ class PipelineValidator:
         if result_df is None:
             raise ValueError("Result DataFrame is None")
 
+        # Spark-like DataFrame
         if hasattr(result_df, "schema") and hasattr(result_df.schema, "fields"):
-            if not result_df.schema.fields:
-                raise ValueError("Spark DataFrame schema is empty - no fields defined")
-            try:
-                if result_df.limit(1).count() == 0:
-                    logger.warning("Spark DataFrame has no rows")
-            except Exception as e:
-                logger.warning(f"Could not check row count: {e}")
+            PipelineValidator._validate_spark_df(result_df)
             return
 
+        # Pandas-like DataFrame
         if hasattr(result_df, "columns") and hasattr(result_df, "empty"):
-            if result_df.empty:
-                logger.warning("Pandas DataFrame is empty (no rows)")
-            if not list(result_df.columns):
-                raise ValueError("Pandas DataFrame has no columns defined")
+            PipelineValidator._validate_pandas_df(result_df)
             return
 
+        # Generic object with columns
         if hasattr(result_df, "columns"):
             if not result_df.columns:
                 raise ValueError("DataFrame has no columns defined")
@@ -480,3 +548,22 @@ class PipelineValidator:
             f"Unsupported DataFrame type: {type(result_df)}. "
             "Expected Spark or Pandas DataFrame with schema/columns."
         )
+
+    @staticmethod
+    def _validate_spark_df(result_df: Any) -> None:
+        """Validate Spark DataFrame schema and warn if empty."""
+        if not result_df.schema.fields:
+            raise ValueError("Spark DataFrame schema is empty - no fields defined")
+        try:
+            if result_df.limit(1).count() == 0:
+                logger.warning("Spark DataFrame has no rows")
+        except Exception as e:
+            logger.warning(f"Could not check row count: {e}")
+
+    @staticmethod
+    def _validate_pandas_df(result_df: Any) -> None:
+        """Validate Pandas DataFrame columns and warn if empty."""
+        if result_df.empty:
+            logger.warning("Pandas DataFrame is empty (no rows)")
+        if not list(result_df.columns):
+            raise ValueError("Pandas DataFrame has no columns defined")

@@ -331,43 +331,51 @@ class CrossValidator:
     """Cross-validation for dependencies between different types of nodes."""
 
     @staticmethod
-    def validate_hybrid_dependencies(nodes_config: dict):
-        errors = []
+    def _get_node_type(config: dict) -> str:
+        input_cfg = config.get("input", {})
+        if isinstance(input_cfg, dict) and "format" in input_cfg:
+            return "streaming"
+        return "ml"
+
+    @staticmethod
+    def _check_ml_node_dependency(
+        node_name: str, dep_name: str, dep_config: dict, errors: List[str]
+    ) -> None:
+        if CrossValidator._get_node_type(dep_config) == "streaming":
+            output_format = dep_config.get("output", {}).get("format")
+            if output_format not in ["delta", "parquet"]:
+                errors.append(
+                    f"ML node '{node_name}' requires delta/parquet output from streaming node '{dep_name}', got {output_format}"
+                )
+
+    @staticmethod
+    def _check_streaming_node_dependency(
+        node_name: str, dep_name: str, dep_config: dict, errors: List[str]
+    ) -> None:
+        if CrossValidator._get_node_type(dep_config) == "ml":
+            model_type = dep_config.get("model", {}).get("type")
+            if model_type != "spark_ml":
+                errors.append(
+                    f"Streaming node '{node_name}' requires spark_ml model from ML node '{dep_name}', got {model_type}"
+                )
+
+    @staticmethod
+    def validate_hybrid_dependencies(nodes_config: dict) -> None:
+        errors: List[str] = []
 
         for node_name, config in nodes_config.items():
             deps = config.get("dependencies", [])
-            node_type = (
-                "streaming"
-                if "input" in config and "format" in config.get("input", {})
-                else "ml"
-            )
-
+            node_type = CrossValidator._get_node_type(config)
             for dep in deps:
                 dep_config = nodes_config.get(dep, {})
-                dep_type = (
-                    "streaming"
-                    if "input" in dep_config and "format" in dep_config.get("input", {})
-                    else "ml"
-                )
-
-                # ML depende de streaming: exigir salida delta/parquet
-                if node_type == "ml" and dep_type == "streaming":
-                    if dep_config.get("output", {}).get("format") not in [
-                        "delta",
-                        "parquet",
-                    ]:
-                        errors.append(
-                            f"ML node '{node_name}' requires delta/parquet output from streaming node '{dep}', "
-                            f"got {dep_config.get('output', {}).get('format')}"
-                        )
-
-                # Streaming depende de ML: exigir modelo spark_ml
-                if node_type == "streaming" and dep_type == "ml":
-                    if dep_config.get("model", {}).get("type") != "spark_ml":
-                        errors.append(
-                            f"Streaming node '{node_name}' requires spark_ml model from ML node '{dep}', "
-                            f"got {dep_config.get('model', {}).get('type')}"
-                        )
+                if node_type == "ml":
+                    CrossValidator._check_ml_node_dependency(
+                        node_name, dep, dep_config, errors
+                    )
+                elif node_type == "streaming":
+                    CrossValidator._check_streaming_node_dependency(
+                        node_name, dep, dep_config, errors
+                    )
 
         if errors:
             raise ConfigValidationError("\n".join(errors))

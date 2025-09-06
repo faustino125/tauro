@@ -13,6 +13,11 @@ from tauro.streaming.constants import (
 )
 from tauro.streaming.exceptions import StreamingValidationError, handle_streaming_error
 
+# Common field name constants
+INPUT_OPTIONS_FIELD = "input.options"
+NON_EMPTY_STRING = "non-empty string"
+TRIGGER_INTERVAL_FIELD = "streaming.trigger.interval"
+
 
 class StreamingValidator:
     """Validates streaming pipeline configurations with enhanced error handling."""
@@ -30,62 +35,16 @@ class StreamingValidator:
     ) -> None:
         """Validate streaming pipeline configuration with comprehensive checks."""
         try:
-            if not isinstance(pipeline_config, dict):
-                raise StreamingValidationError(
-                    "Pipeline configuration must be a dictionary",
-                    expected="dict",
-                    actual=str(type(pipeline_config)),
-                )
+            self._ensure_pipeline_is_dict(pipeline_config)
 
-            # Check pipeline type
             pipeline_type = pipeline_config.get("type", PipelineType.BATCH.value)
-            valid_types = [PipelineType.STREAMING.value, PipelineType.HYBRID.value]
+            self._ensure_valid_pipeline_type(pipeline_type)
 
-            if pipeline_type not in valid_types:
-                raise StreamingValidationError(
-                    f"Pipeline type must be one of {valid_types} for streaming pipelines",
-                    field="type",
-                    expected=str(valid_types),
-                    actual=pipeline_type,
-                )
-
-            # Validate nodes exist
             nodes = pipeline_config.get("nodes", [])
-            if not nodes:
-                raise StreamingValidationError(
-                    "Streaming pipeline must have at least one node", field="nodes"
-                )
+            self._ensure_nodes_list(nodes)
 
-            if not isinstance(nodes, list):
-                raise StreamingValidationError(
-                    "Pipeline nodes must be a list",
-                    field="nodes",
-                    expected="list",
-                    actual=str(type(nodes)),
-                )
-
-            # Validate each node
             for i, node in enumerate(nodes):
-                try:
-                    if isinstance(node, dict):
-                        self.validate_streaming_node_config(node)
-                    elif isinstance(node, str):
-                        # Node reference - basic validation
-                        if not node.strip():
-                            raise StreamingValidationError(
-                                f"Node reference at index {i} cannot be empty string"
-                            )
-                    else:
-                        raise StreamingValidationError(
-                            f"Invalid node configuration at index {i}",
-                            expected="dict or str",
-                            actual=str(type(node)),
-                        )
-                except StreamingValidationError as e:
-                    # Add context about which node failed
-                    e.add_context("node_index", i)
-                    e.add_context("node_type", type(node).__name__)
-                    raise
+                self._validate_node_entry(i, node)
 
             # Validate pipeline-level streaming configuration
             streaming_config = pipeline_config.get("streaming", {})
@@ -100,6 +59,59 @@ class StreamingValidator:
             raise StreamingValidationError(
                 f"Unexpected error during pipeline validation: {str(e)}", cause=e
             )
+
+    def _ensure_pipeline_is_dict(self, pipeline_config: Any) -> None:
+        if not isinstance(pipeline_config, dict):
+            raise StreamingValidationError(
+                "Pipeline configuration must be a dictionary",
+                expected="dict",
+                actual=str(type(pipeline_config)),
+            )
+
+    def _ensure_valid_pipeline_type(self, pipeline_type: Any) -> None:
+        valid_types = [PipelineType.STREAMING.value, PipelineType.HYBRID.value]
+        if pipeline_type not in valid_types:
+            raise StreamingValidationError(
+                f"Pipeline type must be one of {valid_types} for streaming pipelines",
+                field="type",
+                expected=str(valid_types),
+                actual=pipeline_type,
+            )
+
+    def _ensure_nodes_list(self, nodes: Any) -> None:
+        if not nodes:
+            raise StreamingValidationError(
+                "Streaming pipeline must have at least one node", field="nodes"
+            )
+        if not isinstance(nodes, list):
+            raise StreamingValidationError(
+                "Pipeline nodes must be a list",
+                field="nodes",
+                expected="list",
+                actual=str(type(nodes)),
+            )
+
+    def _validate_node_entry(self, index: int, node: Any) -> None:
+        try:
+            if isinstance(node, dict):
+                self.validate_streaming_node_config(node)
+            elif isinstance(node, str):
+                # Node reference - basic validation
+                if not node.strip():
+                    raise StreamingValidationError(
+                        f"Node reference at index {index} cannot be empty string"
+                    )
+            else:
+                raise StreamingValidationError(
+                    f"Invalid node configuration at index {index}",
+                    expected="dict or str",
+                    actual=str(type(node)),
+                )
+        except StreamingValidationError as e:
+            # Add context about which node failed
+            e.add_context("node_index", index)
+            e.add_context("node_type", type(node).__name__)
+            raise
 
     @handle_streaming_error
     def validate_streaming_node_config(self, node_config: Dict[str, Any]) -> None:
@@ -204,7 +216,7 @@ class StreamingValidator:
             if not isinstance(options, dict):
                 raise StreamingValidationError(
                     f"Node '{node_name}' input options must be a dictionary",
-                    field="input.options",
+                    field=INPUT_OPTIONS_FIELD,
                     expected="dict",
                     actual=str(type(options)),
                 )
@@ -217,7 +229,7 @@ class StreamingValidator:
             if missing_options:
                 raise StreamingValidationError(
                     f"Node '{node_name}' missing required options for {format_type}: {missing_options}",
-                    field="input.options",
+                    field=INPUT_OPTIONS_FIELD,
                     expected=str(required_options),
                     actual=str(list(options.keys())),
                 )
@@ -246,7 +258,7 @@ class StreamingValidator:
     def _validate_streaming_output_config(
         self, output_config: Dict[str, Any], node_name: str
     ) -> None:
-        """Validate streaming output configuration with comprehensive checks."""
+        """Validate streaming output configuration with comprehensive checks (delegates checks)."""
         try:
             if not isinstance(output_config, dict):
                 raise StreamingValidationError(
@@ -264,7 +276,7 @@ class StreamingValidator:
                     field="output.format",
                 )
 
-            # Validación opcional contra policy de salidas soportadas
+            # Optional policy validation for output formats
             if self.policy:
                 valid_outputs = self.policy.get_supported_output_formats()
                 if format_type not in valid_outputs:
@@ -275,50 +287,20 @@ class StreamingValidator:
                         actual=format_type,
                     )
 
-            # Validate path for file-based outputs
+            # Delegate checks to specialized helpers
             file_formats = ["delta", "parquet", "json", "csv"]
             if format_type in file_formats:
-                path = output_config.get("path")
-                if not path:
-                    raise StreamingValidationError(
-                        f"Node '{node_name}' output format '{format_type}' requires 'path'",
-                        field="output.path",
-                        expected="non-empty string",
-                        actual=str(path),
-                    )
-
-                # Basic path validation
-                if not isinstance(path, str) or not path.strip():
-                    raise StreamingValidationError(
-                        f"Node '{node_name}' output path must be a non-empty string",
-                        field="output.path",
-                        expected="non-empty string",
-                        actual=str(path),
-                    )
-
-            # Validate Kafka output options
-            if format_type == "kafka":
+                self._validate_file_output_path(
+                    output_config.get("path"), node_name, format_type
+                )
+            elif format_type == "kafka":
                 self._validate_kafka_output_options(output_config, node_name)
+            elif format_type == "foreachBatch":
+                self._validate_foreach_batch(output_config, node_name)
 
-            # Validate foreachBatch configuration
-            if format_type == "foreachBatch":
-                batch_function = output_config.get("batch_function")
-                if not batch_function:
-                    raise StreamingValidationError(
-                        f"Node '{node_name}' foreachBatch output requires 'batch_function'",
-                        field="output.batch_function",
-                    )
-
-            # Validate partitioning configuration
+            # Validate partitioning configuration regardless of format
             partition_by = output_config.get("partitionBy")
-            if partition_by is not None:
-                if not isinstance(partition_by, (str, list)):
-                    raise StreamingValidationError(
-                        f"Node '{node_name}' partitionBy must be string or list of strings",
-                        field="output.partitionBy",
-                        expected="str or list",
-                        actual=str(type(partition_by)),
-                    )
+            self._validate_partition_by(partition_by, node_name)
 
         except StreamingValidationError:
             raise
@@ -326,6 +308,49 @@ class StreamingValidator:
             raise StreamingValidationError(
                 f"Error validating output config for node '{node_name}': {str(e)}",
                 cause=e,
+            )
+
+    def _validate_file_output_path(
+        self, path: Optional[str], node_name: str, format_type: str
+    ) -> None:
+        """Validate path for file-based outputs (helper)."""
+        if not path:
+            raise StreamingValidationError(
+                f"Node '{node_name}' output format '{format_type}' requires 'path'",
+                field="output.path",
+                expected=NON_EMPTY_STRING,
+                actual=str(path),
+            )
+
+        if not isinstance(path, str) or not path.strip():
+            raise StreamingValidationError(
+                f"Node '{node_name}' output path must be a non-empty string",
+                field="output.path",
+                expected=NON_EMPTY_STRING,
+                actual=str(path),
+            )
+
+    def _validate_foreach_batch(
+        self, output_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """Validate foreachBatch configuration (helper)."""
+        batch_function = output_config.get("batch_function")
+        if not batch_function:
+            raise StreamingValidationError(
+                f"Node '{node_name}' foreachBatch output requires 'batch_function'",
+                field="output.batch_function",
+            )
+
+    def _validate_partition_by(self, partition_by: Any, node_name: str) -> None:
+        """Validate partitionBy clause (helper)."""
+        if partition_by is None:
+            return
+        if not isinstance(partition_by, (str, list)):
+            raise StreamingValidationError(
+                f"Node '{node_name}' partitionBy must be string or list of strings",
+                field="output.partitionBy",
+                expected="str or list",
+                actual=str(type(partition_by)),
             )
 
     def _validate_streaming_config(
@@ -414,12 +439,11 @@ class StreamingValidator:
 
             module_path = function_config.get("module")
             function_name = function_config.get("function")
-
             if not isinstance(module_path, str) or not module_path.strip():
                 raise StreamingValidationError(
                     f"Node '{node_name}' function module must be a non-empty string",
                     field="function.module",
-                    expected="non-empty string",
+                    expected=NON_EMPTY_STRING,
                     actual=str(module_path),
                 )
 
@@ -427,7 +451,7 @@ class StreamingValidator:
                 raise StreamingValidationError(
                     f"Node '{node_name}' function name must be a non-empty string",
                     field="function.function",
-                    expected="non-empty string",
+                    expected=NON_EMPTY_STRING,
                     actual=str(function_name),
                 )
 
@@ -486,7 +510,7 @@ class StreamingValidator:
             if len(provided_subscriptions) == 0:
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kafka input must specify one of: {subscription_options}",
-                    field="input.options",
+                    field=INPUT_OPTIONS_FIELD,
                     expected=f"one of {subscription_options}",
                     actual="none provided",
                 )
@@ -494,7 +518,7 @@ class StreamingValidator:
             if len(provided_subscriptions) > 1:
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kafka input cannot specify multiple subscription options: {provided_subscriptions}",
-                    field="input.options",
+                    field=INPUT_OPTIONS_FIELD,
                     expected=f"only one of {subscription_options}",
                     actual=str(provided_subscriptions),
                 )
@@ -505,7 +529,7 @@ class StreamingValidator:
                 if not isinstance(bootstrap_servers, str):
                     raise StreamingValidationError(
                         f"Node '{node_name}' kafka.bootstrap.servers must be a string",
-                        field="input.options.kafka.bootstrap.servers",
+                        field=f"{INPUT_OPTIONS_FIELD}.kafka.bootstrap.servers",
                         expected="string",
                         actual=str(type(bootstrap_servers)),
                     )
@@ -514,7 +538,7 @@ class StreamingValidator:
                 if not bootstrap_servers.strip():
                     raise StreamingValidationError(
                         f"Node '{node_name}' kafka.bootstrap.servers cannot be empty",
-                        field="input.options.kafka.bootstrap.servers",
+                        field=f"{INPUT_OPTIONS_FIELD}.kafka.bootstrap.servers",
                     )
 
             # Validate subscription values
@@ -522,7 +546,7 @@ class StreamingValidator:
             if subscribe and not isinstance(subscribe, str):
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kafka subscribe must be a string",
-                    field="input.options.subscribe",
+                    field=f"{INPUT_OPTIONS_FIELD}.subscribe",
                     expected="string",
                     actual=str(type(subscribe)),
                 )
@@ -581,13 +605,13 @@ class StreamingValidator:
             if not path:
                 raise StreamingValidationError(
                     f"Node '{node_name}' file stream requires 'path' option",
-                    field="input.options.path",
+                    field=f"{INPUT_OPTIONS_FIELD}.path",
                 )
 
             if not isinstance(path, str):
                 raise StreamingValidationError(
                     f"Node '{node_name}' file stream path must be a string",
-                    field="input.options.path",
+                    field=f"{INPUT_OPTIONS_FIELD}.path",
                     expected="string",
                     actual=str(type(path)),
                 )
@@ -601,7 +625,7 @@ class StreamingValidator:
                     except (ValueError, TypeError):
                         raise StreamingValidationError(
                             f"Node '{node_name}' file stream option '{opt}' must be numeric",
-                            field=f"input.options.{opt}",
+                            field=f"{INPUT_OPTIONS_FIELD}.{opt}",
                             expected="numeric",
                             actual=str(options[opt]),
                         )
@@ -624,7 +648,7 @@ class StreamingValidator:
             if missing_options:
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kinesis input missing required options: {missing_options}",
-                    field="input.options",
+                    field=INPUT_OPTIONS_FIELD,
                     expected=str(required_options),
                     actual=str(list(options.keys())),
                 )
@@ -634,7 +658,7 @@ class StreamingValidator:
             if stream_name and not isinstance(stream_name, str):
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kinesis streamName must be a string",
-                    field="input.options.streamName",
+                    field=f"{INPUT_OPTIONS_FIELD}.streamName",
                     expected="string",
                     actual=str(type(stream_name)),
                 )
@@ -644,7 +668,7 @@ class StreamingValidator:
             if region and not isinstance(region, str):
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kinesis region must be a string",
-                    field="input.options.region",
+                    field=f"{INPUT_OPTIONS_FIELD}.region",
                     expected="string",
                     actual=str(type(region)),
                 )
@@ -677,16 +701,14 @@ class StreamingValidator:
                     f"Node '{node_name}' watermark must specify 'column'",
                     field="input.watermark.column",
                 )
-
             if not isinstance(column, str) or not column.strip():
                 raise StreamingValidationError(
                     f"Node '{node_name}' watermark column must be a non-empty string",
                     field="input.watermark.column",
-                    expected="non-empty string",
+                    expected=NON_EMPTY_STRING,
                     actual=str(column),
                 )
 
-            # Validate delay
             delay = watermark.get("delay", "10 seconds")
             if not self._validate_time_interval(delay):
                 raise StreamingValidationError(
@@ -696,7 +718,6 @@ class StreamingValidator:
                     actual=delay,
                 )
 
-            # Check delay is not too long
             delay_minutes = self._parse_time_to_minutes(delay)
             max_delay = STREAMING_VALIDATIONS["max_watermark_delay_minutes"]
             if delay_minutes > max_delay:
@@ -743,7 +764,6 @@ class StreamingValidator:
                     actual=trigger_type,
                 )
 
-            # Validate interval for time-based triggers
             if trigger_type in [
                 StreamingTrigger.PROCESSING_TIME.value,
                 StreamingTrigger.CONTINUOUS.value,
@@ -752,13 +772,13 @@ class StreamingValidator:
                 if not interval:
                     raise StreamingValidationError(
                         f"Node '{node_name}' trigger type '{trigger_type}' requires 'interval'",
-                        field="streaming.trigger.interval",
+                        field=TRIGGER_INTERVAL_FIELD,
                     )
 
                 if not self._validate_time_interval(interval):
                     raise StreamingValidationError(
                         f"Node '{node_name}' trigger interval '{interval}' is invalid",
-                        field="streaming.trigger.interval",
+                        field=TRIGGER_INTERVAL_FIELD,
                         expected="time interval like '10 seconds', '5 minutes'",
                         actual=interval,
                     )
@@ -769,7 +789,7 @@ class StreamingValidator:
                 if interval_seconds < min_interval:
                     raise StreamingValidationError(
                         f"Node '{node_name}' trigger interval '{interval}' is below minimum allowed interval of {min_interval} seconds",
-                        field="streaming.trigger.interval",
+                        field=TRIGGER_INTERVAL_FIELD,
                         expected=f">= {min_interval} seconds",
                         actual=f"{interval_seconds} seconds",
                     )
@@ -836,60 +856,74 @@ class StreamingValidator:
     ) -> List[str]:
         """Validate compatibility between batch and streaming configurations."""
         try:
-            warnings = []
+            warnings: List[str] = []
 
-            # Check for shared resources
-            batch_outputs = set()
-            streaming_outputs = set()
-
-            # Extract outputs from batch config
             batch_nodes = batch_config.get("nodes", [])
-            for node in batch_nodes:
-                if isinstance(node, dict) and "output" in node:
-                    output_path = node["output"].get("path")
-                    if output_path:
-                        batch_outputs.add(output_path)
-
-            # Extract outputs from streaming config
             streaming_nodes = streaming_config.get("nodes", [])
-            for node in streaming_nodes:
-                if isinstance(node, dict) and "output" in node:
-                    output_path = node["output"].get("path")
-                    if output_path:
-                        streaming_outputs.add(output_path)
 
-            shared_outputs = batch_outputs.intersection(streaming_outputs)
-            if shared_outputs:
-                warnings.append(
-                    f"Shared output resources detected: {shared_outputs}. "
-                    f"Ensure proper coordination to avoid conflicts."
-                )
+            batch_outputs = self._extract_output_paths(batch_nodes)
+            streaming_outputs = self._extract_output_paths(streaming_nodes)
 
-            # Check checkpoint locations for conflicts
-            checkpoint_locations = set()
-            for node in streaming_nodes:
-                if isinstance(node, dict):
-                    checkpoint = node.get("streaming", {}).get("checkpoint_location")
-                    if checkpoint:
-                        if checkpoint in checkpoint_locations:
-                            warnings.append(
-                                f"Duplicate checkpoint location: {checkpoint}. "
-                                f"Each streaming query should have a unique checkpoint."
-                            )
-                        checkpoint_locations.add(checkpoint)
-
-            # Check resource usage patterns
-            if len(batch_nodes) > 10 and len(streaming_nodes) > 5:
-                warnings.append(
-                    f"High resource usage detected: {len(batch_nodes)} batch nodes and "
-                    f"{len(streaming_nodes)} streaming nodes. Consider resource allocation."
-                )
+            self._append_shared_output_warning(
+                warnings, batch_outputs, streaming_outputs
+            )
+            self._append_duplicate_checkpoint_warnings(warnings, streaming_nodes)
+            self._append_resource_usage_warning(warnings, batch_nodes, streaming_nodes)
 
             return warnings
 
         except Exception as e:
             logger.error(f"Error validating pipeline compatibility: {str(e)}")
             return [f"Error during compatibility validation: {str(e)}"]
+
+    def _extract_output_paths(self, nodes: List[Any]) -> set:
+        """Extract output path strings from a list of nodes."""
+        outputs = set()
+        for node in nodes:
+            if isinstance(node, dict) and "output" in node:
+                output_path = node["output"].get("path")
+                if output_path:
+                    outputs.add(output_path)
+        return outputs
+
+    def _append_shared_output_warning(
+        self, warnings: List[str], batch_outputs: set, streaming_outputs: set
+    ) -> None:
+        """Append a warning if there are shared output resources."""
+        shared = batch_outputs.intersection(streaming_outputs)
+        if shared:
+            warnings.append(
+                f"Shared output resources detected: {shared}. "
+                f"Ensure proper coordination to avoid conflicts."
+            )
+
+    def _append_duplicate_checkpoint_warnings(
+        self, warnings: List[str], streaming_nodes: List[Any]
+    ) -> None:
+        """Detect duplicate checkpoint locations across streaming nodes and append warnings."""
+        checkpoint_locations = set()
+        for node in streaming_nodes:
+            if not isinstance(node, dict):
+                continue
+            checkpoint = node.get("streaming", {}).get("checkpoint_location")
+            if not checkpoint:
+                continue
+            if checkpoint in checkpoint_locations:
+                warnings.append(
+                    f"Duplicate checkpoint location: {checkpoint}. "
+                    f"Each streaming query should have a unique checkpoint."
+                )
+            checkpoint_locations.add(checkpoint)
+
+    def _append_resource_usage_warning(
+        self, warnings: List[str], batch_nodes: List[Any], streaming_nodes: List[Any]
+    ) -> None:
+        """Append a resource usage warning when node counts indicate potential issues."""
+        if len(batch_nodes) > 10 and len(streaming_nodes) > 5:
+            warnings.append(
+                f"High resource usage detected: {len(batch_nodes)} batch nodes and "
+                f"{len(streaming_nodes)} streaming nodes. Consider resource allocation."
+            )
 
     def validate_resource_requirements(
         self, pipeline_config: Dict[str, Any]

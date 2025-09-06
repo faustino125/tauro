@@ -11,6 +11,7 @@ the license agreement for details.
 
 import argparse
 import sys
+from pathlib import Path
 import traceback
 from datetime import datetime
 from typing import List, Optional
@@ -187,18 +188,26 @@ class ConfigValidator:
         if config.verbose and config.quiet:
             raise ValidationError("Cannot use both --verbose and --quiet")
 
+        ConfigValidator._validate_streaming(config)
+        ConfigValidator._validate_pipeline_execution(config)
+        ConfigValidator._validate_dates(config)
+
+    @staticmethod
+    def _validate_streaming(config: CLIConfig) -> None:
+        """Validate streaming-related configuration."""
         if config.streaming:
             if not config.streaming_config:
                 raise ValidationError(
                     "--streaming-config required for streaming commands"
                 )
-
             if config.streaming_command == "run" and not config.streaming_pipeline:
                 raise ValidationError("--streaming-pipeline required for 'run' command")
-
-            if config.streaming_command in ["stop"] and not config.execution_id:
+            if config.streaming_command == "stop" and not config.execution_id:
                 raise ValidationError("--execution-id required for this command")
 
+    @staticmethod
+    def _validate_pipeline_execution(config: CLIConfig) -> None:
+        """Validate pipeline execution configuration."""
         special_modes = [
             config.list_configs,
             config.list_pipelines,
@@ -206,13 +215,15 @@ class ConfigValidator:
             config.clear_cache,
             config.streaming,  # Streaming handled separately
         ]
-
         if not any(special_modes):
             if not config.env:
                 raise ValidationError("--env required for pipeline execution")
             if not config.pipeline:
                 raise ValidationError("--pipeline required for pipeline execution")
 
+    @staticmethod
+    def _validate_dates(config: CLIConfig) -> None:
+        """Validate date range configuration."""
         if config.start_date or config.end_date:
             sd = parse_iso_date(config.start_date)
             ed = parse_iso_date(config.end_date)
@@ -223,6 +234,7 @@ class SpecialModeHandler:
     """Handles special CLI modes that don't require full pipeline execution."""
 
     def __init__(self):
+        """Initialize special-mode handler state."""
         self.config_manager: Optional[ConfigManager] = None
 
     def handle(self, parsed_args) -> Optional[int]:
@@ -318,13 +330,33 @@ class TauroCLI:
         parser = ArgumentParser.create()
         parsed = parser.parse_args(args)
 
+        base_path = Path(parsed.base_path) if parsed.base_path else None
+        log_file = Path(parsed.log_file) if parsed.log_file else None
+        output_path = (
+            Path(parsed.output_path)
+            if hasattr(parsed, "output_path") and parsed.output_path
+            else None
+        )
+        streaming_config = (
+            Path(parsed.streaming_config) if parsed.streaming_config else None
+        )
+
+        try:
+            start_date = parse_iso_date(parsed.start_date)
+        except Exception:
+            start_date = parsed.start_date
+        try:
+            end_date = parse_iso_date(parsed.end_date)
+        except Exception:
+            end_date = parsed.end_date
+
         return CLIConfig(
             env=parsed.env or "",
             pipeline=parsed.pipeline or "",
             node=parsed.node,
-            start_date=parsed.start_date,
-            end_date=parsed.end_date,
-            base_path=parsed.base_path,
+            start_date=start_date,
+            end_date=end_date,
+            base_path=base_path,
             layer_name=parsed.layer_name,
             use_case_name=parsed.use_case_name,
             config_type=parsed.config_type,
@@ -334,55 +366,36 @@ class TauroCLI:
             pipeline_info=parsed.pipeline_info,
             clear_cache=getattr(parsed, "clear_cache", False),
             log_level=parsed.log_level,
-            log_file=parsed.log_file,
+            log_file=log_file,
             validate_only=parsed.validate_only,
             dry_run=parsed.dry_run,
             verbose=parsed.verbose,
             quiet=parsed.quiet,
             streaming=parsed.streaming,
             streaming_command=parsed.streaming_command,
-            streaming_config=parsed.streaming_config,
+            streaming_config=streaming_config,
             streaming_pipeline=parsed.streaming_pipeline,
             execution_id=parsed.execution_id,
             streaming_mode=parsed.streaming_mode,
             model_version=parsed.model_version,
             hyperparams=parsed.hyperparams,
+            output_path=output_path,
         )
 
     def run(self, args: Optional[List[str]] = None) -> int:
         """Main entry point for CLI execution."""
         parsed_args = None
-
         try:
-            # Parse arguments for logger setup
-            parser = ArgumentParser.create()
-            parsed_args = parser.parse_args(args)
+            parsed_args = self._parse_and_setup_logger(args)
+            result = self._handle_quick_commands(parsed_args)
+            if result is not None:
+                return result
 
-            LoggerManager.setup(
-                level=parsed_args.log_level,
-                log_file=parsed_args.log_file,
-                verbose=parsed_args.verbose,
-                quiet=parsed_args.quiet,
-            )
-
-            # Handle template commands
-            if parsed_args.template or parsed_args.list_templates:
-                return handle_template_command(parsed_args)
-
-            # Handle streaming commands
-            if parsed_args.streaming:
-                return self._handle_streaming_command(parsed_args)
-
-            # Handle special modes first
-            special_handler = SpecialModeHandler()
-            special_result = special_handler.handle(parsed_args)
+            special_result = self._handle_special_modes(parsed_args)
             if special_result is not None:
                 return special_result
 
-            # Normalize and validate dates early (fail-fast)
             _normalize_and_validate_dates(parsed_args)
-
-            # Parse and validate full configuration
             self.config = self.parse_arguments(args)
             ConfigValidator.validate(self.config)
 
@@ -390,24 +403,11 @@ class TauroCLI:
             logger.info(f"Environment: {self.config.env.upper()}")
             logger.info(f"Pipeline: {self.config.pipeline}")
 
-            # Initialize configuration manager
-            if not self.config_manager:
-                self.config_manager = ConfigManager(
-                    base_path=self.config.base_path,
-                    layer_name=self.config.layer_name,
-                    use_case=self.config.use_case_name,
-                    config_type=self.config.config_type,
-                    interactive=self.config.interactive,
-                )
-                self.config_manager.change_to_config_directory()
-
-            # Initialize context
+            self._init_config_manager()
             context_init = ContextInitializer(self.config_manager)
 
             if self.config.validate_only:
                 return self._handle_validate_only(context_init)
-
-            # Execute pipeline
             return self._execute_pipeline(context_init)
 
         except TauroError as e:
@@ -433,6 +433,44 @@ class TauroCLI:
                 self.config_manager.restore_original_directory()
             ConfigCache.clear()
 
+    def _parse_and_setup_logger(self, args: Optional[List[str]]) -> argparse.Namespace:
+        """Parse arguments and setup logger."""
+        parser = ArgumentParser.create()
+        parsed_args = parser.parse_args(args)
+        log_file = Path(parsed_args.log_file) if parsed_args.log_file else None
+        LoggerManager.setup(
+            level=parsed_args.log_level,
+            log_file=log_file,
+            verbose=parsed_args.verbose,
+            quiet=parsed_args.quiet,
+        )
+        return parsed_args
+
+    def _handle_quick_commands(self, parsed_args) -> Optional[int]:
+        """Handle template and streaming commands."""
+        if parsed_args.template or parsed_args.list_templates:
+            return handle_template_command(parsed_args)
+        if parsed_args.streaming:
+            return self._handle_streaming_command(parsed_args)
+        return None
+
+    def _handle_special_modes(self, parsed_args) -> Optional[int]:
+        """Handle special CLI modes."""
+        special_handler = SpecialModeHandler()
+        return special_handler.handle(parsed_args)
+
+    def _init_config_manager(self):
+        """Initialize configuration manager if not already set."""
+        if not self.config_manager:
+            self.config_manager = ConfigManager(
+                base_path=self.config.base_path,
+                layer_name=self.config.layer_name,
+                use_case=self.config.use_case_name,
+                config_type=self.config.config_type,
+                interactive=self.config.interactive,
+            )
+            self.config_manager.change_to_config_directory()
+
     def _handle_streaming_command(self, parsed_args) -> int:
         """Execute streaming pipeline commands."""
         try:
@@ -443,52 +481,71 @@ class TauroCLI:
             command = parsed_args.streaming_command or "run"
 
             if command == "run":
-                if not parsed_args.streaming_pipeline:
-                    raise ValidationError(
-                        "--streaming-pipeline required for 'run' command"
-                    )
-                result = cmd_run.callback(
-                    config=parsed_args.streaming_config,
-                    pipeline=parsed_args.streaming_pipeline,
-                    mode=parsed_args.streaming_mode,
-                    model_version=parsed_args.model_version,
-                    hyperparams=parsed_args.hyperparams,
-                )
-                return result if isinstance(result, int) else ExitCode.SUCCESS.value
-
+                return self._handle_streaming_run(cmd_run, parsed_args)
             elif command == "status":
-                result = cmd_status.callback(
-                    config=parsed_args.streaming_config,
-                    execution_id=parsed_args.execution_id,
-                    format="table",
-                )
-                return result if isinstance(result, int) else ExitCode.SUCCESS.value
-
+                return self._handle_streaming_status(cmd_status, parsed_args)
             elif command == "stop":
-                if not parsed_args.execution_id:
-                    raise ValidationError("--execution-id required for 'stop' command")
-                result = cmd_stop.callback(
-                    config=parsed_args.streaming_config,
-                    execution_id=parsed_args.execution_id,
-                    timeout=60,
-                )
-                return result if isinstance(result, int) else ExitCode.SUCCESS.value
-
+                return self._handle_streaming_stop(cmd_stop, parsed_args)
             else:
                 raise ValidationError(f"Unknown streaming command: {command}")
 
-        except SystemExit as se:
-            try:
-                code = int(getattr(se, "code", ExitCode.GENERAL_ERROR.value))
-            except Exception:
-                code = ExitCode.GENERAL_ERROR.value
-            return code
-
+        except SystemExit:
+            raise
         except Exception as e:
             logger.error(f"Streaming command failed: {e}")
             if getattr(parsed_args, "verbose", False):
                 logger.debug(traceback.format_exc())
             return ExitCode.EXECUTION_ERROR.value
+
+    def _handle_streaming_run(self, cmd_run, parsed_args) -> int:
+        """Handle streaming 'run' command."""
+        if not parsed_args.streaming_pipeline:
+            raise ValidationError("--streaming-pipeline required for 'run' command")
+        streaming_config = (
+            Path(parsed_args.streaming_config) if parsed_args.streaming_config else None
+        )
+        result = cmd_run.callback(
+            config=streaming_config,
+            pipeline=parsed_args.streaming_pipeline,
+            mode=parsed_args.streaming_mode,
+            model_version=parsed_args.model_version,
+            hyperparams=parsed_args.hyperparams,
+        )
+        return result if isinstance(result, int) else ExitCode.SUCCESS.value
+
+    def _handle_streaming_status(self, cmd_status, parsed_args) -> int:
+        """Handle streaming 'status' command."""
+        streaming_config = (
+            Path(parsed_args.streaming_config) if parsed_args.streaming_config else None
+        )
+        result = cmd_status.callback(
+            config=streaming_config,
+            execution_id=parsed_args.execution_id,
+            format="table",
+        )
+        return result if isinstance(result, int) else ExitCode.SUCCESS.value
+
+    def _handle_streaming_stop(self, cmd_stop, parsed_args) -> int:
+        """Handle streaming 'stop' command."""
+        if not parsed_args.execution_id:
+            raise ValidationError("--execution-id required for 'stop' command")
+        streaming_config = (
+            Path(parsed_args.streaming_config) if parsed_args.streaming_config else None
+        )
+        result = cmd_stop.callback(
+            config=streaming_config,
+            execution_id=parsed_args.execution_id,
+            timeout=60,
+        )
+        return result if isinstance(result, int) else ExitCode.SUCCESS.value
+
+    def _extract_exit_code(self, se: SystemExit) -> int:
+        """Extract exit code from SystemExit exception."""
+        try:
+            code = int(getattr(se, "code", ExitCode.GENERAL_ERROR.value))
+        except Exception:
+            code = ExitCode.GENERAL_ERROR.value
+        return code
 
     def _handle_validate_only(self, context_init: ContextInitializer) -> int:
         """Handle validation-only mode."""
@@ -511,7 +568,6 @@ class TauroCLI:
 
         executor = PipelineExecutor(context, self.config_manager.get_config_directory())
 
-        # Validate pipeline exists
         if not executor.validate_pipeline(self.config.pipeline):
             available = executor.list_pipelines()
             if available:
@@ -520,7 +576,6 @@ class TauroCLI:
             else:
                 logger.warning("Could not validate pipeline existence")
 
-        # Validate node exists if specified
         if self.config.node and not executor.validate_node(
             self.config.pipeline, self.config.node
         ):
@@ -528,7 +583,6 @@ class TauroCLI:
                 f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
             )
 
-        # Execute pipeline
         executor.execute(
             pipeline_name=self.config.pipeline,
             node_name=self.config.node,

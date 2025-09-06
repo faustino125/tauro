@@ -151,7 +151,6 @@ class StreamingPipelineManager:
                         f"Pipeline '{execution_id}' not found or not running"
                     )
                     return False
-
                 pipeline_info["status"] = "stopping"
 
             pipeline_name = pipeline_info["pipeline_name"]
@@ -159,45 +158,18 @@ class StreamingPipelineManager:
                 f"Stopping streaming pipeline '{pipeline_name}' (ID: {execution_id}, graceful={graceful})"
             )
 
-            # Stop all streaming queries
-            stopped_queries = []
-            failed_queries = []
-
-            for query_name, query in pipeline_info["queries"].items():
-                try:
-                    if isinstance(query, StreamingQuery) and query.isActive:
-                        logger.info(
-                            f"Stopping query '{query_name}' in pipeline '{execution_id}'"
-                        )
-
-                        success = self.query_manager.stop_query(
-                            query, graceful, timeout_seconds
-                        )
-                        if success:
-                            stopped_queries.append(query_name)
-                        else:
-                            failed_queries.append(query_name)
-
-                except Exception as e:
-                    logger.error(f"Error stopping query '{query_name}': {str(e)}")
-                    failed_queries.append(query_name)
+            stopped_queries, failed_queries = self._stop_pipeline_queries(
+                pipeline_info, execution_id, graceful, timeout_seconds
+            )
 
             # Handle pipeline thread
             if not graceful and execution_id in self._pipeline_threads:
                 future = self._pipeline_threads[execution_id]
                 future.cancel()
 
-            # Update pipeline status
-            with self._lock:
-                if execution_id in self._running_pipelines:
-                    self._running_pipelines[execution_id]["status"] = "stopped"
-                    self._running_pipelines[execution_id]["end_time"] = time.time()
-                    self._running_pipelines[execution_id][
-                        "stopped_queries"
-                    ] = stopped_queries
-                    self._running_pipelines[execution_id][
-                        "failed_queries"
-                    ] = failed_queries
+            self._update_pipeline_stop_status(
+                execution_id, stopped_queries, failed_queries
+            )
 
             if failed_queries:
                 logger.warning(
@@ -221,6 +193,47 @@ class StreamingPipelineManager:
                 cause=e,
             )
 
+    def _stop_pipeline_queries(
+        self,
+        pipeline_info: Dict[str, Any],
+        execution_id: str,
+        graceful: bool,
+        timeout_seconds: float,
+    ):
+        """Helper to stop all queries in a pipeline."""
+        stopped_queries = []
+        failed_queries = []
+        for query_name, query in pipeline_info["queries"].items():
+            try:
+                if isinstance(query, StreamingQuery) and query.isActive:
+                    logger.info(
+                        f"Stopping query '{query_name}' in pipeline '{execution_id}'"
+                    )
+                    success = self.query_manager.stop_query(
+                        query, graceful, timeout_seconds
+                    )
+                    if success:
+                        stopped_queries.append(query_name)
+                    else:
+                        failed_queries.append(query_name)
+            except Exception as e:
+                logger.error(f"Error stopping query '{query_name}': {str(e)}")
+                failed_queries.append(query_name)
+        return stopped_queries, failed_queries
+
+    def _update_pipeline_stop_status(
+        self, execution_id: str, stopped_queries: list, failed_queries: list
+    ):
+        """Helper to update pipeline status after stopping."""
+        with self._lock:
+            if execution_id in self._running_pipelines:
+                self._running_pipelines[execution_id]["status"] = "stopped"
+                self._running_pipelines[execution_id]["end_time"] = time.time()
+                self._running_pipelines[execution_id][
+                    "stopped_queries"
+                ] = stopped_queries
+                self._running_pipelines[execution_id]["failed_queries"] = failed_queries
+
     def get_pipeline_status(self, execution_id: str) -> Optional[Dict[str, Any]]:
         """Get status of a specific pipeline with enhanced information."""
         try:
@@ -228,57 +241,25 @@ class StreamingPipelineManager:
                 pipeline_info = self._running_pipelines.get(execution_id)
                 if not pipeline_info:
                     return None
-
-                # Enrich with real-time query status
                 status = pipeline_info.copy()
-                query_statuses = {}
-                active_queries = 0
-                failed_queries = 0
 
-                for query_name, query in pipeline_info["queries"].items():
-                    if isinstance(query, StreamingQuery):
-                        try:
-                            is_active = query.isActive
-                            query_status = {
-                                "id": query.id,
-                                "runId": str(query.runId),
-                                "isActive": is_active,
-                                "lastProgress": (
-                                    query.lastProgress if is_active else None
-                                ),
-                            }
+            (
+                query_statuses,
+                active_queries,
+                failed_queries,
+            ) = self._collect_query_statuses(pipeline_info.get("queries", {}))
 
-                            if is_active:
-                                active_queries += 1
-                            else:
-                                # Check if query failed
-                                try:
-                                    exception = query.exception()
-                                    if exception:
-                                        query_status["exception"] = str(exception)
-                                        failed_queries += 1
-                                except Exception:
-                                    pass
+            status["query_statuses"] = query_statuses
+            status["active_queries"] = active_queries
+            status["failed_queries"] = failed_queries
+            status["total_queries"] = len(pipeline_info.get("queries", {}))
 
-                            query_statuses[query_name] = query_status
+            # Calculate uptime
+            if "start_time" in status:
+                end_time = status.get("end_time", time.time())
+                status["uptime_seconds"] = end_time - status["start_time"]
 
-                        except Exception as e:
-                            query_statuses[query_name] = {"error": str(e)}
-                            failed_queries += 1
-                    else:
-                        query_statuses[query_name] = {"status": "unknown"}
-
-                status["query_statuses"] = query_statuses
-                status["active_queries"] = active_queries
-                status["failed_queries"] = failed_queries
-                status["total_queries"] = len(pipeline_info["queries"])
-
-                # Calculate uptime
-                if "start_time" in status:
-                    end_time = status.get("end_time", time.time())
-                    status["uptime_seconds"] = end_time - status["start_time"]
-
-                return status
+            return status
 
         except Exception as e:
             logger.error(
@@ -289,6 +270,48 @@ class StreamingPipelineManager:
                 "status": "error",
                 "error": f"Failed to get status: {str(e)}",
             }
+
+    def _collect_query_statuses(self, queries: Dict[str, Any]):
+        """Helper to collect statuses for all queries in a pipeline."""
+        query_statuses = {}
+        active_queries = 0
+        failed_queries = 0
+
+        for query_name, query in queries.items():
+            status, is_active, is_failed = self._get_single_query_status(query)
+            query_statuses[query_name] = status
+            if is_active:
+                active_queries += 1
+            if is_failed:
+                failed_queries += 1
+
+        return query_statuses, active_queries, failed_queries
+
+    def _get_single_query_status(self, query):
+        """Extract status for a single query."""
+        if not isinstance(query, StreamingQuery):
+            return {"status": "unknown"}, False, False
+        try:
+            is_active = query.isActive
+            status = {
+                "id": getattr(query, "id", None),
+                "runId": str(getattr(query, "runId", "")),
+                "isActive": is_active,
+                "lastProgress": query.lastProgress if is_active else None,
+            }
+            if is_active:
+                return status, True, False
+            exception = None
+            try:
+                exception = query.exception()
+            except Exception:
+                pass
+            if exception:
+                status["exception"] = str(exception)
+                return status, False, True
+            return status, False, False
+        except Exception as e:
+            return {"error": str(e)}, False, True
 
     def list_running_pipelines(self) -> List[Dict[str, Any]]:
         """List all running pipelines with their status."""
@@ -438,7 +461,7 @@ class StreamingPipelineManager:
             logger.info("Waiting for pipeline threads to complete...")
             completed_threads = 0
 
-            for execution_id, future in list(self._pipeline_threads.items()):
+            for execution_id, future in self._pipeline_threads.items():
                 try:
                     future.result(
                         timeout=(
@@ -462,9 +485,16 @@ class StreamingPipelineManager:
                 f"Completed {completed_threads}/{len(self._pipeline_threads)} pipeline threads"
             )
 
-            # Shutdown executor
+            # Shutdown executor: ThreadPoolExecutor.shutdown does not accept a timeout kwarg
             logger.info("Shutting down thread pool executor...")
-            self._executor.shutdown(wait=True, timeout=timeout_seconds)
+            try:
+                # First, prevent new tasks and wait a short while for running tasks
+                self._executor.shutdown(wait=False)
+            except Exception:
+                try:
+                    self._executor.shutdown(wait=True)
+                except Exception:
+                    logger.warning("Executor shutdown encountered an issue")
 
             # Clear internal state
             with self._lock:
@@ -505,7 +535,6 @@ class StreamingPipelineManager:
                 f"Executing streaming pipeline '{pipeline_name}' with execution_id: {execution_id}"
             )
 
-            # Get pipeline nodes in execution order
             nodes = pipeline_config.get("nodes", [])
             if not nodes:
                 raise StreamingPipelineError(
@@ -514,68 +543,10 @@ class StreamingPipelineManager:
                     execution_id=execution_id,
                 )
 
-            # Process each node configuration
-            processed_nodes = []
-            for i, node_config in enumerate(nodes):
-                if self._shutdown_event.is_set():
-                    logger.info(
-                        f"Shutdown requested, stopping pipeline '{execution_id}'"
-                    )
-                    break
+            processed_nodes = self._process_pipeline_nodes(
+                execution_id, pipeline_name, nodes
+            )
 
-                try:
-                    # Ensure node has proper configuration
-                    if isinstance(node_config, str):
-                        # Node reference - load from context
-                        node_name = node_config
-                        actual_config = self.context.nodes_config.get(node_name)
-                        if not actual_config:
-                            raise StreamingPipelineError(
-                                f"Node configuration '{node_name}' not found",
-                                pipeline_name=pipeline_name,
-                                execution_id=execution_id,
-                            )
-                        node_config = {**actual_config, "name": node_name}
-                    elif isinstance(node_config, dict):
-                        if "name" not in node_config:
-                            node_config["name"] = f"node_{i}"
-                    else:
-                        raise StreamingPipelineError(
-                            f"Invalid node configuration type: {type(node_config)}",
-                            pipeline_name=pipeline_name,
-                            execution_id=execution_id,
-                        )
-
-                    # Create and start streaming query
-                    query = self.query_manager.create_and_start_query(
-                        node_config, execution_id, pipeline_name
-                    )
-
-                    node_name = node_config.get("name", f"node_{i}")
-                    with self._lock:
-                        self._running_pipelines[execution_id]["queries"][
-                            node_name
-                        ] = query
-                        self._running_pipelines[execution_id]["completed_nodes"] += 1
-
-                    processed_nodes.append(node_name)
-                    logger.info(
-                        f"Started streaming query '{node_name}' in pipeline '{execution_id}'"
-                    )
-
-                except Exception as e:
-                    logger.error(
-                        f"Error processing node {i} in pipeline '{execution_id}': {str(e)}"
-                    )
-                    # Mark pipeline as failed but continue monitoring existing queries
-                    with self._lock:
-                        self._running_pipelines[execution_id][
-                            "status"
-                        ] = "partial_failure"
-                        self._running_pipelines[execution_id]["error"] = str(e)
-                    break
-
-            # Monitor queries until shutdown or failure
             if processed_nodes:
                 logger.info(
                     f"Pipeline '{execution_id}' started {len(processed_nodes)} queries, beginning monitoring..."
@@ -596,6 +567,61 @@ class StreamingPipelineManager:
                     self._running_pipelines[execution_id]["error"] = str(e)
             raise
 
+    def _process_pipeline_nodes(
+        self, execution_id: str, pipeline_name: str, nodes: List[Any]
+    ) -> List[str]:
+        """Process each node configuration for the pipeline."""
+        processed_nodes = []
+        for i, node_config in enumerate(nodes):
+            if self._shutdown_event.is_set():
+                logger.info(f"Shutdown requested, stopping pipeline '{execution_id}'")
+                break
+            try:
+                node_config = self._get_node_config(node_config, i)
+                query = self.query_manager.create_and_start_query(
+                    node_config, execution_id, pipeline_name
+                )
+                node_name = node_config.get("name", f"node_{i}")
+                with self._lock:
+                    self._running_pipelines[execution_id]["queries"][node_name] = query
+                    self._running_pipelines[execution_id]["completed_nodes"] += 1
+                processed_nodes.append(node_name)
+                logger.info(
+                    f"Started streaming query '{node_name}' in pipeline '{execution_id}'"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error processing node {i} in pipeline '{execution_id}': {str(e)}"
+                )
+                with self._lock:
+                    self._running_pipelines[execution_id]["status"] = "partial_failure"
+                    self._running_pipelines[execution_id]["error"] = str(e)
+                break
+        return processed_nodes
+
+    def _get_node_config(self, node_config: Any, idx: int) -> Dict[str, Any]:
+        """Ensure node has proper configuration."""
+        if isinstance(node_config, str):
+            node_name = node_config
+            actual_config = self.context.nodes_config.get(node_name)
+            if not actual_config:
+                raise StreamingPipelineError(
+                    f"Node configuration '{node_name}' not found",
+                    pipeline_name=None,
+                    execution_id=None,
+                )
+            return {**actual_config, "name": node_name}
+        elif isinstance(node_config, dict):
+            if "name" not in node_config:
+                node_config["name"] = f"node_{idx}"
+            return node_config
+        else:
+            raise StreamingPipelineError(
+                f"Invalid node configuration type: {type(node_config)}",
+                pipeline_name=None,
+                execution_id=None,
+            )
+
     def _monitor_pipeline_queries(self, execution_id: str) -> None:
         """Monitor queries in a pipeline until completion or error with enhanced monitoring."""
         pipeline_info = self._running_pipelines.get(execution_id)
@@ -609,88 +635,33 @@ class StreamingPipelineManager:
 
         while not self._shutdown_event.is_set():
             try:
-                active_queries = 0
-                failed_queries = []
-                completed_queries = []
+                (
+                    active_queries,
+                    failed_queries,
+                    completed_queries,
+                ) = self._collect_query_states(pipeline_info)
 
-                for query_name, query in pipeline_info["queries"].items():
-                    if isinstance(query, StreamingQuery):
-                        try:
-                            if query.isActive:
-                                active_queries += 1
-                            else:
-                                # Query has stopped - check if it failed
-                                try:
-                                    exception = query.exception()
-                                    if exception:
-                                        failed_queries.append(
-                                            (query_name, str(exception))
-                                        )
-                                    else:
-                                        completed_queries.append(query_name)
-                                except Exception:
-                                    # Query might have completed successfully
-                                    completed_queries.append(query_name)
-                        except Exception as e:
-                            logger.error(
-                                f"Error checking query '{query_name}' status: {str(e)}"
-                            )
-                            failed_queries.append((query_name, str(e)))
+                self._update_pipeline_query_status(
+                    execution_id, active_queries, completed_queries, failed_queries
+                )
 
-                # Update pipeline status based on query states
-                with self._lock:
-                    if execution_id in self._running_pipelines:
-                        self._running_pipelines[execution_id][
-                            "active_queries"
-                        ] = active_queries
-                        self._running_pipelines[execution_id][
-                            "completed_queries"
-                        ] = len(completed_queries)
-                        self._running_pipelines[execution_id]["failed_queries"] = len(
-                            failed_queries
-                        )
-
-                # Handle failed queries
-                if failed_queries:
-                    error_msg = f"Queries failed: {failed_queries}"
-                    logger.error(
-                        f"Pipeline '{execution_id}' has failed queries: {error_msg}"
-                    )
-                    with self._lock:
-                        self._running_pipelines[execution_id]["status"] = "error"
-                        self._running_pipelines[execution_id]["error"] = error_msg
+                if self._handle_failed_queries(execution_id, failed_queries):
                     break
 
-                # Check if all queries completed
-                if active_queries == 0:
-                    if completed_queries:
-                        logger.info(
-                            f"All queries completed successfully for pipeline '{execution_id}': {completed_queries}"
-                        )
-                        with self._lock:
-                            self._running_pipelines[execution_id][
-                                "status"
-                            ] = "completed"
-                    else:
-                        logger.warning(
-                            f"No active queries remaining for pipeline '{execution_id}' but none completed successfully"
-                        )
-                        with self._lock:
-                            self._running_pipelines[execution_id]["status"] = "stopped"
+                if self._handle_completed_queries(
+                    execution_id, active_queries, completed_queries
+                ):
                     break
 
-                # Periodic health check
-                current_time = time.time()
-                if current_time - last_health_check > health_check_interval:
-                    health_score = self._calculate_health_score(
-                        self._running_pipelines[execution_id]
-                    )
-                    logger.debug(
-                        f"Pipeline '{execution_id}' health score: {health_score}% (active: {active_queries}, completed: {len(completed_queries)})"
-                    )
-                    last_health_check = current_time
+                self._periodic_health_check(
+                    execution_id,
+                    active_queries,
+                    completed_queries,
+                    last_health_check,
+                    health_check_interval,
+                )
+                last_health_check = time.time()
 
-                # Sleep before next check
                 time.sleep(monitoring_interval)
 
             except Exception as e:
@@ -701,6 +672,99 @@ class StreamingPipelineManager:
                 break
 
         logger.info(f"Stopped monitoring pipeline '{execution_id}'")
+
+    def _collect_query_states(self, pipeline_info):
+        active_queries = 0
+        failed_queries = []
+        completed_queries = []
+
+        for query_name, query in pipeline_info["queries"].items():
+            state, info = self._get_query_state(query_name, query)
+            if state == "active":
+                active_queries += 1
+            elif state == "failed":
+                failed_queries.append((query_name, info))
+            elif state == "completed":
+                completed_queries.append(query_name)
+
+        return active_queries, failed_queries, completed_queries
+
+    def _get_query_state(self, query_name, query):
+        if not isinstance(query, StreamingQuery):
+            return None, None
+        try:
+            if query.isActive:
+                return "active", None
+            try:
+                exception = query.exception()
+            except Exception:
+                exception = None
+            if exception:
+                return "failed", str(exception)
+            else:
+                return "completed", None
+        except Exception as e:
+            logger.error(f"Error checking query '{query_name}' status: {str(e)}")
+            return "failed", str(e)
+
+    def _update_pipeline_query_status(
+        self, execution_id, active_queries, completed_queries, failed_queries
+    ):
+        with self._lock:
+            if execution_id in self._running_pipelines:
+                self._running_pipelines[execution_id]["active_queries"] = active_queries
+                self._running_pipelines[execution_id]["completed_queries"] = len(
+                    completed_queries
+                )
+                self._running_pipelines[execution_id]["failed_queries"] = len(
+                    failed_queries
+                )
+
+    def _handle_failed_queries(self, execution_id, failed_queries):
+        if failed_queries:
+            error_msg = f"Queries failed: {failed_queries}"
+            logger.error(f"Pipeline '{execution_id}' has failed queries: {error_msg}")
+            with self._lock:
+                self._running_pipelines[execution_id]["status"] = "error"
+                self._running_pipelines[execution_id]["error"] = error_msg
+            return True
+        return False
+
+    def _handle_completed_queries(
+        self, execution_id, active_queries, completed_queries
+    ):
+        if active_queries == 0:
+            if completed_queries:
+                logger.info(
+                    f"All queries completed successfully for pipeline '{execution_id}': {completed_queries}"
+                )
+                with self._lock:
+                    self._running_pipelines[execution_id]["status"] = "completed"
+            else:
+                logger.warning(
+                    f"No active queries remaining for pipeline '{execution_id}' but none completed successfully"
+                )
+                with self._lock:
+                    self._running_pipelines[execution_id]["status"] = "stopped"
+            return True
+        return False
+
+    def _periodic_health_check(
+        self,
+        execution_id,
+        active_queries,
+        completed_queries,
+        last_health_check,
+        health_check_interval,
+    ):
+        current_time = time.time()
+        if current_time - last_health_check > health_check_interval:
+            health_score = self._calculate_health_score(
+                self._running_pipelines[execution_id]
+            )
+            logger.debug(
+                f"Pipeline '{execution_id}' health score: {health_score}% (active: {active_queries}, completed: {len(completed_queries)})"
+            )
 
     def get_pipeline_health_summary(self) -> Dict[str, Any]:
         """Get overall health summary of all managed pipelines."""
@@ -732,6 +796,13 @@ class StreamingPipelineManager:
                 )
                 healthy_count = sum(1 for score in health_scores if score >= 80)
 
+                if avg_health_score >= 80:
+                    overall_status = "healthy"
+                elif avg_health_score >= 50:
+                    overall_status = "degraded"
+                else:
+                    overall_status = "critical"
+
                 return {
                     "total_pipelines": total_pipelines,
                     "healthy_pipelines": healthy_count,
@@ -739,13 +810,7 @@ class StreamingPipelineManager:
                     "overall_health_score": round(avg_health_score, 2),
                     "status_breakdown": status_counts,
                     "individual_health_scores": health_scores,
-                    "status": (
-                        "healthy"
-                        if avg_health_score >= 80
-                        else "degraded"
-                        if avg_health_score >= 50
-                        else "critical"
-                    ),
+                    "status": overall_status,
                 }
 
         except Exception as e:

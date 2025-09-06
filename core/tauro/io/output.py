@@ -142,19 +142,21 @@ class DataWriter(BaseIO):
         self.data_validator = DataValidator()
 
     def write_data(self, df: Any, path: str, config: Dict[str, Any]) -> None:
-        """Write data to traditional storage systems."""
+        """Write data to traditional storage systems (multiplataforma)."""
         if not path:
             raise ConfigurationError("Output path cannot be empty")
 
         self._validate_write_config(config)
-        self._prepare_local_directory(path)
+        # Migrar path a Path
+        path_obj = Path(path)
+        self._prepare_local_directory(str(path_obj))
 
         try:
             format_name = config["format"].lower()
             writer = self.writer_factory.get_writer(format_name)
-            writer.write(df, path, config)
+            writer.write(df, str(path_obj), config)
         except Exception as e:
-            logger.error(f"Error saving to {path}: {str(e)}")
+            logger.error(f"Error saving to {path_obj}: {str(e)}")
             raise WriteOperationError(f"Failed to write data: {e}") from e
 
     def _validate_write_config(self, config: Dict[str, Any]) -> None:
@@ -209,10 +211,13 @@ class ModelArtifactManager(BaseIO):
                     "artifact": artifact.get("name"),
                     "version": model_version,
                     "node": node.get("name"),
-                    "saved_at": datetime.utcnow().isoformat() + "Z",
+                    "saved_at": datetime.now(datetime.timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                 }
+                # Escribir metadata con encoding utf-8
                 (artifact_path / "metadata.json").write_text(
-                    json.dumps(metadata, ensure_ascii=False, indent=2)
+                    json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
 
                 logger.info(
@@ -551,7 +556,9 @@ class OutputManager(BaseIO):
 
         for out_key in out_keys or []:
             error_handler.execute_with_error_handling(
-                lambda: self._save_single_output(out_key, df, start_date, end_date),
+                lambda out_key=out_key: self._save_single_output(
+                    out_key, df, start_date, end_date
+                ),
                 f"Error saving output '{out_key}'",
             )
 
@@ -577,11 +584,13 @@ class OutputManager(BaseIO):
     def _get_output_keys(self, node: Dict[str, Any]) -> List[str]:
         """Get output keys from a node."""
         keys = node.get("output", [])
-        return (
-            [keys]
-            if isinstance(keys, str)
-            else (keys if isinstance(keys, list) else [])
-        )
+        if isinstance(keys, str):
+            result = [keys]
+        elif isinstance(keys, list):
+            result = keys
+        else:
+            result = []
+        return result
 
     def _save_single_output(
         self, out_key: str, df: Any, start_date: Optional[str], end_date: Optional[str]

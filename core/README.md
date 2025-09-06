@@ -8,41 +8,6 @@ Tauro es un framework poderoso y flexible para la ejecución y gestión de pipel
 - Generación de proyectos desde templates predefinidos
 - Soporte para arquitectura Medallion (Bronze → Silver → Gold)
 
-## Arquitectura del Proyecto
-
-Tauro está organizado en módulos principales:
-
-### 🔧 CLI (`tauro.cli`)
-- Interfaz de línea de comandos principal
-- Gestión de configuración y descubrimiento automático
-- Validación de seguridad y manejo de paths
-- Logging centralizado
-
-### ⚙️ Config (`tauro.config`)
-- Gestión de configuración cohesiva
-- Soporte para múltiples formatos (YAML/JSON/Python)
-- Interpolación de variables
-- Validación de configuración
-- Gestión de sesiones Spark
-
-### 🔄 Exec (`tauro.exec`)
-- Ejecución de pipelines
-- Resolución de dependencias
-- Validación de pipelines
-- Estado y monitoreo de ejecución
-
-### 📝 IO (`tauro.io`)
-- Manejo unificado de entrada/salida
-- Soporte para múltiples formatos
-- Validación de datos
-- Factories para readers/writers
-
-### 🌊 Streaming (`tauro.streaming`)
-- Gestión de pipelines en tiempo real
-- Manejo de queries
-- Validación específica para streaming
-- Lectores y escritores especializados
-
 ## Requisitos
 
 - Python 3.9+
@@ -174,23 +139,6 @@ tauro --clear-cache
 ```
 
 ---
-
-## Understanding the configuration (plain English)
-
-Your project has:
-- One “settings” file at the project root (for example, settings_json.json)
-  - This file points Tauro to the right config files for each environment
-- A “config/” folder with the actual settings:
-  - global_settings: general options (project name, defaults)
-  - pipelines: list of pipeline names and which steps (nodes) they include
-  - nodes: what each step does and in which order
-  - input: where data comes from (files, tables, streams)
-  - output: where results go (tables, folders, streams)
-
-You don’t need to edit these to try Tauro, but your team may customize them later.
-
----
-
 ## Dates and time windows
 
 Some pipelines work with date ranges.

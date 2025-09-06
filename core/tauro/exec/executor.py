@@ -41,8 +41,7 @@ class BaseExecutor:
         """Prepare ML-specific information."""
         ml_info: Dict[str, Any] = {}
         pipeline_ml_config: Dict[str, Any] = {}
-
-        final_hyperparams = dict(hyperparams or {})
+        initial_hyperparams = dict(hyperparams or {})
         final_model_version = model_version or getattr(
             self.context, "default_model_version", None
         )
@@ -51,40 +50,30 @@ class BaseExecutor:
             pipeline_ml_config = (
                 self.context.get_pipeline_ml_config(pipeline_name) or {}
             )
-            final_model_version = (
-                model_version
-                or pipeline_ml_config.get("model_version")
-                or getattr(self.context, "default_model_version", None)
+            final_model_version = self._resolve_model_version(
+                pipeline_ml_config, model_version
+            )
+            final_hyperparams = self._merge_hyperparams(
+                pipeline_ml_config, initial_hyperparams, hyperparams
             )
 
-            final_hyperparams.update(
-                getattr(self.context, "default_hyperparams", {}) or {}
+            model = self._try_get_model(pipeline_ml_config, final_model_version)
+            if model is not None:
+                ml_info["model"] = model
+
+            ml_info.update(
+                {
+                    "model_version": final_model_version,
+                    "hyperparams": final_hyperparams,
+                    "pipeline_config": pipeline_ml_config,
+                    "project_name": getattr(self.context, "project_name", ""),
+                    "is_experiment": self._is_experiment_pipeline(pipeline_name),
+                }
             )
-            final_hyperparams.update(pipeline_ml_config.get("hyperparams", {}) or {})
-            if hyperparams:
-                final_hyperparams.update(hyperparams)
-
-            if hasattr(self.context, "get_model_registry"):
-                model_registry = self.context.get_model_registry()
-                try:
-                    ml_info["model"] = model_registry.get_model(
-                        pipeline_ml_config.get("model_name"),
-                        version=final_model_version,
-                    )
-                except Exception:
-                    pass
-
-            ml_info = {
-                "model_version": final_model_version,
-                "hyperparams": final_hyperparams,
-                "pipeline_config": pipeline_ml_config,
-                "project_name": getattr(self.context, "project_name", ""),
-                "is_experiment": self._is_experiment_pipeline(pipeline_name),
-            }
 
         elif self.is_ml_layer:
-            final_hyperparams.update(
-                getattr(self.context, "default_hyperparams", {}) or {}
+            final_hyperparams = self._merge_hyperparams(
+                {}, initial_hyperparams, hyperparams
             )
             ml_info = {
                 "model_version": final_model_version,
@@ -94,6 +83,44 @@ class BaseExecutor:
             }
 
         return ml_info
+
+    def _resolve_model_version(
+        self, pipeline_ml_config: Dict[str, Any], model_version: Optional[str]
+    ) -> Optional[str]:
+        """Resolve final model version from args, pipeline config or context defaults."""
+        return (
+            model_version
+            or pipeline_ml_config.get("model_version")
+            or getattr(self.context, "default_model_version", None)
+        )
+
+    def _merge_hyperparams(
+        self,
+        pipeline_ml_config: Dict[str, Any],
+        initial_hyperparams: Dict[str, Any],
+        explicit_hyperparams: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Merge default, pipeline and explicit hyperparameters into a single dict."""
+        final = dict(initial_hyperparams or {})
+        final.update(getattr(self.context, "default_hyperparams", {}) or {})
+        final.update(pipeline_ml_config.get("hyperparams", {}) or {})
+        if explicit_hyperparams:
+            final.update(explicit_hyperparams)
+        return final
+
+    def _try_get_model(
+        self, pipeline_ml_config: Dict[str, Any], final_model_version: Optional[str]
+    ) -> Optional[Any]:
+        """Attempt to fetch a model from the model registry, returning None on failure."""
+        if not hasattr(self.context, "get_model_registry"):
+            return None
+        try:
+            model_registry = self.context.get_model_registry()
+            return model_registry.get_model(
+                pipeline_ml_config.get("model_name"), version=final_model_version
+            )
+        except Exception:
+            return None
 
     def _is_experiment_pipeline(self, pipeline_name: str) -> bool:
         """Check if it's an experimentation pipeline."""
@@ -279,6 +306,90 @@ class StreamingExecutor(BaseExecutor):
 
         return conflicts
 
+    def _add_kafka_from_subscribe(
+        self, resources: Dict[str, Set[str]], subscribe_value: Any
+    ) -> None:
+        if isinstance(subscribe_value, str):
+            topics = [t.strip() for t in subscribe_value.split(",") if t.strip()]
+        elif isinstance(subscribe_value, (list, tuple, set)):
+            topics = [str(t).strip() for t in subscribe_value if str(t).strip()]
+        else:
+            topics = []
+        for t in topics:
+            resources["kafka_topics"].add(t)
+
+    def _add_kafka_from_assign(
+        self, resources: Dict[str, Set[str]], assign_value: Any
+    ) -> None:
+        try:
+            mapping = (
+                json.loads(assign_value)
+                if isinstance(assign_value, str)
+                else assign_value
+            )
+            if isinstance(mapping, dict):
+                for t in mapping.keys():
+                    resources["kafka_topics"].add(t)
+        except Exception:
+            pass
+
+    def _add_kafka_from_opts(
+        self, resources: Dict[str, Set[str]], opts: Dict[str, Any]
+    ) -> None:
+        if not opts:
+            return
+        if "subscribe" in opts:
+            self._add_kafka_from_subscribe(resources, opts["subscribe"])
+            return
+        if "assign" in opts:
+            self._add_kafka_from_assign(resources, opts["assign"])
+            return
+        if "subscribePattern" in opts:
+            pattern = str(opts["subscribePattern"]).strip()
+            if pattern:
+                resources["kafka_topics"].add(f"pattern:{pattern}")
+
+    def _extract_path_from_config(self, cfg: Dict[str, Any]) -> Optional[str]:
+        path = cfg.get("path")
+        if path:
+            return path
+        opts = cfg.get("options", {}) or {}
+        return opts.get("path")
+
+    def _process_input_config(
+        self, resources: Dict[str, Set[str]], node_cfg: Dict[str, Any]
+    ) -> None:
+        input_config = node_cfg.get("input", {}) or {}
+        input_format = (input_config.get("format") or "").lower()
+        if input_format == "kafka":
+            self._add_kafka_from_opts(resources, input_config.get("options", {}) or {})
+            return
+        if input_format == "file_stream":
+            path = self._extract_path_from_config(input_config)
+            if path:
+                resources["file_paths"].add(path)
+            return
+        if input_format in ("delta_stream", "delta"):
+            path = self._extract_path_from_config(input_config)
+            if path:
+                resources["delta_tables"].add(path)
+
+    def _process_output_config(
+        self, resources: Dict[str, Set[str]], node_cfg: Dict[str, Any]
+    ) -> None:
+        output_config = node_cfg.get("output", {}) or {}
+        output_format = (output_config.get("format") or "").lower()
+        if output_format == "kafka":
+            opar = output_config.get("options", {}) or {}
+            topic = opar.get("topic") or opar.get("kafka.topic")
+            if topic:
+                resources["kafka_topics"].add(str(topic))
+            return
+        if output_format == "delta":
+            out_path = self._extract_path_from_config(output_config)
+            if out_path:
+                resources["delta_tables"].add(out_path)
+
     def _extract_pipeline_resources(
         self, pipeline: Dict[str, Any]
     ) -> Dict[str, Set[str]]:
@@ -292,61 +403,8 @@ class StreamingExecutor(BaseExecutor):
         pipeline_nodes = self._extract_pipeline_nodes(pipeline)
         for node_name in pipeline_nodes:
             node_config = self.context.nodes_config.get(node_name, {}) or {}
-
-            input_config = node_config.get("input", {}) or {}
-            input_format = (input_config.get("format") or "").lower()
-
-            if input_format == "kafka":
-                opts = input_config.get("options", {}) or {}
-                if "subscribe" in opts:
-                    topics = opts["subscribe"]
-                    if isinstance(topics, str):
-                        topics = [t.strip() for t in topics.split(",") if t.strip()]
-                    for t in topics:
-                        resources["kafka_topics"].add(t)
-                elif "assign" in opts:
-                    try:
-                        assign = opts["assign"]
-                        mapping = (
-                            json.loads(assign) if isinstance(assign, str) else assign
-                        )
-                        for t in mapping.keys():
-                            resources["kafka_topics"].add(t)
-                    except Exception:
-                        pass
-                elif "subscribePattern" in opts:
-                    pattern = str(opts["subscribePattern"]).strip()
-                    if pattern:
-                        resources["kafka_topics"].add(f"pattern:{pattern}")
-
-            elif input_format in ("file_stream",):
-                path = input_config.get("path") or input_config.get("options", {}).get(
-                    "path"
-                )
-                if path:
-                    resources["file_paths"].add(path)
-
-            elif input_format in ("delta_stream", "delta"):
-                path = input_config.get("path") or input_config.get("options", {}).get(
-                    "path"
-                )
-                if path:
-                    resources["delta_tables"].add(path)
-
-            output_config = node_config.get("output", {}) or {}
-            output_format = (output_config.get("format") or "").lower()
-
-            if output_format == "kafka":
-                opar = output_config.get("options", {}) or {}
-                topic = opar.get("topic") or opar.get("kafka.topic")
-                if topic:
-                    resources["kafka_topics"].add(str(topic))
-            elif output_format == "delta":
-                out_path = output_config.get("path") or output_config.get(
-                    "options", {}
-                ).get("path")
-                if out_path:
-                    resources["delta_tables"].add(out_path)
+            self._process_input_config(resources, node_config)
+            self._process_output_config(resources, node_config)
 
         return resources
 
@@ -566,7 +624,7 @@ class HybridExecutor(BaseExecutor):
         """Handle batch node failure: cancel dependents and stop related streaming nodes."""
         logger.error(f"Batch node '{failed_node}' failed, cleaning up dependents")
 
-        for node in list(results.keys()):
+        for node in results.keys():
             if node != failed_node and self.unified_state.is_node_pending(node):
                 if failed_node in self.unified_state.get_node_dependencies(node):
                     self.unified_state.cancel_node_execution(node)
@@ -725,7 +783,7 @@ class PipelineExecutor:
         except Exception:
             return {}
 
-    def shutdown(self, timeout_seconds: int = 30) -> None:
+    def shutdown(self) -> None:
         """Unified shutdown with resource cleanup"""
         shutdown_sequence = [
             (self._stop_streaming_queries, 5),

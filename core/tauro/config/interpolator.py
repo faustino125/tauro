@@ -78,7 +78,7 @@ class VariableInterpolator:
                     )
                     for k, v in value.items()
                 }
-            for k, v in list(value.items()):
+            for k, v in value.items():
                 value[k] = VariableInterpolator.interpolate_structure(
                     v, variables, copy=False
                 )

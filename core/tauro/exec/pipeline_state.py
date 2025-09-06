@@ -276,50 +276,79 @@ class UnifiedPipelineState:
 
         return warnings
 
+    def _attempt_stop_by_handle(
+        self,
+        streaming_node: str,
+        streaming_query: Any,
+        stopped_nodes: List[str],
+        failed_batch_node: str,
+    ) -> None:
+        try:
+            streaming_query.stop()
+            self._nodes[streaming_node].status = NodeStatus.CANCELLED
+            stopped_nodes.append(streaming_node)
+            logger.warning(
+                f"Stopped streaming node '{streaming_node}' due to "
+                f"failed dependency '{failed_batch_node}'"
+            )
+        except Exception as e:
+            logger.error(f"Failed to stop streaming node '{streaming_node}': {e}")
+
+    def _attempt_stop_by_id(
+        self,
+        streaming_node: str,
+        query_id: str,
+        stopped_nodes: List[str],
+        failed_batch_node: str,
+    ) -> None:
+        try:
+            if not self._streaming_stopper:
+                logger.error(
+                    f"No stopper configured to stop streaming node '{streaming_node}'"
+                )
+                return
+
+            if self._streaming_stopper(query_id):
+                self._nodes[streaming_node].status = NodeStatus.CANCELLED
+                stopped_nodes.append(streaming_node)
+                logger.warning(
+                    f"Stopped streaming node '{streaming_node}' by id due to "
+                    f"failed dependency '{failed_batch_node}'"
+                )
+            else:
+                logger.error(
+                    f"Stopper failed to stop streaming node '{streaming_node}'"
+                )
+        except Exception as e:
+            logger.error(f"Error invoking stopper for '{streaming_node}': {e}")
+
     def stop_dependent_streaming_nodes(self, failed_batch_node: str) -> List[str]:
         """Stop streaming nodes that depend on a failed batch node."""
         stopped_nodes = []
 
         with self._lock:
             for streaming_node, batch_deps in self._cross_dependencies.items():
-                if failed_batch_node in batch_deps:
-                    streaming_query = self._streaming_queries.get(streaming_node)
-                    if streaming_query:
-                        if hasattr(streaming_query, "stop"):
-                            try:
-                                streaming_query.stop()
-                                self._nodes[
-                                    streaming_node
-                                ].status = NodeStatus.CANCELLED
-                                stopped_nodes.append(streaming_node)
-                                logger.warning(
-                                    f"Stopped streaming node '{streaming_node}' due to "
-                                    f"failed dependency '{failed_batch_node}'"
-                                )
-                                continue
-                            except Exception as e:
-                                logger.error(
-                                    f"Failed to stop streaming node '{streaming_node}': {e}"
-                                )
-                        if isinstance(streaming_query, str) and self._streaming_stopper:
-                            try:
-                                if self._streaming_stopper(streaming_query):
-                                    self._nodes[
-                                        streaming_node
-                                    ].status = NodeStatus.CANCELLED
-                                    stopped_nodes.append(streaming_node)
-                                    logger.warning(
-                                        f"Stopped streaming node '{streaming_node}' by id due to "
-                                        f"failed dependency '{failed_batch_node}'"
-                                    )
-                                else:
-                                    logger.error(
-                                        f"Stopper failed to stop streaming node '{streaming_node}'"
-                                    )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error invoking stopper for '{streaming_node}': {e}"
-                                )
+                if failed_batch_node not in batch_deps:
+                    continue
+
+                streaming_query = self._streaming_queries.get(streaming_node)
+                if not streaming_query:
+                    continue
+
+                if hasattr(streaming_query, "stop"):
+                    self._attempt_stop_by_handle(
+                        streaming_node,
+                        streaming_query,
+                        stopped_nodes,
+                        failed_batch_node,
+                    )
+                elif isinstance(streaming_query, str):
+                    self._attempt_stop_by_id(
+                        streaming_node,
+                        streaming_query,
+                        stopped_nodes,
+                        failed_batch_node,
+                    )
 
         return stopped_nodes
 
@@ -373,36 +402,57 @@ class UnifiedPipelineState:
             self._nodes[node_name].resources.append((resource_type, resource))
             logger.debug(f"Registered {resource_type} resource for node '{node_name}'")
 
+    def _stop_query_by_handle(self, node_name: str, query: Any) -> None:
+        try:
+            query.stop()
+            logger.info(f"Stopped streaming query handle for node '{node_name}'")
+        except Exception as e:
+            logger.warning(
+                f"Error stopping streaming query handle for '{node_name}': {e}"
+            )
+
+    def _stop_query_by_id(self, node_name: str, query_id: str) -> None:
+        try:
+            if self._streaming_stopper:
+                self._streaming_stopper(query_id)
+                logger.info(f"Requested stop by id for streaming node '{node_name}'")
+            else:
+                logger.error(
+                    f"No stopper configured to stop streaming node '{node_name}'"
+                )
+        except Exception as e:
+            logger.warning(f"Error requesting stop by id for '{node_name}': {e}")
+
+    def _stop_query(self, node_name: str, query: Any) -> None:
+        if hasattr(query, "stop"):
+            self._stop_query_by_handle(node_name, query)
+        elif isinstance(query, str):
+            self._stop_query_by_id(node_name, query)
+
+    def _release_resource(self, node, res_type: str, resource: Any) -> None:
+        try:
+            if res_type == "spark_rdd" and hasattr(resource, "unpersist"):
+                resource.unpersist()
+            elif hasattr(resource, "close"):
+                resource.close()
+            logger.debug(f"Released {res_type} for node '{node.node_name}'")
+        except Exception as e:
+            logger.error(f"Error releasing resource for '{node.node_name}': {str(e)}")
+
     def cleanup(self) -> None:
         """Clean up all resources and stop active streaming queries"""
         with self._lock:
-            for node_name, query in self._streaming_queries.items():
-                try:
-                    if hasattr(query, "isActive") and getattr(query, "isActive"):
-                        query.stop()
-                        logger.info(
-                            f"Stopped streaming query handle for node '{node_name}'"
-                        )
-                    elif isinstance(query, str) and self._streaming_stopper:
-                        self._streaming_stopper(query)
-                        logger.info(
-                            f"Requested stop by id for streaming node '{node_name}'"
-                        )
-                except Exception as e:
-                    logger.warning(f"Error stopping streaming query: {e}")
+            # Stop streaming queries
+            for node_name, query in list(self._streaming_queries.items()):
+                self._stop_query(node_name, query)
 
+            # Release resources for each node
             for node in self._nodes.values():
-                for res_type, resource in node.resources:
-                    try:
-                        if res_type == "spark_rdd" and hasattr(resource, "unpersist"):
-                            resource.unpersist()
-                        elif hasattr(resource, "close"):
-                            resource.close()
-                        logger.debug(f"Released {res_type} for node '{node.node_name}'")
-                    except Exception as e:
-                        logger.error(f"Error releasing resource: {str(e)}")
+                for res_type, resource in list(node.resources):
+                    self._release_resource(node, res_type, resource)
 
             self._reset_state()
+            logger.info("Pipeline state has been reset")
 
     def _reset_state(self):
         """Reset all state containers"""

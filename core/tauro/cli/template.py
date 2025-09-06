@@ -733,6 +733,9 @@ spark-warehouse/
             f.write(content)
 
 
+TEMPLATE_GENERATION_CANCELLED = "Template generation cancelled"
+
+
 class TemplateCommand:
     """Handles the --template command functionality."""
 
@@ -816,9 +819,13 @@ class TemplateCommand:
                         if 0 <= index < len(templates):
                             selected_template = templates[index]
                             break
-                    print("Invalid selection. Try again.")
+                    # Invalid selection -> prompt again
+                    print(
+                        "Invalid selection. Please try again or press Ctrl+C to cancel."
+                    )
+                    continue
                 except (KeyboardInterrupt, EOFError):
-                    logger.warning("Template generation cancelled")
+                    logger.info("Template generation cancelled")
                     return ExitCode.GENERAL_ERROR.value
 
             # Get project name
@@ -898,14 +905,8 @@ class TemplateCommand:
                 logger.warning(
                     f"Directory {output_dir} already exists and is not empty"
                 )
-                try:
-                    response = input("Continue anyway? (y/N): ").strip().lower()
-                    if response != "y":
-                        logger.info("Template generation cancelled")
-                        return ExitCode.SUCCESS.value
-                except (KeyboardInterrupt, EOFError):
-                    logger.info("Template generation cancelled")
-                    return ExitCode.SUCCESS.value
+                logger.info("Template generation cancelled")
+                return ExitCode.VALIDATION_ERROR.value
 
             # Generate template
             self.generator = TemplateGenerator(output_dir, format_enum)

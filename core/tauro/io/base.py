@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
@@ -59,10 +60,10 @@ class BaseIO:
                 )
                 return
             try:
-                dir_path = os.path.dirname(path)
-                if dir_path and not os.path.isdir(dir_path):
+                dir_path = Path(path).parent
+                if dir_path and not dir_path.exists():
                     logger.debug(f"Creating directory: {dir_path}")
-                    os.makedirs(dir_path, exist_ok=True)
+                    dir_path.mkdir(parents=True, exist_ok=True)
                     logger.info(f"Directory created: {dir_path}")
             except OSError as e:
                 logger.exception(f"Error creating local directory: {dir_path}")

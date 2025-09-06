@@ -7,7 +7,10 @@ from typing import Any, Dict, Optional
 from loguru import logger  # type: ignore
 from pyspark.sql import DataFrame  # type: ignore
 from pyspark.sql.streaming import StreamingQuery  # type: ignore
-import pyspark.sql.functions as f # type: ignore
+import pyspark.sql.functions as f  # type: ignore
+
+# default interval used for processingTime triggers and watermarks
+DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
 from tauro.streaming.constants import (
     DEFAULT_STREAMING_CONFIG,
@@ -149,10 +152,12 @@ class StreamingQueryManager:
     def _apply_watermark(
         self, streaming_df: DataFrame, watermark_config: Dict[str, Any]
     ) -> DataFrame:
-        """Apply watermarking with validation and safe casting to timestamp."""
+        """Apply watermark on the streaming DataFrame using provided config."""
         try:
             timestamp_col = watermark_config.get("column")
-            delay_threshold = watermark_config.get("delay", "10 seconds")
+            delay_threshold = watermark_config.get(
+                "delay", DEFAULT_PROCESSING_TIME_INTERVAL
+            )
 
             if not timestamp_col:
                 raise StreamingConfigurationError(
@@ -454,16 +459,27 @@ class StreamingQueryManager:
             mapped_key = trigger_map[trigger_type]
 
             if mapped_key == "processingTime":
-                interval = str(trigger_config.get("interval", "10 seconds"))
+                interval = str(
+                    trigger_config.get("interval", DEFAULT_PROCESSING_TIME_INTERVAL)
+                )
                 # usar validaciones del validator (nota: usa métodos "privados" actualmente)
-                if not getattr(self.validator, "_validate_time_interval", lambda x: True)(interval):
+                if not getattr(
+                    self.validator, "_validate_time_interval", lambda x: True
+                )(interval):
                     raise StreamingConfigurationError(
                         f"Invalid processingTime interval '{interval}'",
                         config_section="trigger.interval",
                         config_value=interval,
                     )
-                min_interval = int(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
-                if getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(interval) < min_interval:
+                min_interval = int(
+                    STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
+                )
+                if (
+                    getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(
+                        interval
+                    )
+                    < min_interval
+                ):
                     raise StreamingConfigurationError(
                         f"processingTime interval '{interval}' is below minimum of {min_interval} seconds",
                         config_section="trigger.interval",
@@ -476,14 +492,23 @@ class StreamingQueryManager:
 
             if mapped_key == "continuous":
                 interval = str(trigger_config.get("interval", "1 second"))
-                if not getattr(self.validator, "_validate_time_interval", lambda x: True)(interval):
+                if not getattr(
+                    self.validator, "_validate_time_interval", lambda x: True
+                )(interval):
                     raise StreamingConfigurationError(
                         f"Invalid continuous interval '{interval}'",
                         config_section="trigger.interval",
                         config_value=interval,
                     )
-                min_interval = int(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
-                if getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(interval) < min_interval:
+                min_interval = int(
+                    STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
+                )
+                if (
+                    getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(
+                        interval
+                    )
+                    < min_interval
+                ):
                     raise StreamingConfigurationError(
                         f"continuous interval '{interval}' is below minimum of {min_interval} seconds",
                         config_section="trigger.interval",
@@ -494,7 +519,7 @@ class StreamingQueryManager:
             if mapped_key == "availableNow":
                 return {"availableNow": True}
 
-            return {"processingTime": "10 seconds"}
+            return {"processingTime": DEFAULT_PROCESSING_TIME_INTERVAL}
 
         except Exception as e:
             logger.error(f"Error configuring trigger: {str(e)}")
@@ -519,7 +544,9 @@ class StreamingQueryManager:
                 logger.info(f"Query '{self._get_query_name(query)}' is already stopped")
                 return True
 
-            logger.info(f"Stopping streaming query '{self._get_query_name(query)}' (ID: {self._get_query_id(query)})")
+            logger.info(
+                f"Stopping streaming query '{self._get_query_name(query)}' (ID: {self._get_query_id(query)})"
+            )
 
             start_time = time.time()
             stop_call = getattr(query, "stop", None)
@@ -532,7 +559,10 @@ class StreamingQueryManager:
                     pass
 
             if graceful:
-                while self._is_query_active(query) and (time.time() - start_time) < timeout_seconds:
+                while (
+                    self._is_query_active(query)
+                    and (time.time() - start_time) < timeout_seconds
+                ):
                     time.sleep(0.5)
 
                 if self._is_query_active(query):
@@ -544,7 +574,9 @@ class StreamingQueryManager:
             query_key = None
             with self._active_queries_lock:
                 for key, info in list(self._active_queries.items()):
-                    if self._get_query_id(info.get("query")) == self._get_query_id(query):
+                    if self._get_query_id(info.get("query")) == self._get_query_id(
+                        query
+                    ):
                         query_key = key
                         break
 

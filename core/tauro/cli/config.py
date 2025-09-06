@@ -72,38 +72,11 @@ class DSLConfigLoader:
         result: Dict[str, Any] = {}
         current_path: List[str] = []
 
-        def ensure_section(root: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
-            node = root
-            for p in parts:
-                if p not in node or not isinstance(node[p], dict):
-                    node[p] = {}
-                node = node[p]
-            return node
-
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line_num, raw in enumerate(f, 1):
-                    line = raw.strip()
-                    if not line or line.startswith("#"):
-                        continue
-
-                    m = self.SECTION_RE.match(line)
-                    if m:
-                        name = m.group("name").strip()
-                        current_path = [p.strip() for p in name.split(".") if p.strip()]
-                        ensure_section(result, current_path)
-                        continue
-
-                    if "=" in line:
-                        key, value = line.split("=", 1)
-                        key = key.strip()
-                        parsed = self._parse_value(value.strip())
-                        section = ensure_section(result, current_path)
-                        section[key] = parsed
-                        continue
-
-                    raise ConfigurationError(
-                        f"Unrecognized DSL syntax at {file_path}:{line_num}: {raw.strip()}"
+                    self._handle_line(
+                        raw.strip(), line_num, result, current_path, file_path
                     )
         except ConfigurationError:
             raise
@@ -112,8 +85,53 @@ class DSLConfigLoader:
 
         return result
 
+    def _ensure_section(self, root: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
+        node = root
+        for p in parts:
+            if p not in node or not isinstance(node[p], dict):
+                node[p] = {}
+            node = node[p]
+        return node
+
+    def _process_section(self, line: str) -> List[str]:
+        name = self.SECTION_RE.match(line).group("name").strip()
+        return [p.strip() for p in name.split(".") if p.strip()]
+
+    def _process_key_value(self, line: str) -> Tuple[str, Any]:
+        key, value = line.split("=", 1)
+        key = key.strip()
+        parsed = self._parse_value(value.strip())
+        return key, parsed
+
+    def _handle_line(
+        self,
+        line: str,
+        line_num: int,
+        result: Dict[str, Any],
+        current_path: List[str],
+        file_path: str,
+    ) -> None:
+        if not line or line.startswith("#"):
+            return
+
+        m = self.SECTION_RE.match(line)
+        if m:
+            current_path.clear()
+            current_path.extend(self._process_section(line))
+            self._ensure_section(result, current_path)
+            return
+
+        if "=" in line:
+            key, parsed = self._process_key_value(line)
+            section = self._ensure_section(result, current_path)
+            section[key] = parsed
+            return
+
+        raise ConfigurationError(
+            f"Unrecognized DSL syntax at {file_path}:{line_num}: {line}"
+        )
+
     def _parse_value(self, value: str) -> Union[str, int, float, bool, List[Any]]:
-        # Quoted string
         if (value.startswith('"') and value.endswith('"')) or (
             value.startswith("'") and value.endswith("'")
         ):
@@ -199,7 +217,7 @@ class ConfigDiscovery:
                 if item.is_dir() and not item.name.startswith("."):
                     self._search_recursive(item, depth + 1, max_depth)
 
-        except (PermissionError, OSError) as e:
+        except OSError as e:
             logger.debug(f"Skipping inaccessible directory: {path} - {e}")
 
     def find_best_match(

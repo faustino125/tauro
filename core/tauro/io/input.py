@@ -1,5 +1,6 @@
 import glob
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
@@ -88,20 +89,30 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
             return path
 
         if self._is_local():
-            if os.path.isdir(path):
-                return path
-            if os.path.isfile(path):
-                return path
-            if any(ch in str(path) for ch in ("*", "?", "[")):
-                matches = glob.glob(path)
-                if matches:
-                    return path
-                raise FileNotFoundError(
-                    f"Pattern '{path}' matched no files in local mode"
-                )
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"File '{path}' does not exist in local mode")
-        return path
+            return self._handle_local_filepath(path, input_key)
+        return str(path)
+
+    def _handle_local_filepath(self, path: str, input_key: str) -> str:
+        """Handle local file path logic, separated for clarity."""
+        p = Path(path)
+        if p.is_dir() or p.is_file():
+            return str(p)
+        if self._contains_glob_pattern(path):
+            return self._handle_glob_pattern(p, path)
+        if not p.exists():
+            raise FileNotFoundError(f"File '{path}' does not exist in local mode")
+        return str(path)
+
+    def _contains_glob_pattern(self, path: str) -> bool:
+        """Check if the path contains glob pattern characters."""
+        return any(ch in str(path) for ch in ("*", "?", "["))
+
+    def _handle_glob_pattern(self, p: Path, path: str) -> str:
+        """Handle glob pattern matching for local files."""
+        matches = list(p.parent.glob(p.name)) if p.parent.exists() else []
+        if matches:
+            return str(path)
+        raise FileNotFoundError(f"Pattern '{path}' matched no files in local mode")
 
 
 class ParallelLoadingStrategy(InputLoadingStrategy):
@@ -225,10 +236,7 @@ class InputLoader(BaseIO):
 
     def _try_import_delta(self) -> None:
         """Try to import Delta Lake dependencies; don't raise at registration time."""
-        try:
-            from delta import configure_spark_with_delta_pip  # type: ignore  # noqa: F401
-        except ImportError as e:
-            raise
+        from delta import configure_spark_with_delta_pip  # type: ignore  # noqa: F401
 
     def _try_import_xml(self) -> None:
         """Try to verify XML dependencies are available."""

@@ -73,19 +73,51 @@ class Context:
 
     def __init__(
         self,
-        global_settings: Union[str, Dict],
-        pipelines_config: Union[str, Dict],
-        nodes_config: Union[str, Dict],
-        input_config: Union[str, Dict],
-        output_config: Union[str, Dict],
+        global_settings: Union[str, Dict, Path],
+        pipelines_config: Union[str, Dict, Path],
+        nodes_config: Union[str, Dict, Path],
+        input_config: Union[str, Dict, Path],
+        output_config: Union[str, Dict, Path],
         *,
-        ml_info: Optional[Union[str, Dict[str, Any]]] = None,
+        ml_info: Optional[Union[str, Dict[str, Any], Path]] = None,
         spark_session: Optional[Any] = None,
     ):
         """Initialize the context with configuration sources."""
         self._config_loader = ConfigLoaderFactory()
         self._validator = ConfigValidator()
         self._interpolator = VariableInterpolator()
+        # Migrar rutas a Path si son string
+        global_settings = (
+            Path(global_settings)
+            if isinstance(global_settings, str)
+            and not global_settings.strip().startswith("{")
+            else global_settings
+        )
+        pipelines_config = (
+            Path(pipelines_config)
+            if isinstance(pipelines_config, str)
+            and not pipelines_config.strip().startswith("{")
+            else pipelines_config
+        )
+        nodes_config = (
+            Path(nodes_config)
+            if isinstance(nodes_config, str)
+            and not nodes_config.strip().startswith("{")
+            else nodes_config
+        )
+        input_config = (
+            Path(input_config)
+            if isinstance(input_config, str)
+            and not input_config.strip().startswith("{")
+            else input_config
+        )
+        output_config = (
+            Path(output_config)
+            if isinstance(output_config, str)
+            and not output_config.strip().startswith("{")
+            else output_config
+        )
+
         self._load_configurations(
             global_settings,
             pipelines_config,
@@ -139,37 +171,40 @@ class Context:
         )
 
     def _load_ml_info(
-        self, ml_info_source: Optional[Union[str, Dict[str, Any]]]
+        self, ml_info_source: Optional[Union[str, Dict[str, Any], Path]]
     ) -> None:
-        """Load ML info from file/dict or from global_settings['ml_info'].
-
-        - If provided a string path, use ConfigLoaderFactory to load it.
-        - If provided a dict, use it directly.
-        - Else, look for global_settings['ml_info'] (dict or path).
-        - Apply variable interpolation and sensible defaults.
-        """
+        """Load ML info from file/dict or from global_settings['ml_info']."""
         source = ml_info_source
         if source is None and isinstance(self.global_settings, dict):
             source = self.global_settings.get("ml_info")
 
-        ml_info_data: Dict[str, Any] = {}
+        ml_info_data = self._get_ml_info_data(source)
+        self._interpolate_ml_info(ml_info_data)
+        self._apply_ml_info_defaults(ml_info_data)
+        self.ml_info: Dict[str, Any] = ml_info_data
+
+    def _get_ml_info_data(
+        self, source: Optional[Union[str, Dict[str, Any], Path]]
+    ) -> Dict[str, Any]:
+        """Helper to load ml_info_data from source."""
         if isinstance(source, dict):
             ml_info_data = source
-        elif isinstance(source, str):
+        elif isinstance(source, (str, Path)):
             try:
-                ml_info_data = self._config_loader.load_config(source)
+                ml_info_data = self._config_loader.load_config(str(source))
             except Exception as e:
                 logger.error(f"Failed to load ml_info from {source}: {e}")
                 raise
         else:
             ml_info_data = {}
-
         if not isinstance(ml_info_data, dict):
             raise ConfigValidationError(
                 f"ml_info must be a dict (or path to a dict), got {type(ml_info_data).__name__}"
             )
+        return ml_info_data
 
-        # Interpolate strings with global_settings as variables
+    def _interpolate_ml_info(self, ml_info_data: Dict[str, Any]) -> None:
+        """Helper to interpolate ml_info_data."""
         try:
             VariableInterpolator.interpolate_structure(
                 ml_info_data, self.global_settings
@@ -177,24 +212,17 @@ class Context:
         except Exception:
             logger.debug("ML info interpolation skipped due to error", exc_info=True)
 
-        # Apply defaults
+    def _apply_ml_info_defaults(self, ml_info_data: Dict[str, Any]) -> None:
+        """Helper to apply defaults to ml_info_data."""
         base_hyperparams = dict(self.default_hyperparams)
         provided_hyperparams = dict(ml_info_data.get("hyperparams", {}) or {})
         base_hyperparams.update(provided_hyperparams)
-
-        if "hyperparams" not in ml_info_data or not isinstance(
-            ml_info_data.get("hyperparams"), dict
-        ):
-            ml_info_data["hyperparams"] = base_hyperparams
-        else:
-            ml_info_data["hyperparams"] = base_hyperparams
+        ml_info_data["hyperparams"] = base_hyperparams
 
         if "model_version" not in ml_info_data or not ml_info_data.get("model_version"):
             mv = self.default_model_version
             if mv is not None:
                 ml_info_data["model_version"] = mv
-
-        self.ml_info: Dict[str, Any] = ml_info_data
 
     def _load_and_validate_config(
         self, source: Union[str, Dict], config_name: str

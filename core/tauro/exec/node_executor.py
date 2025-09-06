@@ -59,7 +59,6 @@ class NodeExecutor:
                 start_date,
                 end_date,
                 ml_info,
-                command,
             )
 
         except Exception as e:
@@ -291,7 +290,7 @@ class NodeExecutor:
                 node_name = node_info["node_name"]
 
                 try:
-                    result = future.result()
+                    future.result()
                     completed.add(node_name)
 
                     execution_results[node_name] = {
@@ -383,7 +382,7 @@ class NodeExecutor:
         time.sleep(5)
 
         remaining_futures = []
-        for future, node_info in list(running.items()):
+        for future, node_info in running.items():
             node_name = node_info["node_name"]
             if future.done():
                 try:
@@ -416,7 +415,7 @@ class NodeExecutor:
 
         logger.debug(f"Cleaning up {len(running)} remaining futures")
 
-        for future, node_info in list(running.items()):
+        for future, node_info in running.items():
             node_name = node_info["node_name"]
             try:
                 if not future.done():
@@ -440,7 +439,7 @@ class NodeExecutor:
     ) -> List[str]:
         """Find nodes that became ready after completing a node."""
         newly_ready = []
-        running_nodes = set(info["node_name"] for info in running.values())
+        running_nodes = {info["node_name"] for info in running.values()}
         queued_nodes = set(ready_queue)
 
         for dependent in dag[completed_node]:
@@ -467,14 +466,16 @@ class NodeExecutor:
         start_date: str,
         end_date: str,
         ml_info: Dict[str, Any],
-        command: Command,
     ) -> None:
         """Enhanced validation and output saving with ML metadata."""
         PipelineValidator.validate_dataframe_schema(result_df)
-
         if hasattr(result_df, "printSchema"):
             logger.debug(f"Schema for node '{node_name}':")
-            result_df.printSchema()
+            try:
+                result_df.printSchema()
+            except Exception:
+                # ignore schema print errors
+                pass
 
         output_params = {
             "node": node_config,
@@ -484,7 +485,7 @@ class NodeExecutor:
         }
 
         if self.is_ml_layer:
-            output_params["model_version"] = ml_info["model_version"]
+            output_params["model_version"] = ml_info.get("model_version")
             output_params["project_name"] = ml_info.get("project_name", "")
 
         self.output_manager.save_output(**output_params)

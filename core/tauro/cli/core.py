@@ -154,64 +154,78 @@ class SecurityValidator:
     def validate_path(base_path: Path, target_path: Path) -> Path:
         """Ensure target path is within base path boundaries and safe."""
         try:
-            resolved_base = base_path.resolve().absolute()
-            resolved_target = target_path.resolve().absolute()
+            resolved_base = base_path.resolve()
+            resolved_target = target_path.resolve()
 
-            try:
-                relative = resolved_target.relative_to(resolved_base)
-            except ValueError:
-                raise SecurityError(
-                    f"Path traversal attempt blocked: {resolved_target}"
-                )
-
-            if ".." in relative.parts:
-                raise SecurityError(f"Path contains '..': {resolved_target}")
-
-            if any(part.startswith(".") for part in relative.parts):
-                raise SecurityError(
-                    f"Hidden file/directory access denied: {resolved_target}"
-                )
-
-            # Guard sensitive dirs (POSIX only)
-            for sensitive_dir in SecurityValidator.SENSITIVE_DIRS:
-                try:
-                    if resolved_target.is_relative_to(sensitive_dir):
-                        raise SecurityError(
-                            f"Access to sensitive directory '{sensitive_dir}' denied"
-                        )
-                except AttributeError:
-                    # Path.is_relative_to requires Python 3.9+; fallback:
-                    try:
-                        resolved_target.relative_to(sensitive_dir)
-                        raise SecurityError(
-                            f"Access to sensitive directory '{sensitive_dir}' denied"
-                        )
-                    except Exception:
-                        pass
-
-            if resolved_target.exists():
-                try:
-                    stat_info = os.stat(resolved_target)
-                    # World-writable check (POSIX)
-                    if hasattr(stat, "S_IWOTH") and (stat_info.st_mode & stat.S_IWOTH):
-                        raise SecurityError(
-                            f"World-writable file detected: {resolved_target}"
-                        )
-                    # Ownership check (POSIX only)
-                    if hasattr(os, "getuid"):
-                        if stat_info.st_uid != os.getuid():
-                            raise SecurityError(
-                                f"File not owned by current user: {resolved_target}"
-                            )
-                except OSError:
-                    # If we can't stat, be conservative but allow
-                    pass
+            SecurityValidator._check_relative_to_base(resolved_base, resolved_target)
+            SecurityValidator._check_relative_parts(resolved_base, resolved_target)
+            SecurityValidator._check_sensitive_dirs(resolved_target)
+            SecurityValidator._check_file_permissions(resolved_target)
 
             return resolved_target
         except Exception as e:
             if isinstance(e, SecurityError):
                 raise
             raise SecurityError(f"Path validation failed: {e}") from e
+
+    @staticmethod
+    def _check_relative_to_base(resolved_base: Path, resolved_target: Path) -> None:
+        """Check if target is within base path."""
+        try:
+            resolved_target.relative_to(resolved_base)
+        except ValueError:
+            raise SecurityError(f"Path traversal attempt blocked: {resolved_target}")
+
+    @staticmethod
+    def _check_relative_parts(resolved_base: Path, resolved_target: Path) -> None:
+        """Check for '..' and hidden files in relative path."""
+        relative = resolved_target.relative_to(resolved_base)
+        if ".." in relative.parts:
+            raise SecurityError(f"Path contains '..': {resolved_target}")
+        if any(part.startswith(".") for part in relative.parts):
+            raise SecurityError(
+                f"Hidden file/directory access denied: {resolved_target}"
+            )
+
+    @staticmethod
+    def _check_sensitive_dirs(resolved_target: Path) -> None:
+        """Check if target is inside sensitive directories."""
+        for sensitive_dir in SecurityValidator.SENSITIVE_DIRS:
+            try:
+                if resolved_target.is_relative_to(sensitive_dir):
+                    raise SecurityError(
+                        f"Access to sensitive directory '{sensitive_dir}' denied"
+                    )
+            except AttributeError:
+                try:
+                    resolved_target.relative_to(sensitive_dir)
+                    raise SecurityError(
+                        f"Access to sensitive directory '{sensitive_dir}' denied"
+                    )
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _check_file_permissions(resolved_target: Path) -> None:
+        """Check file permissions and ownership."""
+        if not resolved_target.exists():
+            return
+        try:
+            stat_info = os.stat(resolved_target)
+            if os.name == "posix":
+                SecurityValidator._check_posix_permissions(resolved_target, stat_info)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _check_posix_permissions(
+        resolved_target: Path, stat_info: os.stat_result
+    ) -> None:
+        """Check POSIX-specific file permissions and ownership."""
+        if hasattr(stat, "S_IWOTH") and (stat_info.st_mode & stat.S_IWOTH):
+            raise SecurityError(f"World-writable file detected: {resolved_target}")
+        if hasattr(os, "getuid") and stat_info.st_uid != os.getuid():
+            raise SecurityError(f"File not owned by current user: {resolved_target}")
 
 
 class ConfigCache:
@@ -253,7 +267,12 @@ class LoggerManager:
         """Configure application logging."""
         logger.remove()
 
-        console_level = "ERROR" if quiet else "DEBUG" if verbose else level.upper()
+        if quiet:
+            console_level = "ERROR"
+        elif verbose:
+            console_level = "DEBUG"
+        else:
+            console_level = level.upper()
 
         logger.add(
             sys.stderr,

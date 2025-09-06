@@ -115,39 +115,12 @@ class DSLConfigLoader(ConfigLoader):
         result: Dict[str, Any] = {}
         current_path: List[str] = []
 
-        def ensure_section(root: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
-            node = root
-            for p in parts:
-                if p not in node or not isinstance(node[p], dict):
-                    node[p] = {}
-                node = node[p]
-            return node
-
         try:
             with path.open("r", encoding="utf-8") as f:
                 for line_num, raw in enumerate(f, 1):
                     line = raw.strip()
-                    if not line or line.startswith("#"):
-                        continue
-
-                    m = self.SECTION_RE.match(line)
-                    if m:
-                        name = m.group("name").strip()
-                        # dotted sections allowed, e.g. [global_settings.format_policy]
-                        current_path = [p.strip() for p in name.split(".") if p.strip()]
-                        ensure_section(result, current_path)
-                        continue
-
-                    if "=" in line:
-                        key, value = line.split("=", 1)
-                        key = key.strip()
-                        parsed = self._parse_value(value.strip())
-                        section = ensure_section(result, current_path)
-                        section[key] = parsed
-                        continue
-
-                    raise ConfigLoadError(
-                        f"Unrecognized DSL syntax at {path}:{line_num}: {raw.strip()}"
+                    current_path = self._process_line(
+                        line, line_num, path, result, current_path
                     )
         except ConfigLoadError:
             raise
@@ -155,6 +128,52 @@ class DSLConfigLoader(ConfigLoader):
             raise ConfigLoadError(f"Failed to parse DSL file {path}: {e}") from e
 
         return result
+
+    def _ensure_section(self, root: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
+        node = root
+        for p in parts:
+            if p not in node or not isinstance(node[p], dict):
+                node[p] = {}
+            node = node[p]
+        return node
+
+    def _parse_section(self, line: str) -> List[str]:
+        m = self.SECTION_RE.match(line)
+        if m:
+            name = m.group("name").strip()
+            return [p.strip() for p in name.split(".") if p.strip()]
+        return []
+
+    def _parse_key_value(self, line: str) -> Union[None, tuple]:
+        if "=" in line:
+            key, value = line.split("=", 1)
+            return key.strip(), self._parse_value(value.strip())
+        return None
+
+    def _process_line(
+        self,
+        line: str,
+        line_num: int,
+        path: Path,
+        result: Dict[str, Any],
+        current_path: List[str],
+    ) -> List[str]:
+        if not line or line.startswith("#"):
+            return current_path
+
+        section_path = self._parse_section(line)
+        if section_path:
+            self._ensure_section(result, section_path)
+            return section_path
+
+        kv = self._parse_key_value(line)
+        if kv:
+            key, parsed = kv
+            section = self._ensure_section(result, current_path)
+            section[key] = parsed
+            return current_path
+
+        raise ConfigLoadError(f"Unrecognized DSL syntax at {path}:{line_num}: {line}")
 
     def _parse_value(self, value: str) -> Union[str, int, float, bool, List[Any]]:
         # Strip surrounding quotes for strings early (but keep value for further checks)
