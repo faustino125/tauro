@@ -485,8 +485,7 @@ class NodeExecutor:
         }
 
         if self.is_ml_layer:
-            output_params["model_version"] = ml_info.get("model_version")
-            output_params["project_name"] = ml_info.get("project_name", "")
+            output_params["model_version"] = ml_info["model_version"]
 
         self.output_manager.save_output(**output_params)
         logger.info(f"Output saved successfully for node '{node_name}'")

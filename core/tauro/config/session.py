@@ -1,3 +1,5 @@
+import sys
+import os
 from typing import Any, Dict, List, Literal, Optional
 import threading
 
@@ -115,19 +117,17 @@ class SparkSessionFactory:
         try:
             from pyspark.sql import SparkSession  # type: ignore
 
-            builder = SparkSession.builder.appName("TauroLocal")
-            try:
-                builder = builder.master("local[*]")
-            except Exception:
-                pass
-            builder = builder.master("local[*]")
+            os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+            builder = SparkSession.builder.appName("TauroLocal").master("local[*]")
 
-            if ml_config:
-                builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
+            if ml_config and isinstance(ml_config, dict):
+                apply_fn = getattr(SparkSessionFactory, "_apply_ml_configs", None)
+                if callable(apply_fn):
+                    builder = apply_fn(builder, ml_config)
 
             return builder.getOrCreate()
         except Exception as e:
-            logger.error(f"Failed to create local Spark session: {e}")
+            logger.error("Session creation failed", exc_info=True)
             raise
 
     @staticmethod

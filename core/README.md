@@ -1,245 +1,141 @@
 # Tauro
 
-Tauro es un framework poderoso y flexible para la ejecución y gestión de pipelines de datos, diseñado para ser accesible tanto para usuarios no técnicos como para desarrolladores avanzados. Proporciona una interfaz unificada para:
+Tauro is a simple CLI for running and managing data pipelines (batch and streaming). It runs locally or with Spark and provides a concise command set to list, inspect, validate and execute pipelines.
 
-- Ejecución de jobs batch (procesamiento por lotes)
-- Gestión de pipelines streaming (procesamiento en tiempo real)
-- Configuración basada en archivos (YAML/JSON/Python)
-- Generación de proyectos desde templates predefinidos
-- Soporte para arquitectura Medallion (Bronze → Silver → Gold)
+Quick highlights
+- Run batch, streaming and hybrid pipelines
+- Read/write common formats (Parquet, JSON, CSV, Delta, Avro, ORC)
+- Built-in validation, safe path handling and structured logs
+- Lightweight configuration model with environment-aware settings
 
-## Requisitos
+Installation
 
+- From PyPI (recommended):
+```
+pip install tauro
+```
+
+Minimum requirements
 - Python 3.9+
-- pyspark (opcional, para procesamiento con Spark)
-- Databricks Connect (opcional, para modo Databricks/Distributed)
-Tauro helps you run data pipelines without needing to be a developer. Think of it as a “remote control” to:
-- Run batch jobs (for files or tables that update on a schedule)
-- Start and monitor streaming jobs (for real‑time data)
-- Use a simple folder of configuration files to keep things organized
-- Generate a ready‑to‑use project template (Medallion: Bronze → Silver → Gold)
+- (Optional) Spark 3.4+ if using Spark-backed formats
+- (Optional) delta-spark for Delta format outside Databricks
 
-This guide explains how to use Tauro from your terminal in clear, practical steps.
+Quick start (under 5 minutes)
 
----
+1. Generate a project template
+```
+tauro --template medallion_basic --project-name demo_project
+```
 
-## What can I do with Tauro?
-
-- Create a new project from a template with one command
-- Run a pipeline for a specific environment (dev, pre_prod, prod)
-- Run a single step (node) of a pipeline if you need to re‑run just part of it
-- Start a streaming pipeline and check its status or stop it
-- See which pipelines exist and view basic details
-- Validate your setup before running
-
-You do not need to write code to use these features. If you later want to customize pipeline logic, a developer can edit the generated sample files.
-
----
-
-## Before you start
-
-- You need Python 3.9 or later
-- Open a terminal (Command Prompt/PowerShell on Windows, Terminal on macOS/Linux)
-- Install required packages (you’ll get a ready “requirements.txt” in the template)
-
-If Tauro is already installed in your environment, you can skip template generation and use your team’s existing project.
-
----
-
-## Quick Start in 10 Minutes
-
-Follow these steps to try Tauro with a new sample project.
-
-1) Create a new project
-- YAML format (default):
-  ```
-  tauro --template medallion_basic --project-name demo_project
-  ```
-- JSON format:
-  ```
-  tauro --template medallion_basic --project-name demo_project --format json
-  ```
-
-2) Go into your project and install requirements
+2. Install project dependencies and open the project
 ```
 cd demo_project
 pip install -r requirements.txt
 ```
 
-3) Run your first batch pipeline (Bronze ingestion)
-- Development environment (“dev”):
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion
-  ```
+3. Run a batch pipeline
+```
+tauro --env dev --pipeline bronze_batch_ingestion
+```
 
-4) Run your first streaming pipeline (Bronze streaming)
-- Start (async mode, runs in background):
-  ```
-  tauro --streaming --streaming-command run \
-        --streaming-config ./settings_json.json \
-        --streaming-pipeline bronze_streaming_ingestion \
-        --streaming-mode async
-  ```
-- Check status (all running jobs):
-  ```
-  tauro --streaming --streaming-command status --streaming-config ./settings_json.json
-  ```
-- Stop a streaming job (replace <ID> with the execution id from status):
-  ```
-  tauro --streaming --streaming-command stop \
-        --streaming-config ./settings_json.json \
-        --execution-id <ID>
-  ```
+4. Start a streaming pipeline (async)
+```
+tauro --streaming --streaming-command run \
+  --streaming-config ./settings.json \
+  --streaming-pipeline bronze_streaming_ingestion \
+  --streaming-mode async
+```
 
-Tip: If you generated YAML instead of JSON, your settings file will be settings_yml.json. Use that in --streaming-config.
+Configuration (high level)
+- Tauro uses a single configuration index (settings file) that points to environment-specific sections.
+- Key concepts:
+  - settings file (JSON or YAML) — entry point
+  - environment (dev, prod, etc.) — select runtime values
+  - pipelines and nodes — define DAGs and processing steps
+- Keep per-node streaming options (checkpoint_location, trigger) when using streaming.
 
----
+Common commands
 
-## Everyday tasks
-
-Choose an environment
-- Environments help you separate development, testing, and production.
-- Supported: base, dev, pre_prod, prod
-- Example:
-  ```
-  tauro --env pre_prod --pipeline silver_transform
-  ```
-
-Run only one step (node) of a pipeline
-- Useful if a particular step failed and you want to re‑run just that part.
-  ```
-  tauro --env dev --pipeline gold_aggregation --node aggregate_sales
-  ```
-
-Preview without actually running (dry run)
-- Shows what would happen, but makes no changes.
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion --dry-run
-  ```
-
-Validate your setup (no execution)
-- Checks the configuration structure and paths.
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion --validate-only
-  ```
-
-See available pipelines
+- List pipelines
 ```
 tauro --list-pipelines
 ```
 
-Get basic info about a pipeline
+- Show pipeline info
 ```
-tauro --pipeline-info gold_aggregation
-```
-
-Clear cached discovery results
-```
-tauro --clear-cache
+tauro --pipeline-info <pipeline_name>
 ```
 
----
-## Dates and time windows
+- Execute a pipeline
+```
+tauro --env <dev|prod|...> --pipeline <name> [--node <node_name>] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--dry-run]
+```
 
-Some pipelines work with date ranges.
+- Validate configuration without running
+```
+tauro --env dev --pipeline my_pipeline --validate-only
+```
 
-- Use ISO format: YYYY-MM-DD
-- Example:
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion \
-        --start-date 2025-01-01 --end-date 2025-01-31
-  ```
-- Tauro checks that the start date is not after the end date.
+Helpful flags
+- Verbosity: `--verbose` `--quiet`
+- Date range: use ISO format `YYYY-MM-DD` (start_date must be <= end_date)
 
----
+Streaming commands
 
-## Logging (making output quieter or more detailed)
+- Run
+```
+tauro --streaming --streaming-command run \
+  --streaming-config <settings_file> \
+  --streaming-pipeline <pipeline_name> \
+  [--streaming-mode sync|async]
+```
 
-- Default level is INFO (balanced)
-- Make it very detailed:
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion --verbose
-  ```
-- Show only errors:
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion --quiet
-  ```
-- Send logs to a custom file:
-  ```
-  tauro --env dev --pipeline bronze_batch_ingestion --log-file ./my_run.log
-  ```
+- Status
+```
+tauro --streaming --streaming-command status \
+  --streaming-config <settings_file> \
+  [--execution-id <id>]
+```
 
-A default log file is also saved in logs/tauro.log.
+- Stop
+```
+tauro --streaming --streaming-command stop \
+  --streaming-config <settings_file> \
+  --execution-id <id>
+```
 
----
+Best practices
+- Always set a checkpoint_location for streaming nodes.
+- Prefer atomic output formats (Delta, Parquet) for production.
+- Use `dry-run` or `--validate-only` before running in production.
+- Pin Spark and connector versions when running on a cluster.
 
-## Streaming (simple view)
+Troubleshooting (quick)
 
-- Run: starts the streaming job (sync waits until it finishes, async continues in background)
-- Status: tells you if your streaming job is running and its identifier
-- Stop: stops the job safely
+- Command not found / --help not working:
+  - Try: `python -m tauro --help`
 
-You always need to point to your settings file with --streaming-config.
+- Spark session missing:
+  - Ensure Spark is installed and the runtime provides a Spark session when using Spark formats.
 
-Examples:
-- Run async:
-  ```
-  tauro --streaming --streaming-command run \
-        --streaming-config ./settings_json.json \
-        --streaming-pipeline bronze_streaming_ingestion \
-        --streaming-mode async
-  ```
-- Status (all):
-  ```
-  tauro --streaming --streaming-command status --streaming-config ./settings_json.json
-  ```
-- Stop by id:
-  ```
-  tauro --streaming --streaming-command stop \
-        --streaming-config ./settings_json.json \
-        --execution-id <ID>
-  ```
+- Date validation errors:
+  - Use ISO format `YYYY-MM-DD` and ensure start_date ≤ end_date.
 
----
+- Configuration not found or invalid:
+  - Verify the settings file path and that the selected environment section exists.
 
-## Tips and common fixes
+- Security/path errors:
+  - Avoid symlinks, hidden paths or locations outside the project workspace.
 
-- “Config not found”
-  - Make sure you are inside your project folder (cd demo_project)
-  - The settings file should be visible in your current folder: settings_json.json (or settings_yml.json)
-  - Try:
-    ```
-    tauro --list-configs
-    ```
-- “Invalid date format”
-  - Use YYYY-MM-DD, for example 2025-03-15
-- “Import” or “module not found” in custom code (if your team customized nodes)
-  - Make sure code files are inside your project (for example under pipelines/ or src/)
-  - Ask a developer to check Python package setup if needed
-- Want to see what Tauro would do without changes?
-  - Use --dry-run
+Exit codes
+- 0: success
+- 1: general error
+- 2: configuration error
+- 3: validation error
+- 4: execution error
+- 5: dependency error
+- 6: security error
 
----
-
-## Frequently Asked Questions
-
-- Do I need admin rights?
-  - No, you just need Python and the project files.
-- Does Tauro change my original data?
-  - Only if a pipeline writes to an output location. You can always use --dry-run to preview.
-- Can I use Tauro on Windows/macOS/Linux?
-  - Yes. Commands are the same. Paths and permissions may differ by system.
-
----
-
-## Where to get help
-
-- Check the README created inside your generated project (it includes next steps)
-- Use:
-  ```
-  tauro --list-pipelines
-  tauro --pipeline-info <name>
-  ```
-- If you still need help, share the error message and the log file (logs/tauro.log) with your data team.
-
-You’re ready to go. Start with bronze_batch_ingestion in dev, then explore the rest!
+Need more help?
+- Use `tauro --help` for a full list of commands and options.
+- For complex issues, reproduce with `--log-level DEBUG` and include the generated log when asking
