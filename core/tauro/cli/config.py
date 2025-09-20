@@ -238,15 +238,15 @@ class ConfigDiscovery:
             score = 0
 
             if layer_name and layer_name.lower() in str(config_dir).lower():
-                score += 20
-
-            if use_case and use_case.lower() in str(config_dir).lower():
                 score += 30
 
-            if config_type and f"settings_{config_type}.json" == config_file:
-                score += 10
+            if use_case and use_case.lower() in str(config_dir).lower():
+                score += 40
 
-            score += len(config_dir.parts)
+            if config_type and f"settings_{config_type}.json" == config_file:
+                score += 20
+
+            score += max(0, 10 - len(config_dir.parts))
 
             scored.append((score, config_dir, config_file))
 
@@ -439,7 +439,18 @@ class ConfigManager:
                 )
                 os.chdir(validated)
                 logger.info(f"Changed to config directory: {validated}")
-            except Exception as e:
+            except SecurityError as e:
+                if self.active_config_dir.is_absolute() and os.getenv(
+                    "TAURO_PERMISSIVE_PATH_VALIDATION", "0"
+                ) in ("1", "true", "True", "yes", "YES"):
+                    try:
+                        os.chdir(self.active_config_dir)
+                        logger.warning(
+                            f"Changed to absolute config directory (permissive): {self.active_config_dir}"
+                        )
+                        return
+                    except Exception as ex:
+                        raise ConfigurationError(f"Failed to change directory: {ex}")
                 raise ConfigurationError(f"Failed to change directory: {e}")
 
     def restore_original_directory(self) -> None:

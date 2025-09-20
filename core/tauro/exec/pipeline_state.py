@@ -69,25 +69,37 @@ class UnifiedPipelineState:
         node_type: NodeType,
         dependencies: Optional[List[str]] = None,
     ) -> None:
-        """Register a node in the unified state."""
+        """Register a node in the unified state.
+
+        This method ensures that `dependents` relationships are consistent regardless
+        of the order in which nodes are registered. If a node A depends on B but B
+        is registered later, when B is registered it will also link A as dependent.
+        """
         with self._lock:
             if node_name in self._nodes:
                 raise ValueError(f"Node '{node_name}' already registered")
 
+            deps = dependencies or []
             self._nodes[node_name] = NodeExecutionInfo(
                 node_name=node_name,
                 node_type=node_type,
-                dependencies=dependencies or [],
+                dependencies=list(deps),
             )
 
-            for dep in dependencies or []:
+            for dep in deps:
                 if dep in self._nodes:
                     self._nodes[dep].dependents.add(node_name)
+
+            for other_name, other_info in self._nodes.items():
+                if other_name == node_name:
+                    continue
+                if node_name in other_info.dependencies:
+                    self._nodes[node_name].dependents.add(other_name)
 
             if node_type == NodeType.STREAMING:
                 batch_deps = [
                     dep
-                    for dep in (dependencies or [])
+                    for dep in deps
                     if dep in self._nodes
                     and self._nodes[dep].node_type == NodeType.BATCH
                 ]
@@ -106,7 +118,6 @@ class UnifiedPipelineState:
 
             node = self._nodes[node_name]
 
-            # Check if dependencies are ready
             if not self._are_dependencies_ready(node_name):
                 return False
 
@@ -382,7 +393,6 @@ class UnifiedPipelineState:
         if self._circuit_open:
             logger.error("Circuit open - propagating failure to all dependent nodes")
 
-        # Stop dependent streaming nodes if it's a batch node failure
         node = self._nodes.get(failed_node)
         if node and node.node_type == NodeType.BATCH:
             self.stop_dependent_streaming_nodes(failed_node)
@@ -442,13 +452,11 @@ class UnifiedPipelineState:
     def cleanup(self) -> None:
         """Clean up all resources and stop active streaming queries"""
         with self._lock:
-            # Stop streaming queries
-            for node_name, query in self._streaming_queries.items():
+            for node_name, query in list(self._streaming_queries.items()):
                 self._stop_query(node_name, query)
 
-            # Release resources for each node
-            for node in self._nodes.values():
-                for res_type, resource in node.resources:
+            for node in list(self._nodes.values()):
+                for res_type, resource in list(node.resources):
                     self._release_resource(node, res_type, resource)
 
             self._reset_state()

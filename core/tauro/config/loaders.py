@@ -4,7 +4,6 @@ import importlib.util
 import json
 import re
 import sys
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -66,15 +65,16 @@ class PythonConfigLoader(ConfigLoader):
             source = Path(source)
         return source.suffix.lower() == ".py"
 
-    @lru_cache(maxsize=32)
     def _load_module(self, path: Path):
-        module_name = path.stem
+        # Use a module name unique to the path to avoid collisions
+        module_name = f"tauro_config_{abs(hash(str(path)))}"
         spec = importlib.util.spec_from_file_location(module_name, path)
 
         if not spec or not spec.loader:
             raise ConfigLoadError(f"Could not load Python module: {path}")
 
         module = importlib.util.module_from_spec(spec)
+        # Do not override unrelated modules with same stem
         sys.modules[module_name] = module
 
         try:
@@ -230,6 +230,34 @@ class ConfigLoaderFactory:
         raise ConfigLoadError(f"No supported loader for source: {source}")
 
     def load_config(self, source: Union[str, Dict, Path]) -> Dict[str, Any]:
+        # If it's already a dict, nothing to do
         if isinstance(source, dict):
             return source
+
+        # If it's a string that looks like JSON/YAML content, try parsing it directly
+        if isinstance(source, str):
+            text = source.strip()
+            # JSON-like (object or array)
+            if text.startswith("{") or text.startswith("["):
+                try:
+                    return json.loads(source)
+                except Exception:
+                    # Fallback to YAML if PyYAML available
+                    if yaml is not None:
+                        try:
+                            return yaml.safe_load(source) or {}
+                        except Exception:
+                            pass
+            # If it looks like an existing file path, prefer loading from disk
+            p = Path(source)
+            if p.exists():
+                return self.get_loader(p).load(p)
+
+        # If it's a Path object that exists, load from it
+        if isinstance(source, Path):
+            if source.exists():
+                return self.get_loader(source).load(source)
+            raise ConfigLoadError(f"File not found: {source}")
+
+        # Last resort: try to get a loader based on suffix (this will raise if none matches)
         return self.get_loader(source).load(source)

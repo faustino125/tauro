@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 import traceback
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from loguru import logger  # type: ignore
 
@@ -172,11 +172,18 @@ class ArgumentParser:
         return parser
 
 
-def _normalize_and_validate_dates(args) -> None:
+def _normalize_and_validate_dates(parsed_args: argparse.Namespace) -> None:
     """Normalize and validate CLI date arguments in-place."""
-    args.start_date = parse_iso_date(args.start_date)
-    args.end_date = parse_iso_date(args.end_date)
-    validate_date_range(args.start_date, args.end_date)
+    try:
+        if getattr(parsed_args, "start_date", None):
+            parsed_args.start_date = parse_iso_date(parsed_args.start_date)
+        if getattr(parsed_args, "end_date", None):
+            parsed_args.end_date = parse_iso_date(parsed_args.end_date)
+        validate_date_range(parsed_args.start_date, parsed_args.end_date)
+    except ValidationError:
+        raise
+    except Exception as e:
+        raise ValidationError(f"Error validating dates: {e}")
 
 
 class ConfigValidator:
@@ -225,8 +232,8 @@ class ConfigValidator:
     def _validate_dates(config: CLIConfig) -> None:
         """Validate date range configuration."""
         if config.start_date or config.end_date:
-            sd = parse_iso_date(config.start_date)
-            ed = parse_iso_date(config.end_date)
+            sd = parse_iso_date(config.start_date) if config.start_date else None
+            ed = parse_iso_date(config.end_date) if config.end_date else None
             validate_date_range(sd, ed)
 
 
@@ -325,28 +332,47 @@ class TauroCLI:
         self.config: Optional[CLIConfig] = None
         self.config_manager: Optional[ConfigManager] = None
 
-    def parse_arguments(self, args: Optional[List[str]] = None) -> CLIConfig:
+    def parse_arguments(
+        self,
+        args: Optional[List[str]] = None,
+        parsed_args: Optional[argparse.Namespace] = None,
+    ) -> CLIConfig:
         """Parse command line arguments into configuration object."""
-        parser = ArgumentParser.create()
-        parsed = parser.parse_args(args)
+        if parsed_args is None:
+            parser = ArgumentParser.create()
+            parsed = parser.parse_args(args)
+        else:
+            parsed = parsed_args
 
-        base_path = Path(parsed.base_path) if parsed.base_path else None
-        log_file = Path(parsed.log_file) if parsed.log_file else None
+        base_path = (
+            Path(parsed.base_path) if getattr(parsed, "base_path", None) else None
+        )
+        log_file = Path(parsed.log_file) if getattr(parsed, "log_file", None) else None
         output_path = (
             Path(parsed.output_path)
             if hasattr(parsed, "output_path") and parsed.output_path
             else None
         )
         streaming_config = (
-            Path(parsed.streaming_config) if parsed.streaming_config else None
+            Path(parsed.streaming_config)
+            if getattr(parsed, "streaming_config", None)
+            else None
         )
 
         try:
-            start_date = parse_iso_date(parsed.start_date)
+            start_date = (
+                parse_iso_date(parsed.start_date)
+                if getattr(parsed, "start_date", None)
+                else None
+            )
         except Exception:
             start_date = parsed.start_date
         try:
-            end_date = parse_iso_date(parsed.end_date)
+            end_date = (
+                parse_iso_date(parsed.end_date)
+                if getattr(parsed, "end_date", None)
+                else None
+            )
         except Exception:
             end_date = parsed.end_date
 
@@ -387,6 +413,7 @@ class TauroCLI:
         parsed_args = None
         try:
             parsed_args = self._parse_and_setup_logger(args)
+
             result = self._handle_quick_commands(parsed_args)
             if result is not None:
                 return result
@@ -396,7 +423,9 @@ class TauroCLI:
                 return special_result
 
             _normalize_and_validate_dates(parsed_args)
-            self.config = self.parse_arguments(args)
+
+            self.config = self.parse_arguments(parsed_args=parsed_args)
+
             ConfigValidator.validate(self.config)
 
             logger.info("Starting Tauro CLI execution")
@@ -430,7 +459,10 @@ class TauroCLI:
 
         finally:
             if self.config_manager:
-                self.config_manager.restore_original_directory()
+                try:
+                    self.config_manager.restore_original_directory()
+                except Exception:
+                    pass
             ConfigCache.clear()
 
     def _parse_and_setup_logger(self, args: Optional[List[str]]) -> argparse.Namespace:
@@ -474,18 +506,20 @@ class TauroCLI:
     def _handle_streaming_command(self, parsed_args) -> int:
         """Execute streaming pipeline commands."""
         try:
-            from tauro.cli.streaming_cli import run as cmd_run
-            from tauro.cli.streaming_cli import status as cmd_status
-            from tauro.cli.streaming_cli import stop as cmd_stop
+            from tauro.cli.streaming_cli import (
+                run_cli_impl,
+                status_cli_impl,
+                stop_cli_impl,
+            )
 
             command = parsed_args.streaming_command or "run"
 
             if command == "run":
-                return self._handle_streaming_run(cmd_run, parsed_args)
+                return self._handle_streaming_run(run_cli_impl, parsed_args)
             elif command == "status":
-                return self._handle_streaming_status(cmd_status, parsed_args)
+                return self._handle_streaming_status(status_cli_impl, parsed_args)
             elif command == "stop":
-                return self._handle_streaming_stop(cmd_stop, parsed_args)
+                return self._handle_streaming_stop(stop_cli_impl, parsed_args)
             else:
                 raise ValidationError(f"Unknown streaming command: {command}")
 
@@ -497,14 +531,14 @@ class TauroCLI:
                 logger.debug(traceback.format_exc())
             return ExitCode.EXECUTION_ERROR.value
 
-    def _handle_streaming_run(self, cmd_run, parsed_args) -> int:
+    def _handle_streaming_run(self, run_impl, parsed_args) -> int:
         """Handle streaming 'run' command."""
         if not parsed_args.streaming_pipeline:
             raise ValidationError("--streaming-pipeline required for 'run' command")
         streaming_config = (
             Path(parsed_args.streaming_config) if parsed_args.streaming_config else None
         )
-        result = cmd_run.callback(
+        result = run_impl(
             config=streaming_config,
             pipeline=parsed_args.streaming_pipeline,
             mode=parsed_args.streaming_mode,
@@ -513,26 +547,26 @@ class TauroCLI:
         )
         return result if isinstance(result, int) else ExitCode.SUCCESS.value
 
-    def _handle_streaming_status(self, cmd_status, parsed_args) -> int:
+    def _handle_streaming_status(self, status_impl, parsed_args) -> int:
         """Handle streaming 'status' command."""
         streaming_config = (
             Path(parsed_args.streaming_config) if parsed_args.streaming_config else None
         )
-        result = cmd_status.callback(
+        result = status_impl(
             config=streaming_config,
             execution_id=parsed_args.execution_id,
             format="table",
         )
         return result if isinstance(result, int) else ExitCode.SUCCESS.value
 
-    def _handle_streaming_stop(self, cmd_stop, parsed_args) -> int:
+    def _handle_streaming_stop(self, stop_impl, parsed_args) -> int:
         """Handle streaming 'stop' command."""
         if not parsed_args.execution_id:
             raise ValidationError("--execution-id required for 'stop' command")
         streaming_config = (
             Path(parsed_args.streaming_config) if parsed_args.streaming_config else None
         )
-        result = cmd_stop.callback(
+        result = stop_impl(
             config=streaming_config,
             execution_id=parsed_args.execution_id,
             timeout=60,

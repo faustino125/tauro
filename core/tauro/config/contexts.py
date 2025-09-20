@@ -245,20 +245,19 @@ class Context:
         """Process and prepare configurations after loading."""
         self.layer = self.global_settings.get("layer", "").lower()
         try:
-            # Legacy targeted interpolation for 'filepath'
             self._interpolator.interpolate_config_paths(
                 self.input_config, self.global_settings
             )
             self._interpolator.interpolate_config_paths(
                 self.output_config, self.global_settings
             )
-            # New recursive interpolation across all string fields
             VariableInterpolator.interpolate_structure(
                 self.input_config, self.global_settings
             )
             VariableInterpolator.interpolate_structure(
                 self.output_config, self.global_settings
             )
+            self._interpolate_input_paths()
         except Exception:
             logger.debug("Path interpolation skipped due to error", exc_info=True)
 

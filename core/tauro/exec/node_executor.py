@@ -1,4 +1,3 @@
-import importlib
 import inspect
 import time
 from collections import deque
@@ -12,6 +11,14 @@ from loguru import logger  # type: ignore
 from tauro.exec.commands import Command, MLNodeCommand, NodeCommand
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
+
+
+@lru_cache(maxsize=64)
+def _import_module_cached(module_path: str):
+    import importlib
+
+    logger.debug(f"Importing module: {module_path}")
+    return importlib.import_module(module_path)
 
 
 class NodeExecutor:
@@ -85,8 +92,10 @@ class NodeExecutor:
             except Exception as e:
                 logger.debug(f"Resource release warning: {str(e)}")
 
-            # Referencia explícita a None para GC
-            del df
+            try:
+                del df
+            except Exception:
+                pass
 
     def execute_nodes_parallel(
         self,
@@ -235,7 +244,6 @@ class NodeExecutor:
             node_name = ready_queue.popleft()
             logger.info(f"Starting execution of node: {node_name}")
 
-            # Create enhanced ML info for this specific node
             node_ml_info = self._prepare_node_ml_info(node_name, ml_info)
 
             future = executor.submit(
@@ -286,7 +294,9 @@ class NodeExecutor:
         try:
             for future in thread_as_completed(future_list, timeout=10):
                 completed_futures.append(future)
-                node_info = running[future]
+                node_info = running.get(future)
+                if not node_info:
+                    continue
                 node_name = node_info["node_name"]
 
                 try:
@@ -326,8 +336,7 @@ class NodeExecutor:
             failed = True
 
         for future in completed_futures:
-            if future in running:
-                del running[future]
+            running.pop(future, None)
 
         if failed:
             self._cancel_all_futures(running)
@@ -382,7 +391,7 @@ class NodeExecutor:
         time.sleep(5)
 
         remaining_futures = []
-        for future, node_info in running.items():
+        for future, node_info in list(running.items()):
             node_name = node_info["node_name"]
             if future.done():
                 try:
@@ -390,7 +399,7 @@ class NodeExecutor:
                     logger.info(f"Late completion of node '{node_name}'")
                 except Exception as e:
                     logger.error(f"Late failure of node '{node_name}': {str(e)}")
-                del running[future]
+                running.pop(future, None)
             else:
                 remaining_futures.append((future, node_name))
 
@@ -403,10 +412,13 @@ class NodeExecutor:
     def _cancel_all_futures(self, running: Dict) -> None:
         """Cancel all running futures."""
         logger.warning(f"Cancelling {len(running)} running futures")
-        for future, node_info in running.items():
+        for future, node_info in list(running.items()):
             node_name = node_info["node_name"]
             logger.warning(f"Cancelling future for node '{node_name}'")
-            future.cancel()
+            try:
+                future.cancel()
+            except Exception:
+                logger.debug(f"Could not cancel future for node '{node_name}'")
 
     def _cleanup_futures(self, running: Dict) -> None:
         """Ensure all futures are properly cleaned up."""
@@ -415,7 +427,7 @@ class NodeExecutor:
 
         logger.debug(f"Cleaning up {len(running)} remaining futures")
 
-        for future, node_info in running.items():
+        for future, node_info in list(running.items()):
             node_name = node_info["node_name"]
             try:
                 if not future.done():
@@ -442,7 +454,7 @@ class NodeExecutor:
         running_nodes = {info["node_name"] for info in running.values()}
         queued_nodes = set(ready_queue)
 
-        for dependent in dag[completed_node]:
+        for dependent in dag.get(completed_node, set()):
             if (
                 dependent in completed
                 or dependent in running_nodes
@@ -474,8 +486,12 @@ class NodeExecutor:
             try:
                 result_df.printSchema()
             except Exception:
-                # ignore schema print errors
                 pass
+
+        env = getattr(self.context, "env", None)
+        if not env:
+            gs = getattr(self.context, "global_settings", {}) or {}
+            env = gs.get("env") or gs.get("environment")
 
         output_params = {
             "node": node_config,
@@ -487,7 +503,7 @@ class NodeExecutor:
         if self.is_ml_layer:
             output_params["model_version"] = ml_info["model_version"]
 
-        self.output_manager.save_output(**output_params)
+        self.output_manager.save_output(env, **output_params)
         logger.info(f"Output saved successfully for node '{node_name}'")
 
     def _get_node_config(self, node_name: str) -> Dict[str, Any]:
@@ -504,12 +520,6 @@ class NodeExecutor:
             )
         return node
 
-    @lru_cache(maxsize=32)
-    def _load_module(self, module_path: str):
-        """Load a module with caching to avoid repeated imports."""
-        logger.debug(f"Importing module: {module_path}")
-        return importlib.import_module(module_path)
-
     def _load_node_function(self, node: Dict[str, Any]) -> Callable:
         """Load a node's function with comprehensive validation."""
         module_path = node.get("module")
@@ -519,7 +529,7 @@ class NodeExecutor:
             raise ValueError("Node configuration must include 'module' and 'function'")
 
         try:
-            module = self._load_module(module_path)
+            module = _import_module_cached(module_path)
         except ImportError as e:
             logger.error(f"Failed to import module '{module_path}': {str(e)}")
             raise ImportError(f"Cannot import module '{module_path}': {str(e)}")
@@ -558,10 +568,15 @@ class NodeExecutor:
                 )
 
             if self.is_ml_layer and "ml_context" not in params:
-                logger.info(
-                    f"Function '{function_name}' doesn't accept 'ml_context' parameter. "
-                    "ML-specific features may not be available."
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
                 )
+                if not accepts_kwargs:
+                    logger.info(
+                        f"Function '{function_name}' doesn't accept 'ml_context' parameter nor **kwargs. "
+                        "ML-specific features may not be available."
+                    )
 
         except ValueError as e:
             logger.warning(

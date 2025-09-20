@@ -86,34 +86,30 @@ class CLIConfig:
     node: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    base_path: Optional[str] = None
+    base_path: Optional[Path] = None
     layer_name: Optional[str] = None
     use_case_name: Optional[str] = None
     config_type: Optional[str] = None
     interactive: bool = False
     list_configs: bool = False
-    # ADDED: flags referenced elsewhere
     list_pipelines: bool = False
     pipeline_info: Optional[str] = None
     clear_cache: bool = False
-    # logging and exec
     log_level: str = "INFO"
-    log_file: Optional[str] = None
+    log_file: Optional[Path] = None
     validate_only: bool = False
     dry_run: bool = False
     verbose: bool = False
     quiet: bool = False
-    # template
     template: Optional[str] = None
     project_name: Optional[str] = None
-    output_path: Optional[str] = None
+    output_path: Optional[Path] = None
     format: str = "yaml"
     no_sample_code: bool = False
     list_templates: bool = False
-    # streaming
     streaming: bool = False
     streaming_command: Optional[str] = None
-    streaming_config: Optional[str] = None
+    streaming_config: Optional[Path] = None
     streaming_pipeline: Optional[str] = None
     execution_id: Optional[str] = None
     streaming_mode: str = "async"
@@ -134,9 +130,18 @@ class ConfigLoaderProtocol(Protocol):
 
 
 class SecurityValidator:
-    """Validates file paths and prevents directory traversal attacks."""
+    """Validates file paths and prevents directory traversal attacks.
 
-    # ADDED: define sensitive directories (best-effort; platform-aware)
+    Behavior is strict by default. To enable permissive behavior (less strict checks,
+    and allow absolute config directories outside current working directory), set
+    environment variable TAURO_PERMISSIVE_PATH_VALIDATION=1
+
+    In permissive mode we skip:
+      - rejecting hidden path parts ('.*')
+      - ownership check (st_uid != os.getuid())
+    but still block sensitive system directories and obvious traversal attempts.
+    """
+
     SENSITIVE_DIRS: Tuple[Path, ...] = tuple(
         p
         for p in [
@@ -151,16 +156,38 @@ class SecurityValidator:
     )
 
     @staticmethod
+    def _is_permissive() -> bool:
+        val = os.getenv("TAURO_PERMISSIVE_PATH_VALIDATION", "0")
+        return val in ("1", "true", "True", "yes", "YES")
+
+    @staticmethod
     def validate_path(base_path: Path, target_path: Path) -> Path:
-        """Ensure target path is within base path boundaries and safe."""
+        """Ensure target path is within base path boundaries and safe.
+
+        In strict mode (default) it enforces that target_path is inside base_path.
+        In permissive mode (TAURO_PERMISSIVE_PATH_VALIDATION=1) absolute target paths
+        outside base_path are allowed after basic checks.
+        """
+        permissive = SecurityValidator._is_permissive()
         try:
             resolved_base = base_path.resolve()
             resolved_target = target_path.resolve()
 
+            # If permissive and target is absolute and not relative to base, allow after checks
+            if permissive and resolved_target.is_absolute():
+                SecurityValidator._check_sensitive_dirs(resolved_target)
+                SecurityValidator._check_file_permissions(
+                    resolved_target, permissive=permissive
+                )
+                return resolved_target
+
+            # Strict behavior: ensure target is inside base
             SecurityValidator._check_relative_to_base(resolved_base, resolved_target)
             SecurityValidator._check_relative_parts(resolved_base, resolved_target)
             SecurityValidator._check_sensitive_dirs(resolved_target)
-            SecurityValidator._check_file_permissions(resolved_target)
+            SecurityValidator._check_file_permissions(
+                resolved_target, permissive=permissive
+            )
 
             return resolved_target
         except Exception as e:
@@ -182,6 +209,7 @@ class SecurityValidator:
         relative = resolved_target.relative_to(resolved_base)
         if ".." in relative.parts:
             raise SecurityError(f"Path contains '..': {resolved_target}")
+        # Hidden files check can be disabled in permissive mode by caller (we check permissive in validate_path)
         if any(part.startswith(".") for part in relative.parts):
             raise SecurityError(
                 f"Hidden file/directory access denied: {resolved_target}"
@@ -192,6 +220,7 @@ class SecurityValidator:
         """Check if target is inside sensitive directories."""
         for sensitive_dir in SecurityValidator.SENSITIVE_DIRS:
             try:
+                # is_relative_to available in py>=3.9
                 if resolved_target.is_relative_to(sensitive_dir):
                     raise SecurityError(
                         f"Access to sensitive directory '{sensitive_dir}' denied"
@@ -206,25 +235,34 @@ class SecurityValidator:
                     pass
 
     @staticmethod
-    def _check_file_permissions(resolved_target: Path) -> None:
-        """Check file permissions and ownership."""
+    def _check_file_permissions(
+        resolved_target: Path, permissive: bool = False
+    ) -> None:
+        """Check file permissions and ownership.
+
+        In permissive mode ownership and some permission checks are skipped.
+        """
         if not resolved_target.exists():
             return
         try:
             stat_info = os.stat(resolved_target)
             if os.name == "posix":
-                SecurityValidator._check_posix_permissions(resolved_target, stat_info)
+                SecurityValidator._check_posix_permissions(
+                    resolved_target, stat_info, permissive
+                )
         except OSError:
             pass
 
     @staticmethod
     def _check_posix_permissions(
-        resolved_target: Path, stat_info: os.stat_result
+        resolved_target: Path, stat_info: os.stat_result, permissive: bool = False
     ) -> None:
         """Check POSIX-specific file permissions and ownership."""
         if hasattr(stat, "S_IWOTH") and (stat_info.st_mode & stat.S_IWOTH):
+            # world-writable is suspicious even in permissive mode -> raise
             raise SecurityError(f"World-writable file detected: {resolved_target}")
-        if hasattr(os, "getuid") and stat_info.st_uid != os.getuid():
+        if not permissive and hasattr(os, "getuid") and stat_info.st_uid != os.getuid():
+            # Ownership mismatch is strict-only check
             raise SecurityError(f"File not owned by current user: {resolved_target}")
 
 

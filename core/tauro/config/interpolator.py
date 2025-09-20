@@ -45,12 +45,23 @@ class VariableInterpolator:
     def interpolate_config_paths(
         config: Dict[str, Any], variables: Dict[str, Any]
     ) -> None:
-        """Interpolate variables in configuration file paths in-place."""
-        for config_item in config.values():
-            if isinstance(config_item, dict) and "filepath" in config_item:
-                config_item["filepath"] = VariableInterpolator.interpolate(
-                    config_item["filepath"], variables
-                )
+        """Recursively interpolate variables in configuration file paths in-place."""
+
+        def _rec(node: Any):
+            if isinstance(node, dict):
+                # If dict has a filepath key, interpolate it
+                fp = node.get("filepath")
+                if isinstance(fp, str):
+                    node["filepath"] = VariableInterpolator.interpolate(fp, variables)
+                # Recurse over dict values
+                for v in node.values():
+                    _rec(v)
+            elif isinstance(node, list):
+                for item in node:
+                    _rec(item)
+            # primitives: nothing to do
+
+        _rec(config)
 
     @staticmethod
     def interpolate_structure(
@@ -78,7 +89,7 @@ class VariableInterpolator:
                     )
                     for k, v in value.items()
                 }
-            for k, v in value.items():
+            for k, v in list(value.items()):
                 value[k] = VariableInterpolator.interpolate_structure(
                     v, variables, copy=False
                 )

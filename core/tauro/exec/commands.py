@@ -164,10 +164,15 @@ class MLNodeCommand(NodeCommand):
             import inspect
 
             sig = inspect.signature(self.function)
+            params = sig.parameters
+            accepts_ml_context = "ml_context" in params
+            accepts_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
 
-            if "ml_context" in sig.parameters:
+            if accepts_ml_context or accepts_kwargs:
                 logger.debug(
-                    "Function supports ML context - passing enhanced parameters"
+                    "Function supports ML context (explicit or **kwargs) - passing enhanced parameters"
                 )
                 return self.function(
                     *self.input_dfs,
@@ -176,7 +181,9 @@ class MLNodeCommand(NodeCommand):
                     ml_context=ml_context,
                 )
             else:
-                logger.debug("Function uses standard parameters")
+                logger.debug(
+                    "Function does not accept ml_context - calling standard signature"
+                )
                 return self.function(
                     *self.input_dfs,
                     start_date=self.start_date,
@@ -185,7 +192,7 @@ class MLNodeCommand(NodeCommand):
 
         except Exception as e:
             logger.warning(
-                f"Error analyzing function signature: {e}, falling back to standard execution"
+                f"Error analyzing function signature, falling back to standard execution: {e}"
             )
             return self.function(
                 *self.input_dfs,
@@ -209,6 +216,12 @@ class MLNodeCommand(NodeCommand):
             return
 
         try:
+            if not hasattr(self.spark, "conf"):
+                logger.debug(
+                    "Spark session has no conf attribute; skipping spark param config"
+                )
+                return
+
             for param_name, param_value in self.merged_hyperparams.items():
                 key = f"tauro.ml.{param_name}"
                 try:
@@ -235,10 +248,7 @@ class MLNodeCommand(NodeCommand):
 
 
 class ExperimentCommand(Command):
-    """Optional: Hyperparameter optimization or experimentation command.
-
-    Uses scikit-optimize (skopt) if available. Import is lazy to avoid hard dependency.
-    """
+    """Hyperparameter optimization or experimentation command."""
 
     def __init__(self, objective_func, space, n_calls: int = 20, random_state=None):
         self.objective_func = objective_func

@@ -2,6 +2,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Union
+from pathlib import Path
 
 import click  # type: ignore
 from loguru import logger  # type: ignore
@@ -10,9 +11,14 @@ from tauro.cli.core import ExitCode, ValidationError
 from tauro.config.contexts import Context, ContextFactory
 
 
-def _load_context_from_dsl(config_path: str) -> Context:
-    """Load the base context from a DSL/Python module and build a full Context."""
-    base_ctx = Context.from_dsl(config_path)
+def _load_context_from_dsl(config_path: Optional[Union[str, Path]]) -> Context:
+    """Load the base context from a DSL/Python module and build a full Context.
+    Accepts str or Path or None (None will raise further down)."""
+    if config_path is None:
+        raise ValidationError("Configuration path must be provided")
+    # Normalize to str
+    config_path_str = str(config_path)
+    base_ctx = Context.from_dsl(config_path_str)
     return ContextFactory.create_context(base_ctx)
 
 
@@ -62,6 +68,7 @@ def _run_impl(
             execution_mode=mode,
         )
 
+        # The executor may return an execution id or truthy value
         if result:
             click.echo(f"Streaming pipeline started with execution_id: {result}")
             if mode == "sync":
@@ -71,7 +78,8 @@ def _run_impl(
                     "Pipeline running in background. Use 'tauro streaming status' to monitor."
                 )
         else:
-            click.echo("Batch pipeline completed successfully.")
+            # If executor signals completion without id, print neutral message
+            click.echo("Pipeline execution completed successfully.")
 
         return ExitCode.SUCCESS.value
 
@@ -84,6 +92,19 @@ def _run_impl(
         click.echo(f"Error running pipeline: {e}", err=True)
         logger.exception("Pipeline execution failed")
         return ExitCode.EXECUTION_ERROR.value
+
+
+# Public programmatic wrapper to be used by argparse-based CLI
+def run_cli_impl(
+    config: Optional[Union[str, Path]],
+    pipeline: str,
+    mode: str = "async",
+    model_version: Optional[str] = None,
+    hyperparams: Optional[str] = None,
+) -> int:
+    """Programmatic wrapper that normalizes types and calls _run_impl."""
+    config_str = str(config) if config is not None else ""
+    return _run_impl(config_str, pipeline, mode, model_version, hyperparams)
 
 
 @streaming.command()
@@ -105,7 +126,7 @@ def run(
     model_version: Optional[str],
     hyperparams: Optional[str],
 ):
-    """Run a streaming pipeline."""
+    """Run a streaming pipeline (click entry point)."""
     code = _run_impl(config, pipeline, mode, model_version, hyperparams)
     if _in_click_context():
         sys.exit(code)
@@ -150,6 +171,16 @@ def _status_impl(config: str, execution_id: Optional[str], format: str) -> int:
         return ExitCode.GENERAL_ERROR.value
 
 
+# Public wrapper for status (programmatic usage)
+def status_cli_impl(
+    config: Optional[Union[str, Path]],
+    execution_id: Optional[str] = None,
+    format: str = "table",
+) -> int:
+    config_str = str(config) if config is not None else ""
+    return _status_impl(config_str, execution_id, format)
+
+
 @streaming.command()
 @click.option("--config", "-c", required=True, help="Path to configuration file")
 @click.option("--execution-id", "-e", help="Specific execution ID to check")
@@ -161,7 +192,7 @@ def _status_impl(config: str, execution_id: Optional[str], format: str) -> int:
     help="Output format",
 )
 def status(config: str, execution_id: Optional[str], format: str):
-    """Check status of streaming pipelines."""
+    """Check status of streaming pipelines (click entry point)."""
     code = _status_impl(config, execution_id, format)
     if _in_click_context():
         sys.exit(code)
@@ -193,12 +224,22 @@ def _stop_impl(config: str, execution_id: str, timeout: int) -> int:
         return ExitCode.EXECUTION_ERROR.value
 
 
+# Public wrapper for stop (programmatic usage)
+def stop_cli_impl(
+    config: Optional[Union[str, Path]],
+    execution_id: str,
+    timeout: int = 60,
+) -> int:
+    config_str = str(config) if config is not None else ""
+    return _stop_impl(config_str, execution_id, timeout)
+
+
 @streaming.command()
 @click.option("--config", "-c", required=True, help="Path to configuration file")
 @click.option("--execution-id", "-e", required=True, help="Execution ID to stop")
 @click.option("--timeout", "-t", default=60, help="Timeout in seconds")
 def stop(config: str, execution_id: str, timeout: int):
-    """Stop a streaming pipeline gracefully."""
+    """Stop a streaming pipeline gracefully (click entry point)."""
     code = _stop_impl(config, execution_id, timeout)
     if _in_click_context():
         sys.exit(code)

@@ -24,12 +24,22 @@ class ContextInitializer:
             app_config = AppConfigManager(config_file_path)
             config_paths = app_config.get_env_config(env)
 
-            return self._init_separate_files(config_paths)
+            return self._init_separate_files(config_paths, env)
 
         except Exception as e:
             raise ConfigurationError(f"Context initialization failed: {e}")
 
-    def _init_separate_files(self, config_paths: Dict[str, str]) -> Context:
+    def _load_config_file(self, path_str: str) -> Dict[str, Any]:
+        """Load a configuration file using the selected loader; path_str may be str or Path."""
+        try:
+            p = Path(path_str)
+            if not p.exists():
+                raise ConfigurationError(f"Config file not found: {p}")
+            return self.config_loader.load_config(str(p))
+        except Exception as e:
+            raise ConfigurationError(f"Failed to load config '{path_str}': {e}")
+
+    def _init_separate_files(self, config_paths: Dict[str, str], env: str) -> Context:
         """Initialize from separate configuration files."""
         required = [
             "global_settings_path",
@@ -45,13 +55,39 @@ class ContextInitializer:
 
         logger.info("Loading configuration files (separate files mode)")
 
-        return Context(
-            global_settings=config_paths["global_settings_path"],
-            pipelines_config=config_paths["pipelines_config_path"],
-            nodes_config=config_paths["nodes_config_path"],
-            input_config=config_paths["input_config_path"],
-            output_config=config_paths["output_config_path"],
+        global_settings = self._load_config_file(config_paths["global_settings_path"])
+        pipelines_config = self._load_config_file(config_paths["pipelines_config_path"])
+        nodes_config = self._load_config_file(config_paths["nodes_config_path"])
+        input_config = self._load_config_file(config_paths["input_config_path"])
+        output_config = self._load_config_file(config_paths["output_config_path"])
+
+        ctx = Context(
+            global_settings=global_settings,
+            pipelines_config=pipelines_config,
+            nodes_config=nodes_config,
+            input_config=input_config,
+            output_config=output_config,
         )
+
+        try:
+            setattr(ctx, "env", env)
+        except Exception:
+            if isinstance(global_settings, dict):
+                global_settings.setdefault("environment", env)
+                try:
+                    setattr(ctx, "global_settings", global_settings)
+                except Exception:
+                    pass
+
+        if isinstance(ctx.global_settings, dict):
+            ctx.global_settings.setdefault("environment", env)
+
+        try:
+            setattr(ctx, "config_paths", config_paths)
+        except Exception:
+            pass
+
+        return ctx
 
 
 class PipelineExecutor:
