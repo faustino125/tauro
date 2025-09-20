@@ -1,13 +1,10 @@
 [tool.poetry]
 name = "tauro"
-version = "0.1.0"
+version = "0.1.1"
 description = "Enhanced Tauro - Data Pipeline Execution System with Auto-Discovery"
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 readme = "README.md"
 license = "MIT"
-homepage = "https://github.com/tu-usuario/enhanced-tauro"
-repository = "https://github.com/tu-usuario/enhanced-tauro"
-documentation = "https://github.com/tu-usuario/enhanced-tauro"
 keywords = ["data", "pipeline", "etl", "automation", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
