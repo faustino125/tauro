@@ -27,6 +27,7 @@ from tauro.io.constants import (
     MIN_VACUUM_RETENTION_HOURS,
     SupportedFormats,
     WriteMode,
+    CLOUD_URI_PREFIXES,
 )
 from tauro.io.exceptions import ConfigurationError, WriteOperationError
 from tauro.io.factories import WriterFactory
@@ -138,7 +139,7 @@ class PathResolver(BaseIO):
         sub_folder = components["sub_folder"]
         table_name = components["table_name"]
 
-        if base_path.startswith(("s3://", "abfss://", "gs://", "dbfs:/")):
+        if base_path.startswith(CLOUD_URI_PREFIXES):
             return f"{base_path.rstrip('/')}/{schema}/{sub_folder}/{table_name}"
         return Path(base_path) / schema / sub_folder / table_name
 
@@ -158,15 +159,19 @@ class DataWriter(BaseIO):
             raise ConfigurationError("Output path cannot be empty")
 
         self._validate_write_config(config)
-        path_obj = Path(path)
-        self._prepare_local_directory(str(path_obj))
+        path_str = str(path)
+        is_remote = any(path_str.startswith(pfx) for pfx in CLOUD_URI_PREFIXES)
+
+        # Only prepare local directories for local filesystem paths
+        if not is_remote:
+            self._prepare_local_directory(path_str)
 
         try:
             format_name = config["format"].lower()
             writer = self.writer_factory.get_writer(format_name)
-            writer.write(df, str(path_obj), config)
+            writer.write(df, path_str, config)
         except Exception as e:
-            logger.error(f"Error saving to {path_obj}: {str(e)}")
+            logger.error(f"Error saving to {path_str}: {str(e)}")
             raise WriteOperationError(f"Failed to write data: {e}") from e
 
     def _validate_write_config(self, config: Dict[str, Any]) -> None:
@@ -348,10 +353,11 @@ class UnityCatalogOperations(BaseIO):
         try:
             spark = self._ctx_spark()
             q_full = self._quote_full_name(full_table_name)
+            q_col = self._quote_identifier(partition_col)
             spark.sql(
                 f"""
                 OPTIMIZE {q_full}
-                WHERE {partition_col} BETWEEN '{self._escape_sql_string(start_date)}' AND '{self._escape_sql_string(end_date)}'
+                WHERE {q_col} BETWEEN '{self._escape_sql_string(start_date)}' AND '{self._escape_sql_string(end_date)}'
             """
             )
             logger.info(f"Table {full_table_name} optimized successfully")
@@ -477,7 +483,7 @@ class UnityCatalogManager(BaseIO):
             "format": "delta",
             "write_mode": config.get("write_mode", WriteMode.OVERWRITE.value),
             "overwrite_schema": config.get("overwrite_schema", True),
-            "partition": config.get("partition_col"),
+            "partition_col": config.get("partition_col"),
             "options": config.get("options", {}),
         }
 

@@ -285,28 +285,29 @@ class XMLReader(SparkReaderBase):
             raise ReadOperationError(f"Failed to read XML from {source}: {e}") from e
 
 
-class QueryReader(SparkReaderBase):
-    """Reader for SQL queries."""
+class QueryReader(BaseIO):
+    """Reader para ejecutar consultas SQL en Spark."""
 
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         """Execute SQL query and return results."""
         try:
-            query = config.get("query")
-            if not query or not query.strip():
+            query = (config or {}).get("query")
+            if not query or not str(query).strip():
                 raise ConfigurationError(
                     "Query format specified without SQL query or query is empty"
                 ) from None
 
-            sanitized = SQLSanitizer.sanitize_query(query)
+            if not self._spark_available():
+                raise ReadOperationError(
+                    "Spark session is required to execute queries"
+                ) from None
+
+            sanitized = self.sanitize_sql_query(str(query))
 
             spark = self._ctx_spark()
-            if spark is None:
-                raise ReadOperationError(
-                    "Spark session is not available in context; cannot execute SQL query"
-                ) from None
-            logger.info(f"Executing SQL query: {sanitized[:100]}...")
             return spark.sql(sanitized)
-        except (ReadOperationError, ConfigurationError):
-            raise
+
+        except ConfigurationError as e:
+            raise ReadOperationError(str(e)) from e
         except Exception as e:
             raise ReadOperationError(f"Failed to execute query: {e}") from e

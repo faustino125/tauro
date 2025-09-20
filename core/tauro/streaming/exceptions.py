@@ -1,5 +1,6 @@
 import traceback
 from typing import Any, Dict, Optional
+from functools import wraps
 
 
 class StreamingError(Exception):
@@ -48,18 +49,30 @@ class StreamingError(Exception):
 
     def get_full_traceback(self) -> str:
         """Get full traceback including cause chain."""
-        tb_lines = [f"StreamingError: {self.message}"]
+        lines = [f"{type(self).__name__}: {self.message}"]
+
+        if self.error_code:
+            lines.insert(0, f"[{self.error_code}]")
 
         if self.context:
-            tb_lines.append(f"Context: {self.context}")
+            lines.append(f"Context: {self.context}")
 
-        tb_lines.append(traceback.format_exc())
-
+        # Append cause traceback if available
         if self.cause:
-            tb_lines.append("--- Caused by ---")
-            tb_lines.append(str(self.cause))
+            lines.append("--- Cause traceback ---")
+            if isinstance(self.cause, Exception):
+                # Format the cause exception and its traceback if present
+                lines.extend(
+                    traceback.format_exception(
+                        type(self.cause),
+                        self.cause,
+                        getattr(self.cause, "__traceback__", None),
+                    )
+                )
+            else:
+                lines.append(str(self.cause))
 
-        return "\n".join(tb_lines)
+        return "\n".join(lines)
 
 
 class StreamingValidationError(StreamingError):
@@ -73,7 +86,8 @@ class StreamingValidationError(StreamingError):
         actual: Optional[str] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        # Pop context from kwargs to avoid passing it twice to super
+        context = kwargs.pop("context", {})
 
         if field:
             context["field"] = field
@@ -97,7 +111,7 @@ class StreamingFormatNotSupportedError(StreamingError):
         supported_formats: Optional[list] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if format_name:
             context["format_name"] = format_name
@@ -120,7 +134,7 @@ class StreamingQueryError(StreamingError):
         query_status: Optional[str] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if query_id:
             context["query_id"] = query_id
@@ -144,7 +158,7 @@ class StreamingPipelineError(StreamingError):
         failed_nodes: Optional[list] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if pipeline_name:
             context["pipeline_name"] = pipeline_name
@@ -170,7 +184,7 @@ class StreamingConnectionError(StreamingError):
         endpoint: Optional[str] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if connection_type:
             context["connection_type"] = connection_type
@@ -192,7 +206,7 @@ class StreamingConfigurationError(StreamingError):
         config_value: Optional[Any] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if config_section:
             context["config_section"] = config_section
@@ -212,7 +226,7 @@ class StreamingTimeoutError(StreamingError):
         operation: Optional[str] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if timeout_seconds:
             context["timeout_seconds"] = timeout_seconds
@@ -232,7 +246,7 @@ class StreamingResourceError(StreamingError):
         resource_path: Optional[str] = None,
         **kwargs,
     ):
-        context = kwargs.get("context", {})
+        context = kwargs.pop("context", {})
 
         if resource_type:
             context["resource_type"] = resource_type
@@ -248,6 +262,7 @@ class StreamingResourceError(StreamingError):
 def handle_streaming_error(func):
     """Decorator to handle streaming errors with enhanced context."""
 
+    @wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
@@ -257,16 +272,16 @@ def handle_streaming_error(func):
         except Exception as e:
             # Convert other exceptions to StreamingError
             context = {
-                "function": func.__name__,
+                "function": getattr(func, "__name__", str(func)),
                 "args_count": len(args),
                 "kwargs_keys": list(kwargs.keys()),
             }
             raise StreamingError(
-                f"Unexpected error in {func.__name__}: {str(e)}",
+                f"Unexpected error in {getattr(func, '__name__', str(func))}: {str(e)}",
                 error_code="UNEXPECTED_ERROR",
                 context=context,
                 cause=e,
-            )
+            ) from e
 
     return wrapper
 

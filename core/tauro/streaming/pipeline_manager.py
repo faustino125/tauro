@@ -90,7 +90,9 @@ class StreamingPipelineManager:
                 pipeline_config,
             )
 
-            self._pipeline_threads[execution_id] = future
+            # Protect modification of _pipeline_threads with lock
+            with self._lock:
+                self._pipeline_threads[execution_id] = future
 
             return execution_id
 
@@ -112,7 +114,7 @@ class StreamingPipelineManager:
                     execution_id=execution_id,
                     context=context,
                     cause=e,
-                )
+                ) from e
 
     def _validate_pipeline_start(self, execution_id: str, pipeline_name: str) -> None:
         """Validate pipeline can be started."""
@@ -163,9 +165,11 @@ class StreamingPipelineManager:
             )
 
             # Handle pipeline thread
-            if not graceful and execution_id in self._pipeline_threads:
-                future = self._pipeline_threads[execution_id]
-                future.cancel()
+            if not graceful:
+                with self._lock:
+                    future = self._pipeline_threads.get(execution_id)
+                if future:
+                    future.cancel()
 
             self._update_pipeline_stop_status(
                 execution_id, stopped_queries, failed_queries
@@ -191,7 +195,7 @@ class StreamingPipelineManager:
                 f"Failed to stop pipeline '{execution_id}': {str(e)}",
                 execution_id=execution_id,
                 cause=e,
-            )
+            ) from e
 
     def _stop_pipeline_queries(
         self,
@@ -461,34 +465,38 @@ class StreamingPipelineManager:
             logger.info("Waiting for pipeline threads to complete...")
             completed_threads = 0
 
-            for execution_id, future in self._pipeline_threads.items():
+            # Take a snapshot of futures safely
+            with self._lock:
+                futures = list(self._pipeline_threads.items())
+
+            num_futures = len(futures)
+            per_future_timeout = max(1.0, float(timeout_seconds) / max(1, num_futures))
+
+            for execution_id, future in futures:
                 try:
-                    future.result(
-                        timeout=(
-                            timeout_seconds // len(self._pipeline_threads)
-                            if self._pipeline_threads
-                            else timeout_seconds
-                        )
-                    )
+                    future.result(timeout=per_future_timeout)
                     completed_threads += 1
                 except FutureTimeoutError:
                     logger.warning(
                         f"Pipeline thread '{execution_id}' did not complete within timeout"
                     )
-                    future.cancel()
+                    try:
+                        future.cancel()
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.warning(
                         f"Error waiting for pipeline '{execution_id}' to finish: {e}"
                     )
 
             logger.info(
-                f"Completed {completed_threads}/{len(self._pipeline_threads)} pipeline threads"
+                f"Completed {completed_threads}/{len(futures)} pipeline threads"
             )
 
             # Shutdown executor: ThreadPoolExecutor.shutdown does not accept a timeout kwarg
             logger.info("Shutting down thread pool executor...")
             try:
-                # First, prevent new tasks and wait a short while for running tasks
+                # First, prevent new tasks and attempt a non-blocking shutdown
                 self._executor.shutdown(wait=False)
             except Exception:
                 try:
@@ -510,7 +518,7 @@ class StreamingPipelineManager:
                 f"Failed to shutdown StreamingPipelineManager: {str(e)}",
                 error_code="SHUTDOWN_ERROR",
                 cause=e,
-            )
+            ) from e
 
     def _generate_execution_id(self, pipeline_name: str) -> str:
         """Generate unique execution ID."""

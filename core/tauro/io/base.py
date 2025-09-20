@@ -7,6 +7,7 @@ from tauro.io.validators import ConfigValidator
 from tauro.io.exceptions import ConfigurationError
 from tauro.io.context_manager import ContextManager
 from tauro.io.sql import SQLSanitizer
+from tauro.io.constants import CLOUD_URI_PREFIXES
 
 
 class BaseIO:
@@ -65,22 +66,34 @@ class BaseIO:
             ) from e
 
     def _prepare_local_directory(self, path: str) -> None:
-        """Create local directories if necessary."""
-        if self._is_local():
-            if "://" in path or path.startswith("dbfs:/"):
+        """Create local directories if necessary.
+
+        This skips remote/cloud URIs and will attempt to create the directory
+        structure for local filesystem paths, regardless of execution_mode.
+        """
+        try:
+            if "://" in path or any(
+                str(path).startswith(pfx) for pfx in CLOUD_URI_PREFIXES
+            ):
                 logger.debug(
                     f"Skipping local directory creation for non-local path: {path}"
                 )
                 return
-            try:
-                dir_path = Path(path).parent
-                if dir_path and not dir_path.exists():
-                    logger.debug(f"Creating directory: {dir_path}")
-                    dir_path.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"Directory created: {dir_path}")
-            except OSError as e:
-                logger.exception(f"Error creating local directory: {dir_path}")
-                raise IOError(f"Failed to create directory {dir_path}") from e
+
+            p = Path(path)
+            # If it looks like a directory (no suffix or endswith slash), create it.
+            # Otherwise create the parent directory of the file path.
+            dir_path = (
+                p if (p.suffix == "" or str(path).endswith(("/", "\\"))) else p.parent
+            )
+
+            if dir_path and not dir_path.exists():
+                logger.debug(f"Creating directory: {dir_path}")
+                dir_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Directory created: {dir_path}")
+        except OSError as e:
+            logger.exception(f"Error creating local directory for path: {path}")
+            raise IOError(f"Failed to create directory for path {path}") from e
 
     def _spark_available(self) -> bool:
         """Check if Spark context is available."""

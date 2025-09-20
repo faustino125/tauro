@@ -6,6 +6,7 @@ from loguru import logger  # type: ignore
 from tauro.io.base import BaseIO
 from tauro.io.exceptions import ConfigurationError, ReadOperationError
 from tauro.io.factories import ReaderFactory
+from tauro.io.constants import CLOUD_URI_PREFIXES
 
 
 class InputLoadingStrategy(BaseIO):
@@ -113,8 +114,7 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
                     f"Missing filepath for dataset '{input_key}'"
                 ) from None
 
-            cloud_schemes = ("s3://", "abfss://", "gs://", "dbfs:/")
-            if any(str(path).startswith(pfx) for pfx in cloud_schemes):
+            if any(str(path).startswith(pfx) for pfx in CLOUD_URI_PREFIXES):
                 return str(path)
 
             if self._is_local():

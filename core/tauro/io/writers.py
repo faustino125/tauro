@@ -168,22 +168,59 @@ class DeltaWriter(SparkWriterMixin):
     def __init__(self, context: Any):
         self.context = context
 
-    def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write Delta data to destination."""
-        if not destination:
-            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+    def _validate_replacewhere_params(self, config: dict) -> None:
+        """Ensure replaceWhere has partition_col, start_date, end_date."""
+        if (
+            not config.get("partition_col")
+            or not config.get("start_date")
+            or not config.get("end_date")
+        ):
+            raise ConfigurationError(
+                "overwrite_strategy=replaceWhere requires partition_col, start_date and end_date"
+            )
 
+    def _apply_overwrite_and_replacewhere(self, writer, config: dict):
+        """Apply write mode, overwriteSchema and (optionally) replaceWhere strategy."""
         try:
-            writer = self._configure_spark_writer(data, config)
-            logger.info(f"Writing Delta data to: {destination}")
-            writer.save(destination)
-            logger.success(f"Delta data written successfully to: {destination}")
-        except WriteOperationError:
-            raise  # Re-raise WriteOperationError as-is
+            mode = str(config.get("write_mode", "overwrite")).lower()
+            writer = writer.mode(mode)
+
+            if config.get("overwrite_schema", True):
+                writer = writer.option("overwriteSchema", "true")
+                logger.debug("Applied overwriteSchema=true")
+
+            if str(config.get("overwrite_strategy", "")).lower() == "replacewhere":
+                self._validate_replacewhere_params(config)
+                partition_col = config["partition_col"]
+                start_date = config["start_date"]
+                end_date = config["end_date"]
+                replace_expr = (
+                    f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
+                )
+                writer = writer.option("replaceWhere", replace_expr)
+                logger.debug(f"Applied replaceWhere with expression: {replace_expr}")
+
+            return writer
+        except ConfigurationError:
+            raise
         except Exception as e:
-            raise WriteOperationError(
-                f"Failed to write Delta to {destination}: {e}"
-            ) from e
+            raise ConfigurationError(f"Failed to apply overwrite options: {e}") from e
+
+    def write(self, df, destination: str, config: dict) -> None:
+        """Escritura Delta; ejemplo simplificado enfocándose en manejo de errores."""
+        try:
+            writer = df.write.format("delta")
+            writer = self._apply_overwrite_and_replacewhere(writer, config)
+
+            options = config.get("options", {}) or {}
+            for k, v in options.items():
+                writer = writer.option(k, v)
+
+            writer.save(destination)
+        except ConfigurationError as e:
+            raise WriteOperationError(f"Failed to configure Spark writer: {e}") from e
+        except Exception as e:
+            raise WriteOperationError(f"Delta write failed: {e}") from e
 
 
 class ParquetWriter(SparkWriterMixin):

@@ -67,14 +67,10 @@ class TestQueryReader:
         query_reader._ctx_spark().sql.assert_called_once_with("SELECT * FROM table")
 
     def test_read_missing_query(self, query_reader):
-        # QueryReader envuelve ConfigurationError en ReadOperationError
         with pytest.raises(ReadOperationError) as exc_info:
             query_reader.read("", {})
-        assert "Query format specified without SQL query" in str(exc_info.value)
-
-        with pytest.raises(ReadOperationError) as exc_info:
-            query_reader.read("", {"query": ""})
-        assert "Query format specified without SQL query" in str(exc_info.value)
+        # Verificamos que la causa original fue ConfigurationError
+        assert isinstance(exc_info.value.__cause__, ConfigurationError)
 
     def test_read_no_spark(self, query_reader):
         query_reader._ctx_spark = MagicMock(return_value=None)

@@ -1,10 +1,11 @@
 import pytest
 from unittest.mock import MagicMock
+from typing import Dict, Generator, Any
 
 
 @pytest.fixture(scope="session")
-def spark_session():
-    """Fixture para crear una SparkSession de prueba"""
+def spark_session() -> Generator[Any, None, None]:
+    """Crea una SparkSession real para tests de integración que lo requieran."""
     try:
         from pyspark.sql import SparkSession
     except Exception:
@@ -24,17 +25,17 @@ def spark_session():
 
 
 @pytest.fixture
-def mock_spark_context():
-    """Fixture para mock de contexto Spark"""
+def mock_spark_context() -> Dict[str, Any]:
+    """Contexto mínimo con Spark mockeado y UC deshabilitado por defecto."""
     mock_spark = MagicMock()
-    # asegurar que conf.get existe y devuelva 'false' por defecto (Unity Catalog deshabilitado)
+    # Asegurar que conf.get existe y devuelve 'false' por defecto (Unity Catalog deshabilitado)
     mock_spark.conf.get.return_value = "false"
     return {"spark": mock_spark, "execution_mode": "local"}
 
 
 @pytest.fixture
-def mock_output_context():
-    """Fixture para mock de contexto de output"""
+def mock_output_context() -> Dict[str, Any]:
+    """Contexto de output mockeado con ruta local y configuración mínima."""
     mock_spark = MagicMock()
     mock_spark.conf.get.return_value = "false"
     return {
@@ -48,8 +49,8 @@ def mock_output_context():
 
 
 @pytest.fixture
-def mock_unity_catalog_context():
-    """Fixture para mock de contexto con Unity Catalog habilitado"""
+def mock_unity_catalog_context() -> Dict[str, Any]:
+    """Contexto con Unity Catalog habilitado en Spark (mock)."""
     mock_spark = MagicMock()
     mock_spark.conf.get.return_value = "true"  # Unity Catalog enabled
 

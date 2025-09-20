@@ -37,7 +37,7 @@ class StreamingValidator:
         try:
             self._ensure_pipeline_is_dict(pipeline_config)
 
-            pipeline_type = pipeline_config.get("type", PipelineType.BATCH.value)
+            pipeline_type = pipeline_config.get("type", PipelineType.STREAMING.value)
             self._ensure_valid_pipeline_type(pipeline_type)
 
             nodes = pipeline_config.get("nodes", [])
@@ -811,17 +811,17 @@ class StreamingValidator:
         pattern = r"^\d+\s+(second|seconds|minute|minutes|hour|hours|day|days|millisecond|milliseconds|microsecond|microseconds)$"
         return bool(re.match(pattern, interval.strip(), re.IGNORECASE))
 
-    def _parse_time_to_seconds(self, interval: str) -> int:
+    def _parse_time_to_seconds(self, interval: str) -> float:
         """Parse time interval to seconds with support for more units."""
         if not isinstance(interval, str):
-            return 0
+            return 0.0
 
         parts = interval.strip().split()
         if len(parts) != 2:
-            return 0
+            return 0.0
 
         try:
-            number = int(parts[0])
+            number = float(parts[0])
             unit = parts[1].lower()
 
             unit_multipliers = {
@@ -829,26 +829,26 @@ class StreamingValidator:
                 "milliseconds": 0.001,
                 "microsecond": 0.000001,
                 "microseconds": 0.000001,
-                "second": 1,
-                "seconds": 1,
-                "minute": 60,
-                "minutes": 60,
-                "hour": 3600,
-                "hours": 3600,
-                "day": 86400,
-                "days": 86400,
+                "second": 1.0,
+                "seconds": 1.0,
+                "minute": 60.0,
+                "minutes": 60.0,
+                "hour": 3600.0,
+                "hours": 3600.0,
+                "day": 86400.0,
+                "days": 86400.0,
             }
 
-            multiplier = unit_multipliers.get(unit, 0)
-            return int(number * multiplier)
+            multiplier = unit_multipliers.get(unit, 0.0)
+            return number * multiplier
 
         except (ValueError, TypeError):
-            return 0
+            return 0.0
 
-    def _parse_time_to_minutes(self, interval: str) -> int:
+    def _parse_time_to_minutes(self, interval: str) -> float:
         """Parse time interval to minutes."""
         seconds = self._parse_time_to_seconds(interval)
-        return seconds // 60
+        return seconds / 60.0
 
     @handle_streaming_error
     def validate_pipeline_compatibility(

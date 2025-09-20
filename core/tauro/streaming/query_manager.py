@@ -3,6 +3,7 @@ import time
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
+from copy import deepcopy
 
 from loguru import logger  # type: ignore
 from pyspark.sql import DataFrame  # type: ignore
@@ -302,7 +303,8 @@ class StreamingQueryManager:
                     config_section="output",
                 )
 
-            streaming_config = {**DEFAULT_STREAMING_CONFIG}
+            # Use a deepcopy of the defaults to avoid shared mutable state
+            streaming_config = deepcopy(DEFAULT_STREAMING_CONFIG)
             streaming_config.update(node_config.get("streaming", {}))
 
             node_name = node_config.get("name", "unknown")
@@ -511,9 +513,11 @@ class StreamingQueryManager:
                 config_section=config_section,
                 config_value=interval,
             )
-        min_interval = int(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
+        min_interval = float(
+            STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
+        )
         if (
-            getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(interval)
+            getattr(self.validator, "_parse_time_to_seconds", lambda x: 0.0)(interval)
             < min_interval
         ):
             raise StreamingConfigurationError(

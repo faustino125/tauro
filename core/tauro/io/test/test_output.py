@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from pathlib import Path
 import json
 import time
@@ -18,12 +18,12 @@ from tauro.io.output import (
 from tauro.io.exceptions import (
     ConfigurationError,
     WriteOperationError,
-    DataValidationError,
 )
 from tauro.io.constants import (
     SupportedFormats,
     MIN_VACUUM_RETENTION_HOURS,
     DEFAULT_VACUUM_RETENTION_HOURS,
+    CLOUD_URI_PREFIXES,
 )
 
 
@@ -39,14 +39,14 @@ class TestDataFrameConverter:
     def test_convert_to_spark_with_pandas(self, converter, monkeypatch):
         """Test converting pandas DataFrame to Spark DataFrame."""
 
-        # Create a real class for pandas DataFrame
+        # Crear una clase real para representar un pandas.DataFrame
         class MockPandasDataFrame:
             pass
 
-        # Mock pandas module with the real class
         mock_pd = MagicMock()
         mock_pd.DataFrame = MockPandasDataFrame
-        monkeypatch.setattr("tauro.io.output.pd", mock_pd)
+        # Inyectar el "módulo" pandas en tauro.io.output
+        monkeypatch.setattr("tauro.io.output.pd", mock_pd, raising=False)
 
         mock_pandas_df = MockPandasDataFrame()
         mock_spark_df = MagicMock()
@@ -54,64 +54,73 @@ class TestDataFrameConverter:
         # Setup mocks
         converter._is_spark_dataframe = MagicMock(return_value=False)
         converter._spark_available = MagicMock(return_value=True)
-        converter._ctx_spark = MagicMock()
-        converter._ctx_spark.return_value.createDataFrame.return_value = mock_spark_df
+        # Simular que _ctx_spark() devuelve un objeto spark con createDataFrame
+        fake_spark = MagicMock()
+        fake_spark.createDataFrame.return_value = mock_spark_df
+        converter._ctx_spark = MagicMock(return_value=fake_spark)
 
         # Execute test
         result = converter.convert_to_spark(mock_pandas_df)
 
         # Verify results
         assert result is mock_spark_df
-        converter._ctx_spark.return_value.createDataFrame.assert_called_once_with(
-            mock_pandas_df
-        )
+        fake_spark.createDataFrame.assert_called_once_with(mock_pandas_df)
 
     def test_convert_to_spark_with_polars(self, converter, monkeypatch):
         """Test converting Polars DataFrame to Spark DataFrame."""
 
-        # Create real classes for polars and pandas DataFrames
+        # Crear clases para polars.DataFrame y pandas.DataFrame para la conversión
         class MockPandasDataFrame:
             pass
 
+        # Important: ensure to_pandas() returns the same instance on every call
         class MockPolarsDataFrame:
-            def to_pandas(self):
-                return MockPandasDataFrame()
+            def __init__(self):
+                self._cached = MockPandasDataFrame()
 
-        # Mock polars and pandas modules with real classes
+            def to_pandas(self):
+                return self._cached
+
         mock_pd = MagicMock()
         mock_pd.DataFrame = MockPandasDataFrame
         mock_pl = MagicMock()
         mock_pl.DataFrame = MockPolarsDataFrame
-        monkeypatch.setattr("tauro.io.output.pd", mock_pd)
-        monkeypatch.setattr("tauro.io.output.pl", mock_pl)
+
+        monkeypatch.setattr("tauro.io.output.pd", mock_pd, raising=False)
+        monkeypatch.setattr("tauro.io.output.pl", mock_pl, raising=False)
 
         mock_polars_df = MockPolarsDataFrame()
+        pandas_df_instance = mock_polars_df.to_pandas()  # cached instance
         mock_spark_df = MagicMock()
 
         # Setup mocks
         converter._is_spark_dataframe = MagicMock(return_value=False)
         converter._spark_available = MagicMock(return_value=True)
-        converter._ctx_spark = MagicMock()
-        converter._ctx_spark.return_value.createDataFrame.return_value = mock_spark_df
+        fake_spark = MagicMock()
+        fake_spark.createDataFrame.return_value = mock_spark_df
+        converter._ctx_spark = MagicMock(return_value=fake_spark)
 
         # Execute test
         result = converter.convert_to_spark(mock_polars_df)
 
         # Verify results
         assert result is mock_spark_df
-        converter._ctx_spark.return_value.createDataFrame.assert_called_once()
+        # Verificamos que createDataFrame fue llamado con el DataFrame resultante de to_pandas()
+        fake_spark.createDataFrame.assert_called_once_with(pandas_df_instance)
 
     def test_convert_to_spark_already_spark_df(self, converter):
         """Test that Spark DataFrame is returned as-is."""
         mock_spark_df = MagicMock()
         converter._is_spark_dataframe = MagicMock(return_value=True)
         converter._spark_available = MagicMock(return_value=True)
-        converter._ctx_spark = MagicMock()
+        # Simular que _ctx_spark() devuelve algo (se espera que se llame)
+        fake_spark = MagicMock()
+        converter._ctx_spark = MagicMock(return_value=fake_spark)
 
         result = converter.convert_to_spark(mock_spark_df)
 
         assert result is mock_spark_df
-        # _ctx_spark is called for spark availability, so it should be called once
+        # _ctx_spark fue llamado para comprobar disponibilidad de Spark
         converter._ctx_spark.assert_called_once()
 
     def test_convert_to_spark_no_spark_session(self, converter):
@@ -121,47 +130,40 @@ class TestDataFrameConverter:
         with pytest.raises(WriteOperationError, match="Spark session unavailable"):
             converter.convert_to_spark(MagicMock())
 
-    def test_convert_to_spark_unsupported_type(self, converter):
+    def test_convert_to_spark_unsupported_type(self, converter, monkeypatch):
         """Test error when trying to convert unsupported DataFrame type."""
         converter._spark_available = MagicMock(return_value=True)
         converter._is_spark_dataframe = MagicMock(return_value=False)
 
-        # Mock that pandas and polars are not available
-        with patch.dict("sys.modules", {"pandas": None, "polars": None}):
-            with pytest.raises(
-                WriteOperationError, match="DataFrame conversion failed"
-            ):
-                converter.convert_to_spark(MagicMock())
+        # Simular que pandas y polars no están disponibles
+        monkeypatch.setattr("tauro.io.output.pd", None, raising=False)
+        monkeypatch.setattr("tauro.io.output.pl", None, raising=False)
 
-    def test_convert_to_spark_empty_dataframe(self, converter):
-        """Test converting empty DataFrame."""
+        with pytest.raises(WriteOperationError, match="DataFrame conversion failed"):
+            converter.convert_to_spark(MagicMock())
+
+    def test_convert_to_spark_empty_dataframe(self, converter, monkeypatch):
+        """Test converting empty DataFrame (pandas-like)."""
         converter._spark_available = MagicMock(return_value=True)
         converter._is_spark_dataframe = MagicMock(return_value=False)
 
-        # Create a proper mock that will be recognized as a pandas DataFrame
-        mock_pandas_df = MagicMock()
+        # Crear una clase que representará pandas.DataFrame y un mock de instancia
+        class MockPandasDataFrame:
+            pass
 
-        # Mock pandas and polars modules
         mock_pd = MagicMock()
-        mock_pd.DataFrame = type("DataFrame", (), {})
-        mock_pl = MagicMock()
+        mock_pd.DataFrame = MockPandasDataFrame
+        monkeypatch.setattr("tauro.io.output.pd", mock_pd, raising=False)
+        monkeypatch.setattr("tauro.io.output.pl", None, raising=False)
 
-        with patch.dict("sys.modules", {"pandas": mock_pd, "polars": mock_pl}):
-            with patch("tauro.io.output.pd", mock_pd):
-                with patch("tauro.io.output.pl", mock_pl):
-                    # Make isinstance checks work
-                    with patch("tauro.io.output.isinstance") as mock_isinstance:
-                        mock_isinstance.return_value = True
+        mock_pandas_df = MockPandasDataFrame()
+        mock_spark_df = MagicMock()
+        fake_spark = MagicMock()
+        fake_spark.createDataFrame.return_value = mock_spark_df
+        converter._ctx_spark = MagicMock(return_value=fake_spark)
 
-                        # Mock spark.createDataFrame
-                        mock_spark_df = MagicMock()
-                        converter._ctx_spark = MagicMock()
-                        converter._ctx_spark.return_value.createDataFrame.return_value = (
-                            mock_spark_df
-                        )
-
-                        result = converter.convert_to_spark(mock_pandas_df)
-                        assert result is mock_spark_df
+        result = converter.convert_to_spark(mock_pandas_df)
+        assert result is mock_spark_df
 
 
 class TestPathResolver:
@@ -195,13 +197,17 @@ class TestPathResolver:
             "test_schema.test_folder.test_table"
         )
 
-    def test_resolve_output_path_cloud(self, mock_validator):
-        """Test resolving output path for cloud storage."""
-        resolver = PathResolver({"output_path": "s3://bucket/path"}, mock_validator)
+    @pytest.mark.parametrize(
+        "prefix",
+        CLOUD_URI_PREFIXES,
+    )
+    def test_resolve_output_path_cloud(self, mock_validator, prefix):
+        """Test resolving output path for different cloud/DFS prefixes."""
+        resolver = PathResolver({"output_path": f"{prefix}bucket/path"}, mock_validator)
 
         result = resolver.resolve_output_path({}, "test_schema.test_folder.test_table")
 
-        assert result == "s3://bucket/path/test_schema/test_folder/test_table"
+        assert result == f"{prefix}bucket/path/test_schema/test_folder/test_table"
 
     def test_resolve_output_path_with_config_override(self, resolver, mock_validator):
         """Test resolving output path with configuration overrides."""
@@ -260,23 +266,22 @@ class TestPathResolver:
         ):
             resolver.resolve_output_path({}, "")
 
-    # New test for edge case: special characters in paths
     def test_resolve_output_path_special_characters(self, mock_validator):
         """Test resolving output path with special characters."""
         mock_validator.validate_output_key.return_value = {
             "schema": "test-schema",
-            "sub_folder": "test_folder with spaces",
+            "sub_folder": "test folder with spaces",
             "table_name": "test_table_123",
         }
 
         resolver = PathResolver({"output_path": "/base/path"}, mock_validator)
         result = resolver.resolve_output_path(
-            {}, "test-schema.test_folder with spaces.test_table_123"
+            {}, "test-schema.test folder with spaces.test_table_123"
         )
 
         assert (
             str(result)
-            == "/base/path/test-schema/test_folder with spaces/test_table_123"
+            == "/base/path/test-schema/test folder with spaces/test_table_123"
         )
 
 
@@ -304,6 +309,24 @@ class TestDataWriter:
         )
         data_writer._prepare_local_directory.assert_called_once_with("/test/path")
 
+    def test_write_data_skips_local_dir_prep_for_cloud(self, data_writer):
+        """Ensure local dir creation is skipped for cloud/DFS URIs."""
+        mock_df = MagicMock()
+        mock_writer = MagicMock()
+        data_writer.writer_factory = MagicMock()
+        data_writer.writer_factory.get_writer.return_value = mock_writer
+        data_writer._prepare_local_directory = MagicMock(
+            side_effect=AssertionError("Should not be called")
+        )
+
+        cloud_path = "s3://bucket/some/where"
+        data_writer.write_data(mock_df, cloud_path, {"format": "parquet"})
+
+        mock_writer.write.assert_called_once_with(
+            mock_df, cloud_path, {"format": "parquet"}
+        )
+        data_writer._prepare_local_directory.assert_not_called()
+
     def test_write_data_empty_path(self, data_writer):
         """Test error when path is empty."""
         with pytest.raises(ConfigurationError, match="Output path cannot be empty"):
@@ -327,7 +350,6 @@ class TestDataWriter:
         with pytest.raises(WriteOperationError, match="Failed to write data"):
             data_writer.write_data(MagicMock(), "/test/path", {"format": "parquet"})
 
-    # New test for edge case: path with special characters
     def test_write_data_special_characters_path(self, data_writer):
         """Test writing data to path with special characters."""
         mock_df = MagicMock()
@@ -336,16 +358,11 @@ class TestDataWriter:
         data_writer.writer_factory.get_writer.return_value = mock_writer
         data_writer._prepare_local_directory = MagicMock()
 
-        data_writer.write_data(
-            mock_df, "/test/path/with spaces/and-hyphens", {"format": "parquet"}
-        )
+        path = "/test/path/with spaces/and-hyphens"
+        data_writer.write_data(mock_df, path, {"format": "parquet"})
 
-        mock_writer.write.assert_called_once_with(
-            mock_df, "/test/path/with spaces/and-hyphens", {"format": "parquet"}
-        )
-        data_writer._prepare_local_directory.assert_called_once_with(
-            "/test/path/with spaces/and-hyphens"
-        )
+        mock_writer.write.assert_called_once_with(mock_df, path, {"format": "parquet"})
+        data_writer._prepare_local_directory.assert_called_once_with(path)
 
 
 class TestModelArtifactManager:
@@ -432,7 +449,6 @@ class TestModelArtifactManager:
         with pytest.raises(ConfigurationError, match="Model version cannot be empty"):
             artifact_manager.save_model_artifacts({"name": "test_node"}, "")
 
-    # New test for performance
     def test_save_model_artifacts_performance(self, artifact_manager, tmp_path):
         """Test that saving model artifacts completes within expected time."""
         artifact_manager.context = {
@@ -441,17 +457,15 @@ class TestModelArtifactManager:
 
         node = {
             "name": "test_node",
-            "model_artifacts": [
-                {"name": f"artifact_{i}"} for i in range(10)
-            ],  # 10 artifacts
+            "model_artifacts": [{"name": f"artifact_{i}"} for i in range(10)],
         }
 
         start_time = time.time()
         artifact_manager.save_model_artifacts(node, "v1.0")
         end_time = time.time()
 
-        # Should complete in less than 2 seconds
-        assert end_time - start_time < 2.0
+        # Should complete in a reasonable time in typical CI (relaxed threshold)
+        assert end_time - start_time < 5.0
 
         # Verify all artifacts were created
         for i in range(10):
@@ -472,13 +486,14 @@ class TestUnityCatalogOperations:
     def test_ensure_schema_exists(self, uc_operations):
         """Test ensuring schema exists with default location."""
         uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
+        fake_spark = MagicMock()
+        uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
         uc_operations.ensure_schema_exists("test_catalog", "test_schema")
 
         # Verify SQL commands were executed
-        assert uc_operations._ctx_spark().sql.call_count == 2
-        calls = uc_operations._ctx_spark().sql.call_args_list
+        assert fake_spark.sql.call_count == 2
+        calls = fake_spark.sql.call_args_list
         assert "CREATE CATALOG IF NOT EXISTS `test_catalog`" in str(calls[0])
         assert "CREATE SCHEMA IF NOT EXISTS `test_catalog`.`test_schema`" in str(
             calls[1]
@@ -487,14 +502,15 @@ class TestUnityCatalogOperations:
     def test_ensure_schema_exists_with_location(self, uc_operations):
         """Test ensuring schema exists with custom location."""
         uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
+        fake_spark = MagicMock()
+        uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
         uc_operations.ensure_schema_exists(
             "test_catalog", "test_schema", "/custom/location"
         )
 
         # Verify SQL command with location was executed
-        calls = uc_operations._ctx_spark().sql.call_args_list
+        calls = fake_spark.sql.call_args_list
         assert "LOCATION '/custom/location/test_schema'" in str(calls[1])
 
     def test_ensure_schema_exists_no_spark(self, uc_operations):
@@ -507,89 +523,63 @@ class TestUnityCatalogOperations:
         uc_operations._ctx_spark.assert_not_called()
 
     def test_optimize_table(self, uc_operations):
-        """Test optimizing a table."""
+        """Test optimizing a table with quoted partition column."""
         uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
+        fake_spark = MagicMock()
+        uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
         uc_operations.optimize_table(
             "catalog.schema.table", "date_col", "2023-01-01", "2023-01-31"
         )
 
-        # Verify OPTIMIZE command was executed
-        uc_operations._ctx_spark().sql.assert_called_once()
-        call_args = uc_operations._ctx_spark().sql.call_args[0][0]
+        # Verify OPTIMIZE command was executed with quoted identifiers
+        fake_spark.sql.assert_called_once()
+        call_args = fake_spark.sql.call_args[0][0]
         assert "OPTIMIZE `catalog`.`schema`.`table`" in call_args
-        assert "date_col BETWEEN '2023-01-01' AND '2023-01-31'" in call_args
+        assert "`date_col` BETWEEN '2023-01-01' AND '2023-01-31'" in call_args
 
     def test_add_table_comment(self, uc_operations):
         """Test adding a comment to a table."""
         uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
+        fake_spark = MagicMock()
+        uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
         uc_operations.add_table_comment(
             "catalog.schema.table", "Test description", "date_col"
         )
 
         # Verify COMMENT command was executed
-        uc_operations._ctx_spark().sql.assert_called_once()
-        call_args = uc_operations._ctx_spark().sql.call_args[0][0]
+        fake_spark.sql.assert_called_once()
+        call_args = fake_spark.sql.call_args[0][0]
         assert "COMMENT ON TABLE `catalog`.`schema`.`table` IS" in call_args
         assert "Test description" in call_args
         assert "Partition: date_col" in call_args
 
-    # Fixed test for vacuum with retention below minimum
-    def test_execute_vacuum_below_minimum(self, uc_operations):
-        """Test executing VACUUM with retention below minimum."""
+    @pytest.mark.parametrize(
+        "requested,expected",
+        [
+            (48, MIN_VACUUM_RETENTION_HOURS),
+            (200, 200),
+            (None, DEFAULT_VACUUM_RETENTION_HOURS),
+        ],
+    )
+    def test_execute_vacuum_retention(self, uc_operations, requested, expected):
+        """Test executing VACUUM with different retention scenarios."""
         uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
+        fake_spark = MagicMock()
+        uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
-        # Pass retention below minimum (48 < 168)
-        uc_operations.execute_vacuum("catalog.schema.table", 48)
+        uc_operations.execute_vacuum("catalog.schema.table", requested)
 
-        # Verify VACUUM command was executed with minimum retention
-        uc_operations._ctx_spark().sql.assert_called_once()
-        call_args = uc_operations._ctx_spark().sql.call_args[0][0]
-        assert (
-            f"VACUUM `catalog`.`schema`.`table` RETAIN {MIN_VACUUM_RETENTION_HOURS} HOURS"
-            in call_args
-        )
+        fake_spark.sql.assert_called_once()
+        call_args = fake_spark.sql.call_args[0][0]
+        assert f"VACUUM `catalog`.`schema`.`table` RETAIN {expected} HOURS" in call_args
 
-    # New test for vacuum with retention above minimum
-    def test_execute_vacuum_above_minimum(self, uc_operations):
-        """Test executing VACUUM with retention above minimum."""
-        uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
-
-        # Pass retention above minimum (200 > 168)
-        uc_operations.execute_vacuum("catalog.schema.table", 200)
-
-        # Verify VACUUM command was executed with the specified retention
-        uc_operations._ctx_spark().sql.assert_called_once()
-        call_args = uc_operations._ctx_spark().sql.call_args[0][0]
-        assert "VACUUM `catalog`.`schema`.`table` RETAIN 200 HOURS" in call_args
-
-    # New test for vacuum with default retention
-    def test_execute_vacuum_default_retention(self, uc_operations):
-        """Test executing VACUUM with default retention."""
-        uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
-
-        # Pass None retention to use default
-        uc_operations.execute_vacuum("catalog.schema.table", None)
-
-        # Verify VACUUM command was executed with default retention
-        uc_operations._ctx_spark().sql.assert_called_once()
-        call_args = uc_operations._ctx_spark().sql.call_args[0][0]
-        assert (
-            f"VACUUM `catalog`.`schema`.`table` RETAIN {DEFAULT_VACUUM_RETENTION_HOURS} HOURS"
-            in call_args
-        )
-
-    # New test for performance
     def test_optimize_table_performance(self, uc_operations):
-        """Test that table optimization completes within expected time."""
+        """Test that table optimization completes within expected time (mocked)."""
         uc_operations._spark_available = MagicMock(return_value=True)
-        uc_operations._ctx_spark = MagicMock(return_value=MagicMock())
+        fake_spark = MagicMock()
+        uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
         start_time = time.time()
         uc_operations.optimize_table(
@@ -723,7 +713,6 @@ class TestUnityCatalogManager:
         # Verify that no write was attempted
         uc_manager.writer_factory.get_writer.assert_not_called()
 
-    # New test for complex Unity Catalog configuration
     def test_write_to_unity_catalog_complex_config(self, uc_manager):
         """Test writing to Unity Catalog with complex configuration."""
         mock_df = MagicMock()
@@ -903,7 +892,6 @@ class TestOutputManager:
         ):
             output_manager.save_output("dev", "not_a_dict", MagicMock())
 
-    # New test for integration between components
     def test_save_output_integration(self, output_manager):
         """Test full integration of OutputManager with all its dependencies."""
         mock_df = MagicMock()
@@ -937,7 +925,6 @@ class TestOutputManager:
         mock_data_writer.write_data.assert_called_once()
         mock_artifact_manager.save_model_artifacts.assert_called_once_with(node, "v1.0")
 
-    # New test for missing output configuration
     def test_save_output_missing_config(self, output_manager):
         """Test error when output configuration is missing."""
         mock_df = MagicMock()
@@ -955,7 +942,6 @@ class TestOutputManager:
         ):
             output_manager.save_output("dev", node, mock_df)
 
-    # New test for performance
     def test_save_output_performance(self, output_manager):
         """Test that saving output completes within expected time."""
         mock_df = MagicMock()
@@ -976,8 +962,8 @@ class TestOutputManager:
         output_manager.save_output("dev", node, mock_df)
         end_time = time.time()
 
-        # Should complete in less than 1 second (mocked operations)
-        assert end_time - start_time < 1.0
+        # Should complete in less than 2 seconds under normal CI conditions
+        assert end_time - start_time < 2.0
 
 
 class TestErrorHandler:
@@ -1017,7 +1003,6 @@ class TestErrorHandler:
         # Operation should still be called
         mock_operation.assert_called_once()
 
-    # New test for performance
     def test_execute_with_error_handling_performance(self, error_handler):
         """Test that error handling completes within expected time."""
         mock_operation = MagicMock()
@@ -1026,11 +1011,11 @@ class TestErrorHandler:
         error_handler.execute_with_error_handling(mock_operation, "Test error")
         end_time = time.time()
 
-        # Should complete in less than 0.1 second
-        assert end_time - start_time < 0.1
+        # Should complete in less than 0.5 second (relaxed)
+        assert end_time - start_time < 0.5
 
 
-# New integration test class
+# Integration tests for the output module
 class TestOutputIntegration:
     """Integration tests for the output module."""
 

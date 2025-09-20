@@ -87,49 +87,46 @@ class ConfigValidator(BaseValidator):
             return False
 
 
-class DataValidator(BaseValidator):
-    """Validates data objects and DataFrames."""
-
-    def validate(self, data: Any, **kwargs) -> None:
-        """Validate data object."""
-        if data is None:
-            raise DataValidationError("Data cannot be None")
+class DataValidator:
+    def validate(self, df: Any, allow_empty: bool = False) -> None:
+        """Alias de validate_dataframe para compatibilidad."""
+        self.validate_dataframe(df, allow_empty=allow_empty)
 
     def validate_dataframe(self, df: Any, allow_empty: bool = False) -> None:
-        """Validate DataFrame object."""
-        # Spark
-        if self._is_spark_df(df):
-            if df.isEmpty() and not allow_empty:
-                raise DataValidationError(DATAFRAME_EMPTY_MSG)
-            return
+        """Valida que el DataFrame no sea None y, si aplica, que no esté vacío."""
+        if df is None:
+            raise DataValidationError("DataFrame cannot be None")
 
-        # Pandas
-        if self._is_pandas_df(df) and df.empty and not allow_empty:
-            raise DataValidationError(DATAFRAME_EMPTY_MSG)
-
-        # Polars
-        if self._is_polars_df(df) and df.height == 0 and not allow_empty:
-            raise DataValidationError(DATAFRAME_EMPTY_MSG)
-
-    def _is_spark_df(self, df: Any) -> bool:
-        """Return True if object appears to be a Spark DataFrame."""
-        return hasattr(df, "isEmpty")
-
-    def _is_pandas_df(self, df: Any) -> bool:
-        """Return True if object is a pandas DataFrame."""
         try:
-            import pandas as _pd  # type: ignore
+            if (
+                hasattr(df, "isEmpty")
+                and callable(getattr(df, "isEmpty"))
+                and not allow_empty
+            ):
+                if df.isEmpty():  # type: ignore[attr-defined]
+                    raise DataValidationError("DataFrame is empty")
         except Exception:
-            return False
-        return isinstance(df, _pd.DataFrame)
+            pass
 
-    def _is_polars_df(self, df: Any) -> bool:
-        """Return True if object is a polars DataFrame."""
         try:
-            import polars as _pl  # type: ignore
+            import pandas as pd  # type: ignore
+
+            if isinstance(df, pd.DataFrame) and not allow_empty and df.empty:
+                raise DataValidationError("DataFrame is empty")
         except Exception:
-            return False
-        return isinstance(df, _pl.DataFrame)
+            pass
+
+        try:
+            import polars as pl  # type: ignore
+
+            if (
+                isinstance(df, pl.DataFrame)
+                and not allow_empty
+                and getattr(df, "height", None) == 0
+            ):
+                raise DataValidationError("DataFrame is empty")
+        except Exception:
+            pass
 
     def validate_columns_exist(self, df: Any, columns: List[str]) -> None:
         """Validate that specified columns exist in DataFrame."""

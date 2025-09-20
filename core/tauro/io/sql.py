@@ -68,9 +68,10 @@ class SQLSanitizer:
 
         masked_for_checks = cls._mask_string_literals(normalized_query)
 
+        cls._check_comment_safety(normalized_query)
+
         cls._check_dangerous_keywords(masked_for_checks)
         cls._check_suspicious_patterns(masked_for_checks)
-        cls._check_malicious_comments(normalized_query)
         cls._check_multiple_statements(normalized_query)
 
         logger.debug("SQL query passed security validation")
@@ -92,8 +93,7 @@ class SQLSanitizer:
 
     @classmethod
     def _mask_string_literals(cls, query: str) -> str:
-        """Replaces the content of string literals with spaces, preserving the quotes.
-        """
+        """Replaces the content of string literals with spaces, preserving the quotes."""
         result: List[str] = []
         in_string = False
         quote_char = None
@@ -136,22 +136,62 @@ class SQLSanitizer:
         """Verify suspicious patterns that may indicate SQL injection."""
         query_lower = query.lower()
         for pattern in cls.SUSPICIOUS_PATTERNS:
-            if re.search(pattern, query_lower, re.IGNORECASE):
-                raise ConfigurationError(
-                    "Query contains suspicious pattern that may indicate SQL injection attempt"
-                ) from None
+            try:
+                if re.search(pattern, query_lower, re.IGNORECASE):
+                    raise ConfigurationError(
+                        "Query contains suspicious pattern that may indicate SQL injection attempt"
+                    ) from None
+            except re.error:
+                continue
 
     @classmethod
-    def _check_malicious_comments(cls, query: str) -> None:
-        """Verify comments that could be used for injection."""
-        if re.search(
-            r"(--[^\r\n]*|/\*[\s\S]*?\*/|#[^\r\n]*)",
-            query,
-            re.IGNORECASE | re.MULTILINE,
-        ):
-            raise ConfigurationError(
-                "Query contains potentially malicious comment pattern"
-            ) from None
+    def _extract_comments(cls, query: str) -> List[str]:
+        """Extracts the raw text of comments found in the query."""
+        comments: List[str] = []
+        for pattern in cls.COMMENT_PATTERNS:
+            for m in re.finditer(pattern, query, flags=re.IGNORECASE | re.MULTILINE):
+                comments.append(m.group(0))
+        return comments
+
+    @classmethod
+    def _check_comment_safety(cls, query: str) -> None:
+        """Validate that comments do not contain dangerous tokens or suspicious patterns."""
+        comments = cls._extract_comments(query)
+        if not comments:
+            return
+
+        for c in comments:
+            comment_text = c
+            if comment_text.startswith("--"):
+                content = comment_text[2:]
+            elif comment_text.startswith("#"):
+                content = comment_text[1:]
+            elif comment_text.startswith("/*") and comment_text.endswith("*/"):
+                content = comment_text[2:-2]
+            else:
+                content = comment_text
+
+            content_lower = content.lower()
+
+            if ";" in content_lower:
+                raise ConfigurationError(
+                    "Comments in query contain semicolon which could indicate multiple statements"
+                ) from None
+
+            for keyword in cls.DANGEROUS_KEYWORDS:
+                if keyword in content_lower:
+                    raise ConfigurationError(
+                        f"Comments contain dangerous keyword '{keyword}' which is not allowed"
+                    ) from None
+
+            for pattern in cls.SUSPICIOUS_PATTERNS:
+                try:
+                    if re.search(pattern, content_lower, re.IGNORECASE):
+                        raise ConfigurationError(
+                            "Comments contain suspicious pattern that may indicate SQL injection attempt"
+                        ) from None
+                except re.error:
+                    continue
 
     @classmethod
     def _check_multiple_statements(cls, query: str) -> None:
