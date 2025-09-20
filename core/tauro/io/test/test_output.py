@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from tauro.io.output import (
     DataFrameConverter,
@@ -363,36 +363,35 @@ class TestModelArtifactManager:
             "global_settings": {"model_registry_path": str(tmp_path)}
         }
 
-        # Mock datetime using the actual import path
-        with patch("tauro.io.output.datetime") as mock_datetime:
-            mock_now = MagicMock()
-            mock_now.isoformat.return_value = "2023-01-01T00:00:00Z"
-            mock_datetime.now.return_value = mock_now
-            mock_datetime.timezone.utc = "UTC"
+        node = {
+            "name": "test_node",
+            "model_artifacts": [
+                {"name": "artifact1", "type": "model"},
+                {"name": "artifact2", "type": "config"},
+            ],
+        }
 
-            node = {
-                "name": "test_node",
-                "model_artifacts": [
-                    {"name": "artifact1", "type": "model"},
-                    {"name": "artifact2", "type": "config"},
-                ],
-            }
+        artifact_manager.save_model_artifacts(node, "v1.0")
 
-            artifact_manager.save_model_artifacts(node, "v1.0")
+        # Check that directories were created
+        assert (tmp_path / "artifact1" / "v1.0").exists()
+        assert (tmp_path / "artifact2" / "v1.0").exists()
 
-            # Check that directories were created
-            assert (tmp_path / "artifact1" / "v1.0").exists()
-            assert (tmp_path / "artifact2" / "v1.0").exists()
+        # Check that metadata files were created and have expected fields
+        metadata_path1 = tmp_path / "artifact1" / "v1.0" / "metadata.json"
+        assert metadata_path1.exists()
 
-            # Check that metadata files were created
-            metadata_path1 = tmp_path / "artifact1" / "v1.0" / "metadata.json"
-            assert metadata_path1.exists()
-
-            with open(metadata_path1, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-                assert metadata["artifact"] == "artifact1"
-                assert metadata["version"] == "v1.0"
-                assert metadata["node"] == "test_node"
+        with open(metadata_path1, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+            assert metadata["artifact"] == "artifact1"
+            assert metadata["version"] == "v1.0"
+            assert metadata["node"] == "test_node"
+            # Validate ISO timestamp (Z-terminated)
+            assert isinstance(metadata.get("saved_at"), str)
+            assert metadata["saved_at"].endswith("Z")
+            # Try to parse (strip trailing Z for fromisoformat compatibility)
+            dt_str = metadata["saved_at"].rstrip("Z")
+            datetime.fromisoformat(dt_str)
 
     def test_save_model_artifacts_no_registry_path(self, artifact_manager):
         """Test warning when model registry path is not configured."""
@@ -480,8 +479,10 @@ class TestUnityCatalogOperations:
         # Verify SQL commands were executed
         assert uc_operations._ctx_spark().sql.call_count == 2
         calls = uc_operations._ctx_spark().sql.call_args_list
-        assert "CREATE CATALOG IF NOT EXISTS test_catalog" in str(calls[0])
-        assert "CREATE SCHEMA IF NOT EXISTS test_catalog.test_schema" in str(calls[1])
+        assert "CREATE CATALOG IF NOT EXISTS `test_catalog`" in str(calls[0])
+        assert "CREATE SCHEMA IF NOT EXISTS `test_catalog`.`test_schema`" in str(
+            calls[1]
+        )
 
     def test_ensure_schema_exists_with_location(self, uc_operations):
         """Test ensuring schema exists with custom location."""
@@ -517,7 +518,7 @@ class TestUnityCatalogOperations:
         # Verify OPTIMIZE command was executed
         uc_operations._ctx_spark().sql.assert_called_once()
         call_args = uc_operations._ctx_spark().sql.call_args[0][0]
-        assert "OPTIMIZE catalog.schema.table" in call_args
+        assert "OPTIMIZE `catalog`.`schema`.`table`" in call_args
         assert "date_col BETWEEN '2023-01-01' AND '2023-01-31'" in call_args
 
     def test_add_table_comment(self, uc_operations):
@@ -532,7 +533,7 @@ class TestUnityCatalogOperations:
         # Verify COMMENT command was executed
         uc_operations._ctx_spark().sql.assert_called_once()
         call_args = uc_operations._ctx_spark().sql.call_args[0][0]
-        assert "COMMENT ON TABLE catalog.schema.table IS" in call_args
+        assert "COMMENT ON TABLE `catalog`.`schema`.`table` IS" in call_args
         assert "Test description" in call_args
         assert "Partition: date_col" in call_args
 
@@ -549,7 +550,7 @@ class TestUnityCatalogOperations:
         uc_operations._ctx_spark().sql.assert_called_once()
         call_args = uc_operations._ctx_spark().sql.call_args[0][0]
         assert (
-            f"VACUUM catalog.schema.table RETAIN {MIN_VACUUM_RETENTION_HOURS} HOURS"
+            f"VACUUM `catalog`.`schema`.`table` RETAIN {MIN_VACUUM_RETENTION_HOURS} HOURS"
             in call_args
         )
 
@@ -565,7 +566,7 @@ class TestUnityCatalogOperations:
         # Verify VACUUM command was executed with the specified retention
         uc_operations._ctx_spark().sql.assert_called_once()
         call_args = uc_operations._ctx_spark().sql.call_args[0][0]
-        assert "VACUUM catalog.schema.table RETAIN 200 HOURS" in call_args
+        assert "VACUUM `catalog`.`schema`.`table` RETAIN 200 HOURS" in call_args
 
     # New test for vacuum with default retention
     def test_execute_vacuum_default_retention(self, uc_operations):
@@ -580,7 +581,7 @@ class TestUnityCatalogOperations:
         uc_operations._ctx_spark().sql.assert_called_once()
         call_args = uc_operations._ctx_spark().sql.call_args[0][0]
         assert (
-            f"VACUUM catalog.schema.table RETAIN {DEFAULT_VACUUM_RETENTION_HOURS} HOURS"
+            f"VACUUM `catalog`.`schema`.`table` RETAIN {DEFAULT_VACUUM_RETENTION_HOURS} HOURS"
             in call_args
         )
 
@@ -633,7 +634,7 @@ class TestUnityCatalogManager:
         }
 
         uc_manager.write_to_unity_catalog(
-            mock_df, config, "2023-01-01", "2023-01-31", "schema.folder.table"
+            mock_df, config, "2023-01-01", "2023-01-31", "schema.folder.table", "dev"
         )
 
         # Verify operations were called
@@ -663,6 +664,7 @@ class TestUnityCatalogManager:
             None,
             None,
             "schema.folder.table",
+            "dev",
         )
 
         # No operations should be performed for empty DataFrame
@@ -687,7 +689,7 @@ class TestUnityCatalogManager:
 
         with pytest.raises(WriteOperationError, match="Unity Catalog write failed"):
             uc_manager.write_to_unity_catalog(
-                mock_df, config, None, None, "schema.folder.table"
+                mock_df, config, None, None, "schema.folder.table", "dev"
             )
 
     def test_write_to_unity_catalog_not_enabled(self, uc_manager):
@@ -715,7 +717,7 @@ class TestUnityCatalogManager:
         # Should fail because UC is not enabled
         with pytest.raises(ConfigurationError, match="Unity Catalog is not enabled"):
             uc_manager.write_to_unity_catalog(
-                mock_df, config, None, None, "schema.folder.table"
+                mock_df, config, None, None, "schema.folder.table", "dev"
             )
 
         # Verify that no write was attempted
@@ -748,7 +750,7 @@ class TestUnityCatalogManager:
         }
 
         uc_manager.write_to_unity_catalog(
-            mock_df, config, "2023-01-01", "2023-01-31", "schema.folder.table"
+            mock_df, config, "2023-01-01", "2023-01-31", "schema.folder.table", "dev"
         )
 
         # Verify operations were called with correct parameters
@@ -801,7 +803,7 @@ class TestOutputManager:
 
         node = {"name": "test_node", "output": ["test_output"]}
 
-        output_manager.save_output(node, mock_df)
+        output_manager.save_output("dev", node, mock_df)
 
         # Verify operations were called
         mock_converter.convert_to_spark.assert_called_once_with(mock_df)
@@ -829,7 +831,7 @@ class TestOutputManager:
 
         node = {"name": "test_node", "output": ["test_output"]}
 
-        output_manager.save_output(node, mock_df)
+        output_manager.save_output("dev", node, mock_df)
 
         # Verify Unity Catalog manager was called
         mock_uc_manager.write_to_unity_catalog.assert_called_once()
@@ -856,7 +858,7 @@ class TestOutputManager:
             "model_artifacts": [{"name": "test_artifact"}],
         }
 
-        output_manager.save_output(node, mock_df, model_version="v1.0")
+        output_manager.save_output("dev", node, mock_df, model_version="v1.0")
 
         # Verify model artifacts were saved
         mock_artifact_manager.save_model_artifacts.assert_called_once_with(node, "v1.0")
@@ -880,7 +882,7 @@ class TestOutputManager:
         node = {"name": "test_node", "output": []}  # No outputs
 
         # Should not raise an error, just return early
-        output_manager.save_output(node, MagicMock())
+        output_manager.save_output("dev", node, MagicMock())
 
         # Verify no write operations were performed
         mock_path_resolver.resolve_output_path.assert_not_called()
@@ -894,12 +896,12 @@ class TestOutputManager:
         output_manager.dataframe_converter = mock_converter
 
         with pytest.raises(ConfigurationError, match="Parameter 'node' cannot be None"):
-            output_manager.save_output(None, MagicMock())
+            output_manager.save_output("dev", None, MagicMock())
 
         with pytest.raises(
             ConfigurationError, match="Parameter 'node' must be a dictionary"
         ):
-            output_manager.save_output("not_a_dict", MagicMock())
+            output_manager.save_output("dev", "not_a_dict", MagicMock())
 
     # New test for integration between components
     def test_save_output_integration(self, output_manager):
@@ -927,7 +929,7 @@ class TestOutputManager:
             "model_artifacts": [{"name": "test_artifact"}],
         }
 
-        output_manager.save_output(node, mock_df, model_version="v1.0")
+        output_manager.save_output("dev", node, mock_df, model_version="v1.0")
 
         # Verify all components were called in the correct sequence
         mock_converter.convert_to_spark.assert_called_once_with(mock_df)
@@ -951,7 +953,7 @@ class TestOutputManager:
         with pytest.raises(
             ConfigurationError, match="Output configuration 'missing_output' not found"
         ):
-            output_manager.save_output(node, mock_df)
+            output_manager.save_output("dev", node, mock_df)
 
     # New test for performance
     def test_save_output_performance(self, output_manager):
@@ -971,7 +973,7 @@ class TestOutputManager:
         node = {"name": "test_node", "output": ["test_output"]}
 
         start_time = time.time()
-        output_manager.save_output(node, mock_df)
+        output_manager.save_output("dev", node, mock_df)
         end_time = time.time()
 
         # Should complete in less than 1 second (mocked operations)
@@ -1086,7 +1088,7 @@ class TestOutputIntegration:
         }
 
         # Execute the test
-        output_manager.save_output(node, mock_df, model_version="v1.0")
+        output_manager.save_output("dev", node, mock_df, model_version="v1.0")
 
         # Verify all components were called
         mock_converter.convert_to_spark.assert_called_once_with(mock_df)

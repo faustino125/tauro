@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from tauro.io.readers import CSVReader, ParquetReader, QueryReader
 from tauro.io.exceptions import ReadOperationError, ConfigurationError
 from tauro.io.constants import DEFAULT_CSV_OPTIONS
@@ -56,20 +56,20 @@ class TestQueryReader:
 
     def test_read_valid_query(self, query_reader):
         mock_df = MagicMock()
-        query_reader._get_spark = MagicMock(return_value=MagicMock())
-        query_reader._get_spark().sql.return_value = mock_df
+        # Mock de _ctx_spark en lugar de un método inexistente
+        query_reader._ctx_spark = MagicMock(return_value=MagicMock())
+        query_reader._ctx_spark().sql.return_value = mock_df
 
         config = {"query": "SELECT * FROM table"}
         result = query_reader.read("", config)
 
         assert result == mock_df
-        query_reader._get_spark().sql.assert_called_once_with("SELECT * FROM table")
+        query_reader._ctx_spark().sql.assert_called_once_with("SELECT * FROM table")
 
     def test_read_missing_query(self, query_reader):
         # QueryReader envuelve ConfigurationError en ReadOperationError
         with pytest.raises(ReadOperationError) as exc_info:
             query_reader.read("", {})
-        # Verificamos que la causa sea ConfigurationError
         assert "Query format specified without SQL query" in str(exc_info.value)
 
         with pytest.raises(ReadOperationError) as exc_info:
@@ -77,7 +77,7 @@ class TestQueryReader:
         assert "Query format specified without SQL query" in str(exc_info.value)
 
     def test_read_no_spark(self, query_reader):
-        query_reader._get_spark = MagicMock(return_value=None)
+        query_reader._ctx_spark = MagicMock(return_value=None)
 
         with pytest.raises(ReadOperationError):
             query_reader.read("", {"query": "SELECT * FROM table"})

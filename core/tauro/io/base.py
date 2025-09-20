@@ -14,10 +14,24 @@ class BaseIO:
 
     def __init__(self, context: Any):
         """Initialize BaseIO with application context (dict or object)."""
-        self.context = context
-        self.context_manager = ContextManager(context)
         self.config_validator = ConfigValidator()
+        self._context: Any = None
+        self.context_manager: ContextManager
+        self.context = context
         logger.debug("BaseIO initialized with context")
+
+    @property
+    def context(self) -> Any:
+        """Current application context (dict or object)."""
+        return self._context
+
+    @context.setter
+    def context(self, value: Any) -> None:
+        """Set context and keep the internal ContextManager in sync."""
+        if value is None:
+            raise ConfigurationError("Context cannot be None") from None
+        self._context = value
+        self.context_manager = ContextManager(value)
 
     def _ctx_get(self, key: str, default: Optional[Any] = None) -> Any:
         """Safe get from context for both dict and object."""
@@ -38,19 +52,6 @@ class BaseIO:
     def _is_local(self) -> bool:
         """Check if execution mode is local."""
         return self.context_manager.is_local_mode()
-
-    # Convenience proxies for semantic access to common configs
-    def _input_config(self) -> Dict[str, Any]:
-        return self.context_manager.get_input_config()
-
-    def _output_config(self) -> Dict[str, Any]:
-        return self.context_manager.get_output_config()
-
-    def _global_settings(self) -> Dict[str, Any]:
-        return self.context_manager.get_global_settings()
-
-    def _output_path(self) -> Optional[str]:
-        return self.context_manager.get_output_path()
 
     def _validate_config(
         self, config: Dict[str, Any], required_fields: List[str], config_type: str
