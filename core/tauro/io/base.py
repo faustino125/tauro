@@ -1,55 +1,67 @@
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
 from tauro.io.validators import ConfigValidator
+from tauro.io.exceptions import ConfigurationError
+from tauro.io.context_manager import ContextManager
+from tauro.io.sql import SQLSanitizer
 
 
 class BaseIO:
     """Base class for input/output operations with enhanced validation and error handling."""
 
-    def __init__(self, context: Dict[str, Any]):
-        """Initialize BaseIO with application context (dict or Context object)."""
+    def __init__(self, context: Any):
+        """Initialize BaseIO with application context (dict or object)."""
         self.context = context
+        self.context_manager = ContextManager(context)
         self.config_validator = ConfigValidator()
         logger.debug("BaseIO initialized with context")
 
     def _ctx_get(self, key: str, default: Optional[Any] = None) -> Any:
         """Safe get from context for both dict and object."""
-        if isinstance(self.context, dict):
-            return self.context.get(key, default)
-        return getattr(self.context, key, default)
+        return self.context_manager.get(key, default)
 
     def _ctx_has(self, key: str) -> bool:
         """Safe hasattr/contains for context."""
-        if isinstance(self.context, dict):
-            return key in self.context
-        return hasattr(self.context, key)
+        return self.context_manager.has(key)
 
     def _ctx_spark(self) -> Optional[Any]:
         """Get SparkSession if present, else None."""
-        return self._ctx_get("spark")
+        return self.context_manager.get_spark()
 
     def _ctx_mode(self) -> Optional[str]:
         """Get normalized execution mode."""
-        mode = self._ctx_get("execution_mode")
-        if not mode:
-            return None
-        mode = str(mode).lower()
-        if mode == "databricks":
-            return "distributed"
-        return mode
+        return self.context_manager.get_execution_mode()
 
     def _is_local(self) -> bool:
-        return self._ctx_mode() == "local"
+        """Check if execution mode is local."""
+        return self.context_manager.is_local_mode()
+
+    # Convenience proxies for semantic access to common configs
+    def _input_config(self) -> Dict[str, Any]:
+        return self.context_manager.get_input_config()
+
+    def _output_config(self) -> Dict[str, Any]:
+        return self.context_manager.get_output_config()
+
+    def _global_settings(self) -> Dict[str, Any]:
+        return self.context_manager.get_global_settings()
+
+    def _output_path(self) -> Optional[str]:
+        return self.context_manager.get_output_path()
 
     def _validate_config(
         self, config: Dict[str, Any], required_fields: List[str], config_type: str
     ) -> None:
         """Validate configuration using validator."""
-        self.config_validator.validate(config, required_fields, config_type)
+        try:
+            self.config_validator.validate(config, required_fields, config_type)
+        except Exception as e:
+            raise ConfigurationError(
+                f"Configuration validation failed for {config_type}: {e}"
+            ) from e
 
     def _prepare_local_directory(self, path: str) -> None:
         """Create local directories if necessary."""
@@ -71,19 +83,28 @@ class BaseIO:
 
     def _spark_available(self) -> bool:
         """Check if Spark context is available."""
-        spark = self._ctx_spark()
-        is_available = spark is not None
-        logger.debug(f"Spark availability: {is_available}")
-        return is_available
+        return self.context_manager.is_spark_available()
 
     def _is_spark_connect(self) -> bool:
         """Detect if the active SparkSession is a Spark Connect session."""
-        spark = self._ctx_spark()
         try:
-            return spark is not None and "pyspark.sql.connect" in type(spark).__module__
+            return self.context_manager.is_spark_connect()
         except Exception:
             return False
 
     def _parse_output_key(self, out_key: str) -> Dict[str, str]:
         """Parse output key using validator."""
-        return self.config_validator.validate_output_key(out_key)
+        try:
+            return self.config_validator.validate_output_key(out_key)
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to parse output key '{out_key}': {e}"
+            ) from e
+
+    @staticmethod
+    def sanitize_sql_query(query: str) -> str:
+        """Safe sanitization of SQL queries using the specialized class."""
+        try:
+            return SQLSanitizer.sanitize_query(query)
+        except Exception as e:
+            raise ConfigurationError(f"SQL query sanitization failed: {e}") from e

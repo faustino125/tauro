@@ -443,12 +443,12 @@ class UnifiedPipelineState:
         """Clean up all resources and stop active streaming queries"""
         with self._lock:
             # Stop streaming queries
-            for node_name, query in list(self._streaming_queries.items()):
+            for node_name, query in self._streaming_queries.items():
                 self._stop_query(node_name, query)
 
             # Release resources for each node
             for node in self._nodes.values():
-                for res_type, resource in list(node.resources):
+                for res_type, resource in node.resources:
                     self._release_resource(node, res_type, resource)
 
             self._reset_state()

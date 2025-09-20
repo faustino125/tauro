@@ -2,7 +2,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger  # type: ignore
-from pyspark.sql import DataFrame  # type: ignore
+
+try:
+    from pyspark.sql import DataFrame  # type: ignore
+except Exception:  # pragma: no cover
+
+    class DataFrame:  # type: ignore
+        pass
+
 
 try:
     import pandas as pd  # type: ignore
@@ -55,11 +62,15 @@ class DataFrameConverter(BaseIO):
             raise WriteOperationError(f"DataFrame conversion failed: {e}") from e
 
     def _is_spark_dataframe(self, df: Any) -> bool:
-        """Check if DataFrame is a Spark DataFrame."""
+        """Check if DataFrame is a Spark DataFrame without hard dependency on pyspark."""
         try:
-            return isinstance(df, DataFrame)
+            return isinstance(df, DataFrame)  # funciona si pyspark está disponible
         except Exception:
-            return hasattr(df, "sparkSession")
+            return (
+                hasattr(df, "sparkSession")
+                and hasattr(df, "schema")
+                and hasattr(df, "write")
+            )
 
 
 class PathResolver(BaseIO):
@@ -147,7 +158,6 @@ class DataWriter(BaseIO):
             raise ConfigurationError("Output path cannot be empty")
 
         self._validate_write_config(config)
-        # Migrar path a Path
         path_obj = Path(path)
         self._prepare_local_directory(str(path_obj))
 
@@ -164,16 +174,13 @@ class DataWriter(BaseIO):
         self._validate_config(config, ["format"], "write operation")
 
         format_name = config.get("format", "").lower()
-        supported_formats = [
-            fmt.value
-            for fmt in SupportedFormats
-            if fmt != SupportedFormats.UNITY_CATALOG
-        ]
-
-        if format_name not in supported_formats:
+        writable_formats = {"delta", "parquet", "csv", "json", "orc"}
+        if format_name not in writable_formats:
             raise ConfigurationError(
-                f"Unsupported format: {format_name}. Supported formats: {supported_formats}"
+                f"Unsupported format: {format_name}. Supported formats: {sorted(writable_formats)}"
             )
+        if "options" in config and not isinstance(config["options"], dict):
+            raise ConfigurationError("Write 'options' must be a dictionary")
 
 
 class ModelArtifactManager(BaseIO):
@@ -186,7 +193,7 @@ class ModelArtifactManager(BaseIO):
     def save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
         """Save model artifacts to the model registry."""
         import json
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         self._validate_inputs(node, model_version)
 
@@ -211,11 +218,10 @@ class ModelArtifactManager(BaseIO):
                     "artifact": artifact.get("name"),
                     "version": model_version,
                     "node": node.get("name"),
-                    "saved_at": datetime.now(datetime.timezone.utc)
+                    "saved_at": datetime.now(timezone.utc)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 }
-                # Escribir metadata con encoding utf-8
                 (artifact_path / "metadata.json").write_text(
                     json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
@@ -286,6 +292,23 @@ class UnityCatalogOperations(BaseIO):
         """Public helper to check if Unity Catalog is enabled."""
         return self._unity_catalog_enabled
 
+    def _quote_identifier(self, name: str) -> str:
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError("Invalid identifier")
+        safe = name.replace("`", "``")
+        return f"`{safe}`"
+
+    def _quote_full_name(self, full_table_name: str) -> str:
+        """Quote a full name like catalog.schema.table safely."""
+        parts = [p for p in str(full_table_name).split(".") if p]
+        if len(parts) != 3:
+            return self._quote_identifier(full_table_name)
+        return ".".join(self._quote_identifier(p) for p in parts)
+
+    def _escape_sql_string(self, s: str) -> str:
+        """Escape single quotes in SQL string literals."""
+        return str(s).replace("'", "''")
+
     def ensure_schema_exists(
         self, catalog: str, schema: str, output_path_override: Optional[str] = None
     ) -> None:
@@ -295,15 +318,19 @@ class UnityCatalogOperations(BaseIO):
             return
         spark = self._ctx_spark()
         try:
-            spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+            q_catalog = self._quote_identifier(catalog)
+            q_schema = self._quote_identifier(schema)
+
+            spark.sql(f"CREATE CATALOG IF NOT EXISTS {q_catalog}")
             if output_path_override:
                 base = str(output_path_override).rstrip("/")
                 location = f"{base}/{schema}"
+                loc_escaped = self._escape_sql_string(location)
                 spark.sql(
-                    f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema} LOCATION '{location}'"
+                    f"CREATE SCHEMA IF NOT EXISTS {q_catalog}.{q_schema} LOCATION '{loc_escaped}'"
                 )
             else:
-                spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
+                spark.sql(f"CREATE SCHEMA IF NOT EXISTS {q_catalog}.{q_schema}")
             logger.info(f"Verified/created {catalog}.{schema}")
         except Exception as e:
             logger.error(f"Error ensuring schema {catalog}.{schema}: {e}")
@@ -320,10 +347,11 @@ class UnityCatalogOperations(BaseIO):
         logger.info(f"Optimizing table {full_table_name}")
         try:
             spark = self._ctx_spark()
+            q_full = self._quote_full_name(full_table_name)
             spark.sql(
                 f"""
-                OPTIMIZE {full_table_name}
-                WHERE {partition_col} BETWEEN '{start_date}' AND '{end_date}'
+                OPTIMIZE {q_full}
+                WHERE {partition_col} BETWEEN '{self._escape_sql_string(start_date)}' AND '{self._escape_sql_string(end_date)}'
             """
             )
             logger.info(f"Table {full_table_name} optimized successfully")
@@ -345,7 +373,8 @@ class UnityCatalogOperations(BaseIO):
 
         try:
             spark = self._ctx_spark()
-            spark.sql(f"COMMENT ON TABLE {full_table_name} IS '{comment}'")
+            q_full = self._quote_full_name(full_table_name)
+            spark.sql(f"COMMENT ON TABLE {q_full} IS '{comment}'")
             logger.info(f"Comment added to table {full_table_name}")
         except Exception as e:
             logger.error(f"Error adding comment: {str(e)}")
@@ -365,7 +394,8 @@ class UnityCatalogOperations(BaseIO):
 
         try:
             spark = self._ctx_spark()
-            spark.sql(f"VACUUM {full_table_name} RETAIN {hours} HOURS")
+            q_full = self._quote_full_name(full_table_name)
+            spark.sql(f"VACUUM {q_full} RETAIN {hours} HOURS")
             logger.info(f"VACUUM completed on {full_table_name}")
         except Exception as e:
             logger.error(f"Error executing VACUUM on {full_table_name}: {str(e)}")
@@ -388,8 +418,12 @@ class UnityCatalogManager(BaseIO):
         start_date: Optional[str],
         end_date: Optional[str],
         out_key: str,
+        env: str,
     ) -> None:
         """Write data to Unity Catalog following best practices."""
+        if not self.uc_operations.is_enabled():
+            raise ConfigurationError("Unity Catalog is not enabled")
+
         self.data_validator.validate_dataframe(df, allow_empty=True)
         if hasattr(df, "isEmpty") and df.isEmpty():
             logger.warning("Empty DataFrame. No data will be written to Unity Catalog.")
@@ -398,10 +432,11 @@ class UnityCatalogManager(BaseIO):
         parsed = self._parse_output_key(out_key)
         self._validate_uc_config(config)
 
-        catalog = config["catalog_name"]
-        schema = config.get("schema", parsed["schema"])
-        sub_folder = config.get("sub_folder", parsed["sub_folder"])
-        table_name = config.get("table_name", parsed["table_name"])
+        catalog = config["catalog_name"].format(environment=env)
+        schema = config.get("schema", parsed["schema"]).format(environment=env)
+        table_name = config.get("table_name", parsed["table_name"]).format(
+            environment=env
+        )
         full_table_name = f"{catalog}.{schema}.{table_name}"
 
         base_output = config.get("output_path") or self._ctx_get("output_path", "")
@@ -418,7 +453,7 @@ class UnityCatalogManager(BaseIO):
                 full_table_name,
                 writer_config,
                 storage_location,
-                sub_folder,
+                parsed["sub_folder"],
             )
             self._post_write_operations(config, full_table_name, start_date, end_date)
         except Exception as e:
@@ -483,11 +518,13 @@ class UnityCatalogManager(BaseIO):
 
         try:
             spark = self._ctx_spark()
+            q_full = self.uc_operations._quote_full_name(full_table_name)
+            loc_escaped = self.uc_operations._escape_sql_string(destination_path)
             spark.sql(
                 f"""
-                CREATE TABLE IF NOT EXISTS {full_table_name}
+                CREATE TABLE IF NOT EXISTS {q_full}
                 USING DELTA
-                LOCATION '{destination_path}'
+                LOCATION '{loc_escaped}'
                 """
             )
             logger.info(
@@ -538,6 +575,7 @@ class OutputManager(BaseIO):
 
     def save_output(
         self,
+        env: str,
         node: Dict[str, Any],
         df: Any,
         start_date: Optional[str] = None,
@@ -557,7 +595,7 @@ class OutputManager(BaseIO):
         for out_key in out_keys or []:
             error_handler.execute_with_error_handling(
                 lambda out_key=out_key: self._save_single_output(
-                    out_key, df, start_date, end_date
+                    out_key, df, start_date, end_date, env
                 ),
                 f"Error saving output '{out_key}'",
             )
@@ -582,18 +620,29 @@ class OutputManager(BaseIO):
         self.data_validator.validate(df)
 
     def _get_output_keys(self, node: Dict[str, Any]) -> List[str]:
-        """Get output keys from a node."""
+        """Get output keys from a node with validation."""
         keys = node.get("output", [])
         if isinstance(keys, str):
-            result = [keys]
-        elif isinstance(keys, list):
-            result = keys
-        else:
-            result = []
+            keys = [keys]
+        elif not isinstance(keys, list):
+            return []
+
+        result: List[str] = []
+        for key in keys:
+            if not isinstance(key, str) or not key.strip():
+                raise ConfigurationError(
+                    f"Invalid output key: {key}. All output keys must be non-empty strings."
+                )
+            result.append(key.strip())
         return result
 
     def _save_single_output(
-        self, out_key: str, df: Any, start_date: Optional[str], end_date: Optional[str]
+        self,
+        out_key: str,
+        df: Any,
+        start_date: Optional[str],
+        end_date: Optional[str],
+        env: str,
     ) -> None:
         """Save a single output."""
         if not out_key:
@@ -616,7 +665,7 @@ class OutputManager(BaseIO):
         try:
             if self._should_use_unity_catalog(dataset_config):
                 self.unity_catalog_manager.write_to_unity_catalog(
-                    df, dataset_config, start_date, end_date, out_key
+                    df, dataset_config, start_date, end_date, out_key, env
                 )
             else:
                 base_path = self.path_resolver.resolve_output_path(

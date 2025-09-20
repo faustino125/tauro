@@ -126,7 +126,7 @@ class SparkSessionFactory:
                     builder = apply_fn(builder, ml_config)
 
             return builder.getOrCreate()
-        except Exception as e:
+        except Exception:
             logger.error("Session creation failed", exc_info=True)
             raise
 

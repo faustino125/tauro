@@ -4,8 +4,9 @@ from loguru import logger  # type: ignore
 
 from tauro.io.constants import DEFAULT_CSV_OPTIONS, WriteMode
 from tauro.io.exceptions import ConfigurationError, WriteOperationError
-from tauro.io.factories import BaseWriter
 from tauro.io.validators import ConfigValidator, DataValidator
+
+DESTINATION_EMPTY_ERROR = "Destination path cannot be empty"
 
 
 class SparkWriterMixin:
@@ -13,67 +14,138 @@ class SparkWriterMixin:
 
     def _configure_spark_writer(self, df: Any, config: Dict[str, Any]) -> Any:
         """Configure Spark DataFrame writer with write mode and schema options."""
-        data_validator = DataValidator()
-        data_validator.validate_dataframe(df)
+        try:
+            data_validator = DataValidator()
+            data_validator.validate_dataframe(df)
 
-        write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
-        if write_mode not in [mode.value for mode in WriteMode]:
-            logger.warning(
-                f"Invalid write mode '{write_mode}' specified. Falling back to '{WriteMode.OVERWRITE.value}'."
-            )
-            write_mode = WriteMode.OVERWRITE.value
+            write_mode = self._determine_write_mode(config)
+            writer = df.write.format(self._get_format()).mode(write_mode)
+            logger.debug(f"Configured writer with mode: {write_mode}")
 
-        writer = df.write.format(self._get_format()).mode(write_mode)
-        logger.debug(f"Configured writer with mode: {write_mode}")
+            writer = self._apply_partition(writer, df, config, data_validator)
+            writer = self._apply_overwrite_and_replacewhere(writer, config, write_mode)
 
-        if partition_columns := config.get("partition"):
-            partition_columns = (
-                [partition_columns]
-                if isinstance(partition_columns, str)
-                else partition_columns
-            )
+            extra_options = config.get("options", {})
+            for key, value in extra_options.items():
+                writer = writer.option(key, value)
+                logger.debug(f"Applied option {key}={value}")
+
+            return writer
+        except Exception as e:
+            raise WriteOperationError(f"Failed to configure Spark writer: {e}") from e
+
+    def _determine_write_mode(self, config: Dict[str, Any]) -> str:
+        """Determine and validate write mode from config, falling back to default."""
+        try:
+            write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
+            valid_modes = [mode.value for mode in WriteMode]
+
+            if write_mode not in valid_modes:
+                logger.warning(
+                    f"Invalid write mode '{write_mode}' specified. Available modes: {valid_modes}. "
+                    f"Falling back to '{WriteMode.OVERWRITE.value}'."
+                )
+                return WriteMode.OVERWRITE.value
+            return write_mode
+        except Exception as e:
+            raise ConfigurationError(f"Failed to determine write mode: {e}") from e
+
+    def _apply_partition(
+        self,
+        writer: Any,
+        df: Any,
+        config: Dict[str, Any],
+        data_validator: DataValidator,
+    ) -> Any:
+        """Apply partitioning to the writer if partition config is present."""
+        try:
+            partition_columns = config.get("partition")
+            if not partition_columns:
+                return writer
+
+            if isinstance(partition_columns, str):
+                partition_columns = [partition_columns]
+            elif not isinstance(partition_columns, list):
+                raise ConfigurationError(
+                    f"Partition columns must be string or list, got: {type(partition_columns)}"
+                ) from None
+
             data_validator.validate_columns_exist(df, partition_columns)
             writer = writer.partitionBy(*partition_columns)
             logger.debug(f"Applied partitionBy on columns: {partition_columns}")
+            return writer
+        except Exception as e:
+            raise ConfigurationError(f"Failed to apply partitioning: {e}") from e
 
-        overwrite_schema = bool(
-            config.get("overwrite_schema", self._get_default_overwrite_schema())
-        )
-        if overwrite_schema and self._supports_overwrite_schema():
-            writer = writer.option("overwriteSchema", "true")
-            logger.debug("Applied overwriteSchema=true")
+    def _apply_overwrite_and_replacewhere(
+        self, writer: Any, config: Dict[str, Any], write_mode: str
+    ) -> Any:
+        """Handle overwrite schema option and replaceWhere overwrite strategy."""
+        try:
+            overwrite_schema = bool(
+                config.get("overwrite_schema", self._get_default_overwrite_schema())
+            )
+            if overwrite_schema and self._supports_overwrite_schema():
+                writer = writer.option("overwriteSchema", "true")
+                logger.debug("Applied overwriteSchema=true")
 
-        if (
-            config.get("overwrite_strategy") == "replaceWhere"
-            and write_mode == WriteMode.OVERWRITE.value
-        ):
+            if (
+                config.get("overwrite_strategy") == "replaceWhere"
+                and write_mode == WriteMode.OVERWRITE.value
+            ):
+                writer = self._apply_replace_where_strategy(writer, config)
+
+            return writer
+        except Exception as e:
+            raise ConfigurationError(f"Failed to apply overwrite options: {e}") from e
+
+    def _apply_replace_where_strategy(self, writer: Any, config: Dict[str, Any]) -> Any:
+        """Apply replaceWhere overwrite strategy with validation."""
+        try:
+            if self._get_format() != "delta":
+                raise ConfigurationError(
+                    "overwrite_strategy=replaceWhere is only supported for Delta format"
+                ) from None
+
             partition_col = config.get("partition_col")
             start_date = config.get("start_date")
             end_date = config.get("end_date")
+
             if not all([partition_col, start_date, end_date]):
+                missing = [
+                    k
+                    for k, v in {
+                        "partition_col": partition_col,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                    }.items()
+                    if not v
+                ]
                 raise ConfigurationError(
-                    "overwrite_strategy=replaceWhere requires partition_col, start_date and end_date"
-                )
-            cfg_val = ConfigValidator()
+                    f"replaceWhere strategy requires: {', '.join(missing)}"
+                ) from None
+
+            cfg_validator = ConfigValidator()
             if not (
-                cfg_val.validate_date_format(start_date)
-                and cfg_val.validate_date_format(end_date)
+                cfg_validator.validate_date_format(start_date)
+                and cfg_validator.validate_date_format(end_date)
             ):
                 raise ConfigurationError(
-                    f"Invalid date format for replaceWhere: {start_date} - {end_date}; expected YYYY-MM-DD"
-                )
+                    f"Invalid date format for replaceWhere: {start_date} - {end_date}. "
+                    "Expected format: YYYY-MM-DD"
+                ) from None
+
             predicate = f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
             writer = writer.option("replaceWhere", predicate).option(
                 "overwriteSchema", "false"
             )
             logger.debug(f"Applied replaceWhere predicate: {predicate}")
 
-        extra_options = config.get("options", {})
-        for key, value in extra_options.items():
-            writer = writer.option(key, value)
-            logger.debug(f"Applied option {key}={value}")
-
-        return writer
+            return writer
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to apply replaceWhere strategy: {e}"
+            ) from e
 
     def _get_format(self) -> str:
         """Get format string for the writer."""
@@ -90,83 +162,131 @@ class SparkWriterMixin:
         )  # Only Delta enables overwriteSchema by default
 
 
-class DeltaWriter(BaseWriter, SparkWriterMixin):
+class DeltaWriter(SparkWriterMixin):
     """Writer for Delta format."""
 
+    def __init__(self, context: Any):
+        self.context = context
+
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write Delta data to destination."""
+        if not destination:
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing Delta data to: {destination}")
             writer.save(destination)
             logger.success(f"Delta data written successfully to: {destination}")
+        except WriteOperationError:
+            raise  # Re-raise WriteOperationError as-is
         except Exception as e:
             raise WriteOperationError(
                 f"Failed to write Delta to {destination}: {e}"
             ) from e
 
 
-class ParquetWriter(BaseWriter, SparkWriterMixin):
+class ParquetWriter(SparkWriterMixin):
     """Writer for Parquet format."""
 
+    def __init__(self, context: Any):
+        self.context = context
+
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write Parquet data to destination."""
+        if not destination:
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing Parquet data to: {destination}")
             writer.save(destination)
             logger.success(f"Parquet data written successfully to: {destination}")
+        except WriteOperationError:
+            raise  # Re-raise WriteOperationError as-is
         except Exception as e:
             raise WriteOperationError(
                 f"Failed to write Parquet to {destination}: {e}"
             ) from e
 
 
-class CSVWriter(BaseWriter, SparkWriterMixin):
+class CSVWriter(SparkWriterMixin):
     """Writer for CSV format."""
 
+    def __init__(self, context: Any):
+        self.context = context
+
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write CSV data to destination."""
+        if not destination:
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+
         try:
             writer = self._configure_spark_writer(data, config)
+
             csv_options = {
                 **DEFAULT_CSV_OPTIONS,
                 "quote": '"',
                 "escape": '"',
                 **config.get("options", {}),
             }
+
             for key, value in csv_options.items():
                 writer = writer.option(key, value)
+
             logger.info(f"Writing CSV data to: {destination}")
             writer.save(destination)
             logger.success(f"CSV data written successfully to: {destination}")
+        except WriteOperationError:
+            raise  # Re-raise WriteOperationError as-is
         except Exception as e:
             raise WriteOperationError(
                 f"Failed to write CSV to {destination}: {e}"
             ) from e
 
 
-class JSONWriter(BaseWriter, SparkWriterMixin):
+class JSONWriter(SparkWriterMixin):
     """Writer for JSON format."""
 
+    def __init__(self, context: Any):
+        self.context = context
+
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write JSON data to destination."""
+        if not destination:
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing JSON data to: {destination}")
             writer.save(destination)
             logger.success(f"JSON data written successfully to: {destination}")
+        except WriteOperationError:
+            raise  # Re-raise WriteOperationError as-is
         except Exception as e:
             raise WriteOperationError(
                 f"Failed to write JSON to {destination}: {e}"
             ) from e
 
 
-class ORCWriter(BaseWriter, SparkWriterMixin):
+class ORCWriter(SparkWriterMixin):
     """Writer for ORC format."""
 
+    def __init__(self, context: Any):
+        self.context = context
+
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write ORC data to destination."""
+        if not destination:
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+
         try:
             writer = self._configure_spark_writer(data, config)
             logger.info(f"Writing ORC data to: {destination}")
             writer.save(destination)
             logger.success(f"ORC data written successfully to: {destination}")
+        except WriteOperationError:
+            raise  # Re-raise WriteOperationError as-is
         except Exception as e:
             raise WriteOperationError(
                 f"Failed to write ORC to {destination}: {e}"

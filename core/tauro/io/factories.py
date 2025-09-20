@@ -1,4 +1,3 @@
-from abc import ABC, abstractmethod
 from typing import Any, Dict, Protocol
 
 from tauro.io.constants import SupportedFormats
@@ -10,7 +9,7 @@ class DataReader(Protocol):
 
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         """Read data from source."""
-        pass
+        ...
 
 
 class DataWriter(Protocol):
@@ -18,31 +17,7 @@ class DataWriter(Protocol):
 
     def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
         """Write data to destination."""
-        pass
-
-
-class BaseReader(ABC):
-    """Base class for data readers."""
-
-    def __init__(self, context: Any):
-        self.context = context
-
-    @abstractmethod
-    def read(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read data from source."""
-        pass
-
-
-class BaseWriter(ABC):
-    """Base class for data writers."""
-
-    def __init__(self, context: Any):
-        self.context = context
-
-    @abstractmethod
-    def write(self, data: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data to destination."""
-        pass
+        ...
 
 
 class ReaderFactory:
@@ -50,7 +25,7 @@ class ReaderFactory:
 
     def __init__(self, context: Any):
         self.context = context
-        self._readers = {}
+        self._readers: Dict[str, DataReader] = {}
         self._register_readers()
 
     def _register_readers(self) -> None:
@@ -92,7 +67,7 @@ class WriterFactory:
 
     def __init__(self, context: Any):
         self.context = context
-        self._writers = {}
+        self._writers: Dict[str, DataWriter] = {}
         self._register_writers()
 
     def _register_writers(self) -> None:

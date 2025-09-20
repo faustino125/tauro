@@ -177,7 +177,7 @@ def _stop_impl(config: str, execution_id: str, timeout: int) -> int:
 
         executor = PipelineExecutor(context)
 
-        stopped = executor.stop_streaming_pipeline(execution_id, timeout=timeout)
+        stopped = executor.stop_streaming_pipeline(execution_id, timeout)
         if stopped:
             click.echo(f"Pipeline '{execution_id}' stopped successfully.")
             return ExitCode.SUCCESS.value

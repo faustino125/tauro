@@ -7,6 +7,8 @@ from loguru import logger  # type: ignore
 
 from tauro.io.exceptions import ConfigurationError, DataValidationError
 
+DATAFRAME_EMPTY_MSG = "DataFrame cannot be empty"
+
 
 class BaseValidator(ABC):
     """Base class for all validators."""
@@ -14,7 +16,7 @@ class BaseValidator(ABC):
     @abstractmethod
     def validate(self, data: Any, **kwargs) -> None:
         """Validate the given data."""
-        pass
+        ...
 
 
 class ConfigValidator(BaseValidator):
@@ -28,7 +30,7 @@ class ConfigValidator(BaseValidator):
     ) -> None:
         """Validate configuration against required fields."""
         if not config:
-            raise ConfigurationError(f"{config_type} configuration cannot be None")
+            raise ConfigurationError(f"{config_type} configuration cannot be empty")
 
         missing_fields = [field for field in required_fields if not config.get(field)]
         if missing_fields:
@@ -38,14 +40,26 @@ class ConfigValidator(BaseValidator):
         logger.debug(f"Configuration for {config_type} successfully validated")
 
     def validate_output_key(self, out_key: str) -> Dict[str, str]:
-        """Parse and validate output key format."""
+        """Parse and validate output key format.
+
+        Accepts:
+        - schema.sub_folder.table_name
+        - schema/sub_folder/table_name
+        - With optional prefix before ':', e.g. out_delta:schema/sub/table
+        """
         if not out_key or not isinstance(out_key, str):
             raise ConfigurationError("Output key must be a non-empty string")
 
-        parts = out_key.split(".")
+        s = out_key.strip()
+        if ":" in s:
+            s = s.split(":", 1)[1].strip()
+
+        s = s.replace("/", ".")
+        parts = [p.strip() for p in s.split(".") if p.strip()]
         if len(parts) != 3:
             raise ConfigurationError(
-                f"Invalid format: {out_key}. Must be 'schema.sub_folder.table_name'"
+                f"Invalid format: {out_key}. Must be one of: "
+                "schema.sub_folder.table_name or schema/sub_folder/table_name"
             )
 
         result = {"schema": parts[0], "sub_folder": parts[1], "table_name": parts[2]}
@@ -83,10 +97,39 @@ class DataValidator(BaseValidator):
 
     def validate_dataframe(self, df: Any, allow_empty: bool = False) -> None:
         """Validate DataFrame object."""
-        self.validate(df)
+        # Spark
+        if self._is_spark_df(df):
+            if df.isEmpty() and not allow_empty:
+                raise DataValidationError(DATAFRAME_EMPTY_MSG)
+            return
 
-        if hasattr(df, "isEmpty") and df.isEmpty() and not allow_empty:
-            raise DataValidationError("DataFrame cannot be empty")
+        # Pandas
+        if self._is_pandas_df(df) and df.empty and not allow_empty:
+            raise DataValidationError(DATAFRAME_EMPTY_MSG)
+
+        # Polars
+        if self._is_polars_df(df) and df.height == 0 and not allow_empty:
+            raise DataValidationError(DATAFRAME_EMPTY_MSG)
+
+    def _is_spark_df(self, df: Any) -> bool:
+        """Return True if object appears to be a Spark DataFrame."""
+        return hasattr(df, "isEmpty")
+
+    def _is_pandas_df(self, df: Any) -> bool:
+        """Return True if object is a pandas DataFrame."""
+        try:
+            import pandas as _pd  # type: ignore
+        except Exception:
+            return False
+        return isinstance(df, _pd.DataFrame)
+
+    def _is_polars_df(self, df: Any) -> bool:
+        """Return True if object is a polars DataFrame."""
+        try:
+            import polars as _pl  # type: ignore
+        except Exception:
+            return False
+        return isinstance(df, _pl.DataFrame)
 
     def validate_columns_exist(self, df: Any, columns: List[str]) -> None:
         """Validate that specified columns exist in DataFrame."""

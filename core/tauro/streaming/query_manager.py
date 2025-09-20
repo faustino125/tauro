@@ -9,7 +9,6 @@ from pyspark.sql import DataFrame  # type: ignore
 from pyspark.sql.streaming import StreamingQuery  # type: ignore
 import pyspark.sql.functions as f  # type: ignore
 
-# default interval used for processingTime triggers and watermarks
 DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
 from tauro.streaming.constants import (
@@ -372,51 +371,13 @@ class StreamingQueryManager:
     ) -> str:
         """Get checkpoint location for the streaming query with validation."""
         try:
-            if base_checkpoint:
-                checkpoint_base = base_checkpoint
-            else:
-                checkpoints_base = None
-                try:
-                    gs = getattr(self.context, "global_settings", {}) or {}
-                    if isinstance(gs, dict):
-                        checkpoints_base = gs.get("checkpoints_base")
-                except Exception:
-                    checkpoints_base = None
-
-                if checkpoints_base:
-                    checkpoint_base = str(checkpoints_base)
-                else:
-                    output_path = getattr(
-                        self.context, "output_path", "/tmp/checkpoints"
-                    )
-                    checkpoint_base = os.path.join(output_path, "streaming_checkpoints")
-
-            cloud_schemes = (
-                "s3://",
-                "gs://",
-                "abfs://",
-                "abfss://",
-                "hdfs://",
-                "dbfs:/",
+            checkpoint_base = self._determine_checkpoint_base(base_checkpoint)
+            checkpoint_path = self._build_checkpoint_path(
+                checkpoint_base, pipeline_name, node_name, execution_id
             )
 
-            if str(checkpoint_base).startswith(cloud_schemes):
-                checkpoint_path = f"{checkpoint_base.rstrip('/')}/{pipeline_name}/{node_name}/{execution_id}"
-            else:
-                checkpoint_path = os.path.join(
-                    checkpoint_base, pipeline_name, node_name, execution_id
-                )
-
-            if not str(checkpoint_path).startswith(cloud_schemes):
-                try:
-                    Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
-                except OSError as e:
-                    raise StreamingError(
-                        f"Cannot create checkpoint directory '{checkpoint_path}': {str(e)}",
-                        error_code="CHECKPOINT_CREATION_ERROR",
-                        context={"checkpoint_path": checkpoint_path},
-                        cause=e,
-                    ) from e
+            if not self._is_cloud_path(checkpoint_path):
+                self._ensure_checkpoint_dir(checkpoint_path)
 
             return checkpoint_path
 
@@ -431,6 +392,61 @@ class StreamingQueryManager:
                     cause=e,
                 ) from e
 
+    def _determine_checkpoint_base(self, base_checkpoint: Optional[str]) -> str:
+        """Determine the base directory for checkpoints."""
+        if base_checkpoint:
+            return base_checkpoint
+
+        checkpoints_base = None
+        try:
+            gs = getattr(self.context, "global_settings", {}) or {}
+            if isinstance(gs, dict):
+                checkpoints_base = gs.get("checkpoints_base")
+        except Exception:
+            checkpoints_base = None
+
+        if checkpoints_base:
+            return str(checkpoints_base)
+
+        output_path = getattr(self.context, "output_path", "/tmp/checkpoints")
+        return os.path.join(output_path, "streaming_checkpoints")
+
+    def _is_cloud_path(self, path: str) -> bool:
+        """Return True if path appears to be on a cloud filesystem."""
+        cloud_schemes = (
+            "s3://",
+            "gs://",
+            "abfs://",
+            "abfss://",
+            "hdfs://",
+            "dbfs:/",
+        )
+        return str(path).startswith(cloud_schemes)
+
+    def _build_checkpoint_path(
+        self,
+        checkpoint_base: str,
+        pipeline_name: str,
+        node_name: str,
+        execution_id: str,
+    ) -> str:
+        """Build the full checkpoint path from base and identifiers."""
+        if self._is_cloud_path(checkpoint_base):
+            return f"{checkpoint_base.rstrip('/')}/{pipeline_name}/{node_name}/{execution_id}"
+        return os.path.join(checkpoint_base, pipeline_name, node_name, execution_id)
+
+    def _ensure_checkpoint_dir(self, checkpoint_path: str) -> None:
+        """Ensure checkpoint directory exists for local filesystems, raising StreamingError on failure."""
+        try:
+            Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise StreamingError(
+                f"Cannot create checkpoint directory '{checkpoint_path}': {str(e)}",
+                error_code="CHECKPOINT_CREATION_ERROR",
+                context={"checkpoint_path": checkpoint_path},
+                cause=e,
+            ) from e
+
     def _configure_trigger(
         self, trigger_config: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -441,80 +457,16 @@ class StreamingQueryManager:
             )
             trigger_type = str(trigger_type_raw).lower()
 
-            trigger_map = {
-                StreamingTrigger.PROCESSING_TIME.value.lower(): "processingTime",
-                StreamingTrigger.ONCE.value.lower(): "once",
-                StreamingTrigger.CONTINUOUS.value.lower(): "continuous",
-                StreamingTrigger.AVAILABLE_NOW.value.lower(): "availableNow",
-            }
-
-            valid_triggers = list(trigger_map.keys())
-            if trigger_type not in valid_triggers:
-                raise StreamingConfigurationError(
-                    f"Invalid trigger type '{trigger_type_raw}'. Valid types: {valid_triggers}",
-                    config_section="trigger.type",
-                    config_value=trigger_type_raw,
-                )
-
-            mapped_key = trigger_map[trigger_type]
+            mapped_key = self._map_trigger_type(trigger_type, trigger_type_raw)
 
             if mapped_key == "processingTime":
-                interval = str(
-                    trigger_config.get("interval", DEFAULT_PROCESSING_TIME_INTERVAL)
-                )
-                # usar validaciones del validator (nota: usa métodos "privados" actualmente)
-                if not getattr(
-                    self.validator, "_validate_time_interval", lambda x: True
-                )(interval):
-                    raise StreamingConfigurationError(
-                        f"Invalid processingTime interval '{interval}'",
-                        config_section="trigger.interval",
-                        config_value=interval,
-                    )
-                min_interval = int(
-                    STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
-                )
-                if (
-                    getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(
-                        interval
-                    )
-                    < min_interval
-                ):
-                    raise StreamingConfigurationError(
-                        f"processingTime interval '{interval}' is below minimum of {min_interval} seconds",
-                        config_section="trigger.interval",
-                        config_value=interval,
-                    )
-                return {"processingTime": interval}
+                return self._build_processing_time_trigger(trigger_config)
 
             if mapped_key == "once":
                 return {"once": True}
 
             if mapped_key == "continuous":
-                interval = str(trigger_config.get("interval", "1 second"))
-                if not getattr(
-                    self.validator, "_validate_time_interval", lambda x: True
-                )(interval):
-                    raise StreamingConfigurationError(
-                        f"Invalid continuous interval '{interval}'",
-                        config_section="trigger.interval",
-                        config_value=interval,
-                    )
-                min_interval = int(
-                    STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
-                )
-                if (
-                    getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(
-                        interval
-                    )
-                    < min_interval
-                ):
-                    raise StreamingConfigurationError(
-                        f"continuous interval '{interval}' is below minimum of {min_interval} seconds",
-                        config_section="trigger.interval",
-                        config_value=interval,
-                    )
-                return {"continuous": interval}
+                return self._build_continuous_trigger(trigger_config)
 
             if mapped_key == "availableNow":
                 return {"availableNow": True}
@@ -531,6 +483,60 @@ class StreamingQueryManager:
                     config_section="trigger",
                     cause=e,
                 ) from e
+
+    def _map_trigger_type(self, trigger_type: str, trigger_type_raw: Any) -> str:
+        """Map raw trigger type to internal key and validate it."""
+        trigger_map = {
+            StreamingTrigger.PROCESSING_TIME.value.lower(): "processingTime",
+            StreamingTrigger.ONCE.value.lower(): "once",
+            StreamingTrigger.CONTINUOUS.value.lower(): "continuous",
+            StreamingTrigger.AVAILABLE_NOW.value.lower(): "availableNow",
+        }
+        valid_triggers = list(trigger_map.keys())
+        if trigger_type not in valid_triggers:
+            raise StreamingConfigurationError(
+                f"Invalid trigger type '{trigger_type_raw}'. Valid types: {valid_triggers}",
+                config_section="trigger.type",
+                config_value=trigger_type_raw,
+            )
+        return trigger_map[trigger_type]
+
+    def _validate_interval(self, interval: str, config_section: str) -> None:
+        """Validate an interval string and ensure it meets the minimum configured seconds."""
+        if not getattr(self.validator, "_validate_time_interval", lambda x: True)(
+            interval
+        ):
+            raise StreamingConfigurationError(
+                f"Invalid {config_section.split('.')[-1]} interval '{interval}'",
+                config_section=config_section,
+                config_value=interval,
+            )
+        min_interval = int(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
+        if (
+            getattr(self.validator, "_parse_time_to_seconds", lambda x: 0)(interval)
+            < min_interval
+        ):
+            raise StreamingConfigurationError(
+                f"{config_section.split('.')[-1]} interval '{interval}' is below minimum of {min_interval} seconds",
+                config_section=config_section,
+                config_value=interval,
+            )
+
+    def _build_processing_time_trigger(
+        self, trigger_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build processingTime trigger dict after validation."""
+        interval = str(trigger_config.get("interval", DEFAULT_PROCESSING_TIME_INTERVAL))
+        self._validate_interval(interval, "trigger.interval")
+        return {"processingTime": interval}
+
+    def _build_continuous_trigger(
+        self, trigger_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build continuous trigger dict after validation."""
+        interval = str(trigger_config.get("interval", "1 second"))
+        self._validate_interval(interval, "trigger.interval")
+        return {"continuous": interval}
 
     def stop_query(
         self,
@@ -549,39 +555,17 @@ class StreamingQueryManager:
             )
 
             start_time = time.time()
-            stop_call = getattr(query, "stop", None)
-            if callable(stop_call):
-                stop_call()
-            else:
-                try:
-                    setattr(query, "isActive", False)
-                except Exception:
-                    pass
+            self._call_stop_or_set_inactive(query)
 
             if graceful:
-                while (
-                    self._is_query_active(query)
-                    and (time.time() - start_time) < timeout_seconds
-                ):
-                    time.sleep(0.5)
-
-                if self._is_query_active(query):
+                stopped = self._wait_until_stopped(query, start_time, timeout_seconds)
+                if not stopped:
                     logger.warning(
                         f"Query '{self._get_query_name(query)}' did not stop within {timeout_seconds}s timeout"
                     )
                     return False
 
-            query_key = None
-            with self._active_queries_lock:
-                for key, info in list(self._active_queries.items()):
-                    if self._get_query_id(info.get("query")) == self._get_query_id(
-                        query
-                    ):
-                        query_key = key
-                        break
-
-                if query_key:
-                    del self._active_queries[query_key]
+            self._remove_query_from_active(query)
 
             logger.info(f"Query '{self._get_query_name(query)}' stopped successfully")
             return True
@@ -596,6 +580,51 @@ class StreamingQueryManager:
                 query_name=self._get_query_name(query),
                 cause=e,
             ) from e
+
+    def _call_stop_or_set_inactive(self, query: StreamingQuery) -> None:
+        """Invoke the query stop if available, otherwise attempt to set isActive to False."""
+        stop_call = getattr(query, "stop", None)
+        if callable(stop_call):
+            try:
+                stop_call()
+            except Exception:
+                pass
+        else:
+            try:
+                setattr(query, "isActive", False)
+            except Exception:
+                pass
+
+    def _wait_until_stopped(
+        self, query: StreamingQuery, start_time: float, timeout_seconds: float
+    ) -> bool:
+        """Wait until the query becomes inactive or the timeout elapses; returns True if stopped."""
+        try:
+            while (
+                self._is_query_active(query)
+                and (time.time() - start_time) < timeout_seconds
+            ):
+                time.sleep(0.5)
+            return not self._is_query_active(query)
+        except Exception:
+            return False
+
+    def _remove_query_from_active(self, query: StreamingQuery) -> None:
+        """Remove query entry from the active queries map if present."""
+        query_key = None
+        with self._active_queries_lock:
+            for key, info in self._active_queries.items():
+                try:
+                    if self._get_query_id(info.get("query")) == self._get_query_id(
+                        query
+                    ):
+                        query_key = key
+                        break
+                except Exception:
+                    continue
+
+            if query_key:
+                del self._active_queries[query_key]
 
     def get_query_progress(self, query: StreamingQuery) -> Optional[Dict[str, Any]]:
         """Get progress information for a streaming query with error handling."""
