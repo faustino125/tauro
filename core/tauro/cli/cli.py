@@ -1,19 +1,11 @@
-"""Copyright (c) 2025 Tauro. All rights reserved.
-
-This software is the proprietary intellectual property of Tauro and is
-protected by copyright laws and international treaties. Any unauthorized
-reproduction, distribution, modification, or other use of this software
-is strictly prohibited without the express prior written consent of Tauro.
-
-Licensed under a proprietary license with restricted commercial use. See
-the license agreement for details.
 """
-
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 import argparse
 import sys
 from pathlib import Path
 import traceback
-from datetime import datetime
 from typing import List, Optional, Union
 
 from loguru import logger  # type: ignore
@@ -413,31 +405,7 @@ class TauroCLI:
         parsed_args = None
         try:
             parsed_args = self._parse_and_setup_logger(args)
-
-            result = self._handle_quick_commands(parsed_args)
-            if result is not None:
-                return result
-
-            special_result = self._handle_special_modes(parsed_args)
-            if special_result is not None:
-                return special_result
-
-            _normalize_and_validate_dates(parsed_args)
-
-            self.config = self.parse_arguments(parsed_args=parsed_args)
-
-            ConfigValidator.validate(self.config)
-
-            logger.info("Starting Tauro CLI execution")
-            logger.info(f"Environment: {self.config.env.upper()}")
-            logger.info(f"Pipeline: {self.config.pipeline}")
-
-            self._init_config_manager()
-            context_init = ContextInitializer(self.config_manager)
-
-            if self.config.validate_only:
-                return self._handle_validate_only(context_init)
-            return self._execute_pipeline(context_init)
+            return self._run_with_parsed_args(parsed_args)
 
         except TauroError as e:
             logger.error(f"Tauro error: {e}")
@@ -464,6 +432,33 @@ class TauroCLI:
                 except Exception:
                     pass
             ConfigCache.clear()
+
+    def _run_with_parsed_args(self, parsed_args: argparse.Namespace) -> int:
+        """Core flow extracted from run to reduce cognitive complexity."""
+        result = self._handle_quick_commands(parsed_args)
+        if result is not None:
+            return result
+
+        special_result = self._handle_special_modes(parsed_args)
+        if special_result is not None:
+            return special_result
+
+        _normalize_and_validate_dates(parsed_args)
+
+        self.config = self.parse_arguments(parsed_args=parsed_args)
+
+        ConfigValidator.validate(self.config)
+
+        logger.info("Starting Tauro CLI execution")
+        logger.info(f"Environment: {self.config.env.upper()}")
+        logger.info(f"Pipeline: {self.config.pipeline}")
+
+        self._init_config_manager()
+        context_init = ContextInitializer(self.config_manager)
+
+        if self.config.validate_only:
+            return self._handle_validate_only(context_init)
+        return self._execute_pipeline(context_init)
 
     def _parse_and_setup_logger(self, args: Optional[List[str]]) -> argparse.Namespace:
         """Parse arguments and setup logger."""

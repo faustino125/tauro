@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import Any, Dict
 
 from loguru import logger  # type: ignore
@@ -179,11 +183,14 @@ class DeltaWriter(SparkWriterMixin):
                 "overwrite_strategy=replaceWhere requires partition_col, start_date and end_date"
             )
 
-    def _apply_overwrite_and_replacewhere(self, writer, config: dict):
+    def _apply_overwrite_and_replacewhere(
+        self, writer, config: dict, write_mode: str = None
+    ):
         """Apply write mode, overwriteSchema and (optionally) replaceWhere strategy."""
         try:
-            mode = str(config.get("write_mode", "overwrite")).lower()
-            writer = writer.mode(mode)
+            mode = str(write_mode or config.get("write_mode", "overwrite")).lower()
+            if write_mode is None:
+                writer = writer.mode(mode)
 
             if config.get("overwrite_schema", True):
                 writer = writer.option("overwriteSchema", "true")

@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 from abc import ABC, abstractmethod
 from functools import cached_property
 from pathlib import Path

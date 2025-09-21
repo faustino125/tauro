@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 
 import importlib.util
@@ -66,7 +70,6 @@ class PythonConfigLoader(ConfigLoader):
         return source.suffix.lower() == ".py"
 
     def _load_module(self, path: Path):
-        # Use a module name unique to the path to avoid collisions
         module_name = f"tauro_config_{abs(hash(str(path)))}"
         spec = importlib.util.spec_from_file_location(module_name, path)
 
@@ -74,7 +77,6 @@ class PythonConfigLoader(ConfigLoader):
             raise ConfigLoadError(f"Could not load Python module: {path}")
 
         module = importlib.util.module_from_spec(spec)
-        # Do not override unrelated modules with same stem
         sys.modules[module_name] = module
 
         try:
@@ -176,7 +178,6 @@ class DSLConfigLoader(ConfigLoader):
         raise ConfigLoadError(f"Unrecognized DSL syntax at {path}:{line_num}: {line}")
 
     def _parse_value(self, value: str) -> Union[str, int, float, bool, List[Any]]:
-        # Strip surrounding quotes for strings early (but keep value for further checks)
         if (value.startswith('"') and value.endswith('"')) or (
             value.startswith("'") and value.endswith("'")
         ):
@@ -188,19 +189,16 @@ class DSLConfigLoader(ConfigLoader):
         if low == "false":
             return False
 
-        # Integer
         try:
             return int(value)
         except ValueError:
             pass
 
-        # Float
         try:
             return float(value)
         except ValueError:
             pass
 
-        # List
         if value.startswith("[") and value.endswith("]"):
             inner = value[1:-1].strip()
             if not inner:
@@ -208,7 +206,6 @@ class DSLConfigLoader(ConfigLoader):
             items = [i.strip() for i in inner.split(",")]
             return [self._parse_value(i) for i in items if i != ""]
 
-        # Fallback: treat as bare string
         return value
 
 
@@ -230,34 +227,47 @@ class ConfigLoaderFactory:
         raise ConfigLoadError(f"No supported loader for source: {source}")
 
     def load_config(self, source: Union[str, Dict, Path]) -> Dict[str, Any]:
-        # If it's already a dict, nothing to do
         if isinstance(source, dict):
             return source
 
-        # If it's a string that looks like JSON/YAML content, try parsing it directly
+        if isinstance(source, Path):
+            return self._load_from_path(source)
+
         if isinstance(source, str):
             text = source.strip()
-            # JSON-like (object or array)
-            if text.startswith("{") or text.startswith("["):
-                try:
-                    return json.loads(source)
-                except Exception:
-                    # Fallback to YAML if PyYAML available
-                    if yaml is not None:
-                        try:
-                            return yaml.safe_load(source) or {}
-                        except Exception:
-                            pass
-            # If it looks like an existing file path, prefer loading from disk
+
+            parsed = self._try_parse_inline_text(text)
+            if parsed is not None:
+                return parsed
+
             p = Path(source)
             if p.exists():
                 return self.get_loader(p).load(p)
 
-        # If it's a Path object that exists, load from it
-        if isinstance(source, Path):
-            if source.exists():
-                return self.get_loader(source).load(source)
-            raise ConfigLoadError(f"File not found: {source}")
-
-        # Last resort: try to get a loader based on suffix (this will raise if none matches)
         return self.get_loader(source).load(source)
+
+    def _try_parse_inline_text(
+        self, text: str
+    ) -> Union[Dict[str, Any], List[Any], None]:
+        """Try to parse a string as JSON or YAML; return None on failure or if not applicable."""
+        if not text:
+            return None
+
+        if not (text.startswith("{") or text.startswith("[")):
+            return None
+
+        try:
+            return json.loads(text)
+        except Exception:
+            if yaml is not None:
+                try:
+                    return yaml.safe_load(text) or {}
+                except Exception:
+                    return None
+        return None
+
+    def _load_from_path(self, path: Path) -> Dict[str, Any]:
+        """Load configuration from a Path, raising a clear error if missing."""
+        if path.exists():
+            return self.get_loader(path).load(path)
+        raise ConfigLoadError(f"File not found: {path}")

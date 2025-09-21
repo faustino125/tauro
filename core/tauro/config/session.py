@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 import sys
 import os
 from typing import Any, Dict, List, Literal, Optional

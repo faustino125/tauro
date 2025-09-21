@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 import re
 from datetime import datetime
 from abc import ABC, abstractmethod
@@ -8,6 +12,7 @@ from loguru import logger  # type: ignore
 from tauro.io.exceptions import ConfigurationError, DataValidationError
 
 DATAFRAME_EMPTY_MSG = "DataFrame cannot be empty"
+DATAFRAME_EMPTY = "DataFrame is empty"
 
 
 class BaseValidator(ABC):
@@ -102,9 +107,9 @@ class DataValidator:
                 hasattr(df, "isEmpty")
                 and callable(getattr(df, "isEmpty"))
                 and not allow_empty
+                and df.isEmpty()  # type: ignore[attr-defined]
             ):
-                if df.isEmpty():  # type: ignore[attr-defined]
-                    raise DataValidationError("DataFrame is empty")
+                raise DataValidationError(DATAFRAME_EMPTY)
         except Exception:
             pass
 
@@ -112,7 +117,7 @@ class DataValidator:
             import pandas as pd  # type: ignore
 
             if isinstance(df, pd.DataFrame) and not allow_empty and df.empty:
-                raise DataValidationError("DataFrame is empty")
+                raise DataValidationError(DATAFRAME_EMPTY)
         except Exception:
             pass
 
@@ -124,7 +129,7 @@ class DataValidator:
                 and not allow_empty
                 and getattr(df, "height", None) == 0
             ):
-                raise DataValidationError("DataFrame is empty")
+                raise DataValidationError(DATAFRAME_EMPTY)
         except Exception:
             pass
 

@@ -1,5 +1,8 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import Any, Dict, List, Optional, Tuple
-
 from loguru import logger  # type: ignore
 
 from tauro.config.validators import FormatPolicy

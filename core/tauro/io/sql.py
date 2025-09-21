@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import ClassVar, Set, List
 import re
 from loguru import logger  # type: ignore
@@ -161,37 +165,56 @@ class SQLSanitizer:
             return
 
         for c in comments:
-            comment_text = c
-            if comment_text.startswith("--"):
-                content = comment_text[2:]
-            elif comment_text.startswith("#"):
-                content = comment_text[1:]
-            elif comment_text.startswith("/*") and comment_text.endswith("*/"):
-                content = comment_text[2:-2]
-            else:
-                content = comment_text
+            content_lower = cls._normalize_comment_content(c)
+            cls._assert_no_semicolon_in_comment(content_lower)
 
-            content_lower = content.lower()
-
-            if ";" in content_lower:
+            kw = cls._find_dangerous_keyword_in_comment(content_lower)
+            if kw:
                 raise ConfigurationError(
-                    "Comments in query contain semicolon which could indicate multiple statements"
+                    f"Comments contain dangerous keyword '{kw}' which is not allowed"
                 ) from None
 
-            for keyword in cls.DANGEROUS_KEYWORDS:
-                if keyword in content_lower:
-                    raise ConfigurationError(
-                        f"Comments contain dangerous keyword '{keyword}' which is not allowed"
-                    ) from None
+            if cls._comment_contains_suspicious_pattern(content_lower):
+                raise ConfigurationError(
+                    "Comments contain suspicious pattern that may indicate SQL injection attempt"
+                ) from None
 
-            for pattern in cls.SUSPICIOUS_PATTERNS:
-                try:
-                    if re.search(pattern, content_lower, re.IGNORECASE):
-                        raise ConfigurationError(
-                            "Comments contain suspicious pattern that may indicate SQL injection attempt"
-                        ) from None
-                except re.error:
-                    continue
+    @classmethod
+    def _normalize_comment_content(cls, comment: str) -> str:
+        """Return the content of a comment normalized to lower case without delimiters."""
+        if comment.startswith("--"):
+            content = comment[2:]
+        elif comment.startswith("#"):
+            content = comment[1:]
+        elif comment.startswith("/*") and comment.endswith("*/"):
+            content = comment[2:-2]
+        else:
+            content = comment
+        return content.lower()
+
+    @classmethod
+    def _assert_no_semicolon_in_comment(cls, content_lower: str) -> None:
+        if ";" in content_lower:
+            raise ConfigurationError(
+                "Comments in query contain semicolon which could indicate multiple statements"
+            ) from None
+
+    @classmethod
+    def _find_dangerous_keyword_in_comment(cls, content_lower: str):
+        for keyword in cls.DANGEROUS_KEYWORDS:
+            if keyword in content_lower:
+                return keyword
+        return None
+
+    @classmethod
+    def _comment_contains_suspicious_pattern(cls, content_lower: str) -> bool:
+        for pattern in cls.SUSPICIOUS_PATTERNS:
+            try:
+                if re.search(pattern, content_lower, re.IGNORECASE):
+                    return True
+            except re.error:
+                continue
+        return False
 
     @classmethod
     def _check_multiple_statements(cls, query: str) -> None:

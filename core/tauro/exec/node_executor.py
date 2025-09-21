@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos. 
+For licensing information, see the LICENSE file in the project root
+"""
 import inspect
 import time
 from collections import deque
@@ -391,7 +395,7 @@ class NodeExecutor:
         time.sleep(5)
 
         remaining_futures = []
-        for future, node_info in list(running.items()):
+        for future, node_info in running.items():
             node_name = node_info["node_name"]
             if future.done():
                 try:
@@ -412,7 +416,7 @@ class NodeExecutor:
     def _cancel_all_futures(self, running: Dict) -> None:
         """Cancel all running futures."""
         logger.warning(f"Cancelling {len(running)} running futures")
-        for future, node_info in list(running.items()):
+        for future, node_info in running.items():
             node_name = node_info["node_name"]
             logger.warning(f"Cancelling future for node '{node_name}'")
             try:
@@ -427,7 +431,7 @@ class NodeExecutor:
 
         logger.debug(f"Cleaning up {len(running)} remaining futures")
 
-        for future, node_info in list(running.items()):
+        for future, node_info in running.items():
             node_name = node_info["node_name"]
             try:
                 if not future.done():
