@@ -1,9 +1,17 @@
 from __future__ import annotations
 from typing import Dict, List, Callable, Optional, Set, Any
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_EXCEPTION
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    Future,
+    wait,
+    FIRST_EXCEPTION,
+    as_completed,
+)
 from collections import defaultdict, deque
 import threading
+import time
+import signal
 
 from loguru import logger  # type: ignore
 
@@ -35,6 +43,15 @@ class LocalDagExecutor:
         )
         # Event to signal a global stop when a failure occurs
         self._stop_event = threading.Event()
+
+        # Configurar manejo de señales para shutdown graceful
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        """Manejar señales de terminación"""
+        logger.info(f"Received signal {signum}, shutting down gracefully...")
+        self._stop_event.set()
 
     def _get_pipeline_nodes_and_configs(
         self, pipeline_name: str
@@ -93,6 +110,7 @@ class LocalDagExecutor:
                 retry_delay_sec,
                 tr,
                 on_task_state,
+                timeout_seconds,
             )
             return None
 
@@ -108,14 +126,29 @@ class LocalDagExecutor:
         retry_delay_sec: int,
         tr: TaskRun,
         on_task_state: Callable[[TaskRun], None],
+        timeout_seconds: Optional[int] = None,
     ):
         last_exc: Optional[Exception] = None
         for attempt in range(retries + 1):
             try:
-                self.node_executor.execute_single_node(
-                    node_name, start_date, end_date, ml_info={}
-                )
+                # Ejecutar con timeout si está configurado
+                if timeout_seconds:
+                    self._execute_with_timeout(
+                        node_name, start_date, end_date, timeout_seconds
+                    )
+                else:
+                    self.node_executor.execute_single_node(
+                        node_name, start_date, end_date, ml_info={}
+                    )
                 return None
+            except TimeoutError:
+                last_exc = TimeoutError(
+                    f"Node {node_name} timed out after {timeout_seconds} seconds"
+                )
+                if attempt < retries:
+                    self._prepare_retry(tr, attempt, retry_delay_sec, on_task_state)
+                else:
+                    raise last_exc
             except Exception as e:  # noqa: PERF203
                 last_exc = e
                 if attempt < retries:
@@ -124,6 +157,46 @@ class LocalDagExecutor:
                     raise
         if last_exc:
             raise last_exc
+
+    def _execute_with_timeout(
+        self,
+        node_name: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+        timeout_seconds: int,
+    ):
+        """Ejecutar un nodo con timeout usando threads"""
+        result = None
+        exception = None
+        done = threading.Event()
+
+        def _worker():
+            nonlocal result, exception
+            try:
+                result = self.node_executor.execute_single_node(
+                    node_name, start_date, end_date, ml_info={}
+                )
+            except Exception as e:
+                exception = e
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        # Esperar con timeout
+        done.wait(timeout=timeout_seconds)
+
+        if not done.is_set():
+            # Timeout ocurrido
+            raise TimeoutError(
+                f"Node {node_name} execution timed out after {timeout_seconds} seconds"
+            )
+
+        if exception is not None:
+            raise exception
+
+        return result
 
     def _prepare_retry(
         self,
@@ -134,9 +207,11 @@ class LocalDagExecutor:
     ) -> None:
         # Sleep progressively if configured, update try number and notify state
         if retry_delay_sec > 0:
-            import time as _t
-
-            _t.sleep(retry_delay_sec * (attempt + 1))
+            sleep_time = retry_delay_sec * (attempt + 1)
+            logger.info(
+                f"Waiting {sleep_time} seconds before retry attempt {attempt + 2}"
+            )
+            time.sleep(sleep_time)
         tr.try_number = attempt + 2  # siguiente intento es 2..N
         on_task_state(tr)
 
@@ -289,6 +364,9 @@ class LocalDagExecutor:
                     self._wait_and_process(
                         running, task_runs, children, on_task_state, indegree, ready
                     )
+            except Exception as e:
+                logger.exception(f"DAG execution failed: {e}")
+                raise
             finally:
                 # Best-effort: mark any tasks that were not started or still running as cancelled/skipped
                 for other, ofut in list(running.items()):
