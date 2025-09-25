@@ -1,7 +1,3 @@
-"""
-Copyright (c) 2025 Faustino Lopez Ramos. 
-For licensing information, see the LICENSE file in the project root
-"""
 import re
 from datetime import datetime
 from abc import ABC, abstractmethod
@@ -138,6 +134,19 @@ class DataValidator:
         if not hasattr(df, "columns"):
             raise DataValidationError("Object does not have columns attribute")
 
-        missing_cols = [col for col in columns if col not in df.columns]
+        try:
+            available = list(df.columns)
+        except Exception:
+            try:
+                if hasattr(df, "schema") and hasattr(df.schema, "names"):
+                    available = list(df.schema.names)  # type: ignore[attr-defined]
+                else:
+                    available = []
+            except Exception:
+                available = []
+
+        missing_cols = [col for col in columns if col not in available]
         if missing_cols:
-            raise DataValidationError(f"Columns not found in DataFrame: {missing_cols}")
+            raise DataValidationError(
+                f"Columns not found in DataFrame: {missing_cols}. Available columns: {available}"
+            )

@@ -20,7 +20,6 @@ class SparkReaderBase(BaseIO):
         super().__init__(context)
 
     def _spark_read(self, fmt: str, filepath: str, config: Dict[str, Any]) -> Any:
-        """Método genérico de lectura Spark con validación de presencia."""
         spark = self._ctx_spark()
         if spark is None:
             raise ReadOperationError(
@@ -28,11 +27,14 @@ class SparkReaderBase(BaseIO):
             ) from None
         logger.info(f"Reading {fmt.upper()} data from: {filepath}")
         try:
-            return (
-                spark.read.options(**config.get("options", {}))
-                .format(fmt)
-                .load(filepath)
-            )
+            reader = spark.read.options(**config.get("options", {})).format(fmt)
+            partition_filter = config.get("partition_filter")
+            if partition_filter:
+                df = reader.load(filepath)
+                logger.info(f"Aplicando partition_filter: {partition_filter}")
+                return df.where(partition_filter)
+            else:
+                return reader.load(filepath)
         except Exception as e:
             raise ReadOperationError(
                 f"Spark failed to read {fmt.upper()} from {filepath}: {e}"
@@ -40,10 +42,7 @@ class SparkReaderBase(BaseIO):
 
 
 class ParquetReader(SparkReaderBase):
-    """Reader for Parquet format."""
-
     def read(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read Parquet data from source."""
         try:
             return self._spark_read("parquet", source, config)
         except ReadOperationError:
@@ -55,10 +54,7 @@ class ParquetReader(SparkReaderBase):
 
 
 class JSONReader(SparkReaderBase):
-    """Reader for JSON format."""
-
     def read(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read JSON data from source."""
         try:
             return self._spark_read("json", source, config)
         except ReadOperationError:
@@ -68,10 +64,7 @@ class JSONReader(SparkReaderBase):
 
 
 class CSVReader(SparkReaderBase):
-    """Reader for CSV format."""
-
     def read(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read CSV data from source."""
         try:
             options = {**DEFAULT_CSV_OPTIONS, **config.get("options", {})}
             config_with_defaults = {**config, "options": options}
@@ -83,10 +76,7 @@ class CSVReader(SparkReaderBase):
 
 
 class DeltaReader(SparkReaderBase):
-    """Reader for Delta Lake format."""
-
     def read(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read Delta data from source."""
         try:
             spark = self._ctx_spark()
             if spark is None:
@@ -98,11 +88,19 @@ class DeltaReader(SparkReaderBase):
             version = config.get("versionAsOf") or config.get("version")
             timestamp = config.get("timestampAsOf") or config.get("timestamp")
 
+            partition_filter = config.get("partition_filter")
+
             if version is not None:
-                return reader.option("versionAsOf", version).load(source)
-            if timestamp is not None:
-                return reader.option("timestampAsOf", timestamp).load(source)
-            return reader.load(source)
+                df = reader.option("versionAsOf", version).load(source)
+            elif timestamp is not None:
+                df = reader.option("timestampAsOf", timestamp).load(source)
+            else:
+                df = reader.load(source)
+
+            if partition_filter:
+                logger.info(f"Aplicando partition_filter: {partition_filter}")
+                return df.where(partition_filter)
+            return df
         except ReadOperationError:
             raise
         except Exception as e:

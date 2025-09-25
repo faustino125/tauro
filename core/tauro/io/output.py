@@ -491,7 +491,8 @@ class UnityCatalogManager(BaseIO):
             "options": config.get("options", {}),
         }
 
-        if config.get("overwrite_strategy") == "replaceWhere":
+        overwrite_strategy = str(config.get("overwrite_strategy", "")).strip()
+        if overwrite_strategy.lower() == "replacewhere":
             writer_config.update(
                 {
                     "overwrite_strategy": "replaceWhere",

@@ -1,379 +1,413 @@
-# tauro.io
+# Tauro IO Module
 
-A lightweight, modular IO layer for reading and writing data in Tauro pipelines. It supports both local and distributed (Spark) environments, multiple file formats, Delta Lake, and Databricks Unity Catalog, with clear configuration and sane defaults.
+## Overview
 
-This module provides a robust and flexible I/O system for handling various data formats and storage systems, with built-in support for both local and distributed processing modes.
-
----
-
-## Key Features
-
-- Unified context model: works with both a plain Python dict or Tauro Config Context objects
-- Support for multiple data formats:
-  - Read/Write: Parquet, JSON, CSV, Delta, Pickle, Avro, ORC, XML
-  - Additional support for SQL queries and Unity Catalog
-- Execution modes:
-  - Local execution for development and testing
-  - Distributed execution with Spark support
-  - Special handling for Databricks environments
-- Enhanced validation and error handling:
-  - Robust configuration validation
-  - Comprehensive error handling with detailed logging
-  - Support for both fail-fast and continue-on-error modes
-- Advanced features:
-  - Automatic directory creation in local mode
-  - Cloud storage URI support (s3://, dbfs:/, etc.)
-  - Spark Connect detection and handling
-  - Delta Lake integration with vacuum support
+The `tauro.io` package is a robust, production-ready framework for unified data input/output operations across diverse environments—local filesystems, distributed cloud storage (AWS S3, Azure Data Lake, GCP, Databricks), and Spark/Delta Lake ecosystems. It is designed for reliability, extensibility, and advanced validation, supporting both batch and incremental processing, custom formats, and registry management for machine learning artifacts.
 
 ---
 
-## Installation and Requirements
+## Features
 
-- Python 3.8+
-- Spark (for distributed mode and Spark-based formats)
-- Optional: Delta Lake and XML plugins
-  - Delta: pip install delta-spark
-  - XML: com.databricks:spark-xml on the Spark classpath (or cluster-installed)
-
-If you use Unity Catalog:
-- Run on Databricks or a Spark environment with UC enabled.
-- Ensure spark.databricks.unityCatalog.enabled=true in Spark conf.
+- **Unified API:** Consistent interface for reading/writing data from local, distributed, and cloud sources.
+- **Advanced Validation:** Configuration and data validation using specialized validators; secure SQL query sanitization.
+- **Spark/Delta Lake Integration:** Native support for Spark DataFrames, Delta Lake tables, partitioning, and schema evolution.
+- **Cloud Compatibility:** Handles S3, ABFSS, GS, DBFS, and local paths seamlessly.
+- **Unity Catalog Support:** Automated management of Databricks Unity Catalog schemas/tables, with post-write operations (comments, optimize, vacuum).
+- **Error Handling:** Centralized exception management for configuration, read/write, and format errors.
+- **Custom Formats:** Easily extensible for Avro, ORC, XML, Pickle, and custom query sources.
+- **Artifact Management:** Registry for ML model artifacts with robust metadata and versioning.
 
 ---
 
-## Unified Context
+## Key Components & Technical Usage
 
-All io classes accept either:
-- A Context object (from tauro.config.contexts), or
-- A dict-based context (lighter setup)
+### 1. Context Management
 
-Internally, tauro.io uses helpers to read context consistently (no matter if it's a dict or object):
-- _ctx_get(key, default=None)
-- _ctx_spark()
-- _spark_available()
-- _is_local()
-
-This means your code stays the same whether you pass a dict or a Context object.
-
-### Example: using a Context object
+All operations are driven by a configurable context object (dict or custom class). The `ContextManager` enables seamless access to Spark sessions, execution modes, I/O configs, and global settings.
 
 ```python
-from tauro.config import ContextFactory
-from tauro.io import InputLoader, OutputManager
+from tauro.io.context_manager import ContextManager
 
-context = ContextFactory.from_files(
-    global_settings="config/global.yml",
-    pipelines_config="config/pipelines.yml",
-    nodes_config="config/nodes.yml",
-    input_config="config/input.yml",
-    output_config="config/output.yml",
+context = {...}  # Your config dict or object
+cm = ContextManager(context)
+
+spark = cm.get_spark()
+mode = cm.get_execution_mode()  # "local" or "distributed"
+output_path = cm.get_output_path()
+```
+
+---
+
+### 2. Input Loading
+
+Supports batch and incremental loading from local files, cloud URIs, and SQL queries (with glob patterns, error handling, and format validation).
+
+```python
+from tauro.io.input import InputLoader
+
+input_loader = InputLoader(context)
+datasets = input_loader.load_inputs(node_config)
+```
+
+**Supported formats:** Parquet, Delta, CSV, JSON, Avro, ORC, XML, Pickle, Query
+
+- **Local/Cloud Path Handling:** Automatically detects and processes local or cloud URIs.
+- **Glob Patterns:** Handles glob file patterns in local mode for batch loading.
+- **Custom Format Registration:** Automatically checks dependencies for formats like Delta and XML.
+
+---
+
+### 3. Data Reading (Readers)
+
+Readers are instantiated via the factory pattern for extensibility.
+
+```python
+from tauro.io.factories import ReaderFactory
+
+reader_factory = ReaderFactory(context)
+parquet_reader = reader_factory.get_reader("parquet")
+data = parquet_reader.read("/data/myfile.parquet", config)
+```
+
+- **QueryReader:** Executes sanitized SQL SELECT queries via Spark.
+- **PickleReader:** Supports secure, distributed reading (with OOM safeguards).
+
+---
+
+### 4. Data Writing (Writers)
+
+Writers support transactional and batch writes with partitioning, overwrite strategies, and schema evolution.
+
+```python
+from tauro.io.factories import WriterFactory
+
+writer_factory = WriterFactory(context)
+delta_writer = writer_factory.get_writer("delta")
+delta_writer.write(df, "/output/mytable", config)
+```
+
+- **Advanced Delta Writes:** Supports `replaceWhere` for selective overwrites.
+- **Partitioning:** Automatic validation and application for partitioned writes.
+- **CSV/JSON/Parquet/ORC:** Native Spark support with option injection.
+
+---
+
+### 5. Output Management & Unity Catalog
+
+Automated output saving with Unity Catalog integration for Databricks:
+
+```python
+from tauro.io.output import OutputManager
+
+output_manager = OutputManager(context)
+output_manager.save_output(env, node, df, start_date, end_date, model_version)
+```
+
+- **Unity Catalog:** Handles catalog/schema creation, table linking, comments, optimize, and vacuum.
+- **Artifact Registry:** Saves ML artifacts with metadata in model registry paths.
+
+---
+
+### 6. Validation & Error Handling
+
+- **ConfigValidator:** Validates required fields, output key formats, date formats.
+- **DataValidator:** Checks DataFrame integrity, emptiness, column existence.
+- **SQLSanitizer:** Prevents dangerous SQL operations (only SELECT/CTE allowed).
+
+---
+
+## Example Scenarios
+
+### a) Initial Batch Write (Batch Full)
+
+Write the entire table from scratch, partitioning by one or more key columns (e.g., `date`, `country`):
+
+```python
+config = {
+    "format": "delta",
+    "schema": "sales",
+    "sub_folder": "full_load",
+    "table_name": "transactions",
+    "partition": ["date", "country"],
+    "write_mode": "overwrite",
+}
+output_manager.save_output(
+    env="prod",
+    node={"output": ["sales_full"], "name": "batch_full"},
+    df=df,  # DataFrame with all data
 )
-
-loader = InputLoader(context)
-outputs = OutputManager(context)
 ```
+- Ensures full replacement of the dataset.
+- Partitions are defined in config for optimal query performance and storage management.
 
-### Example: using a dict
+---
+
+### b) Incremental Load
+
+Write only new or modified partitions. With Delta Lake, use `replaceWhere` to overwrite just the affected partitions:
+
+```python
+config = {
+    "format": "delta",
+    "schema": "sales",
+    "sub_folder": "incremental",
+    "table_name": "transactions",
+    "partition": ["date"],
+    "write_mode": "overwrite",
+    "overwrite_strategy": "replaceWhere",
+    "partition_col": "date",
+    "start_date": "2025-09-01",
+    "end_date": "2025-09-24",
+}
+output_manager.save_output(
+    env="prod",
+    node={"output": ["sales_incremental"], "name": "incremental"},
+    df=df_increment,  # Only incremental data
+    start_date="2025-09-01",
+    end_date="2025-09-24",
+)
+```
+- Efficiently updates only the necessary partitions.
+- Minimizes write operations and preserves other data.
+
+---
+
+### c) Selective Reprocessing
+
+Rewrite only specific partitions (e.g., a date range or a subset):
+
+```python
+config = {
+    "format": "delta",
+    "schema": "sales",
+    "sub_folder": "selective_reprocess",
+    "table_name": "transactions",
+    "partition": ["date"],
+    "write_mode": "overwrite",
+    "overwrite_strategy": "replaceWhere",
+    "partition_col": "date",
+    "start_date": "2025-09-10",
+    "end_date": "2025-09-12",
+}
+output_manager.save_output(
+    env="prod",
+    node={"output": ["sales_reprocess"], "name": "selective_reprocess"},
+    df=df_subset,  # DataFrame with only the dates to reprocess
+    start_date="2025-09-10",
+    end_date="2025-09-12",
+)
+```
+- Uses `replaceWhere` to target specific partitions.
+- Useful for correcting issues or updating data for particular time windows.
+
+---
+
+### d) Dynamic Partitioning
+
+Determine partition columns dynamically from configuration or even from the data itself:
+
+```python
+dynamic_partition_col = get_partition_col_from_config_or_data(df)
+config = {
+    "format": "delta",
+    "schema": "sales",
+    "sub_folder": "dynamic_partitioning",
+    "table_name": "transactions",
+    "partition": [dynamic_partition_col],  # Could be "region", "date", etc.
+    "write_mode": "overwrite",
+}
+output_manager.save_output(
+    env="prod",
+    node={"output": ["sales_dynamic"], "name": "dynamic_partition"},
+    df=df,
+)
+```
+- The partitioning logic can be abstracted, making pipelines adaptive to changing data schemas.
+
+---
+
+### e) Efficient Reading (Partition Push-Down)
+
+Read only specific partitions for efficient data access and reduced compute:
+
+```python
+input_config = {
+    "format": "delta",
+    "filepath": "s3://bucket/delta/sales",
+    "partition_filter": "date BETWEEN '2025-09-10' AND '2025-09-12'",
+}
+context["input_config"] = {"sales_data": input_config}
+input_loader = InputLoader(context)
+df = input_loader.load_inputs({"input": ["sales_data"]})[0]
+```
+- The `partition_filter` is pushed down to Spark, so only relevant data is loaded.
+
+---
+
+## Other Useful Scenarios
+
+### f) Multi-format Input Handling
+
+Load multiple input datasets of different formats in a single pipeline step:
 
 ```python
 context = {
     "input_config": {
-        "dataset_parquet": {"format": "parquet", "filepath": "/data/input/data.parquet"},
-        "dataset_csv": {"format": "csv", "filepath": "/data/input/data.csv", "options": {"header": "true"}},
-        "dataset_query": {"format": "query", "query": "SELECT 1 AS id"},
-    },
-    "output_config": {
-        "out_delta:schema/sub/table": {
-            "format": "delta",
-            "table_name": "table",
-            "schema": "schema",
-        },
-        "uc_out:analytics/sales/fact_sales": {
-            "format": "unity_catalog",
-            "catalog_name": "main",
-            "schema": "analytics",
-            "table_name": "fact_sales",
-            "partition_col": "event_date",
-            "overwrite_strategy": "replaceWhere",
-            "vacuum_retention_hours": 168  # 7 days (minimum allowed)
-        },
-    },
-    "output_path": "/data/output",
-    "execution_mode": "local",  # or "distributed" / "databricks"
-    "spark": spark_session,     # optional unless you use Spark-based operations
-    "global_settings": {"fail_on_error": True}
+        "users_csv": {"format": "csv", "filepath": "data/users.csv"},
+        "events_parquet": {"format": "parquet", "filepath": "data/events.parquet"},
+        "delta_data": {"format": "delta", "filepath": "s3://bucket/delta/events"},
+        "xml_data": {"format": "xml", "filepath": "data/input.xml"},
+    }
 }
+input_loader = InputLoader(context)
+all_data = input_loader.load_inputs({"input": ["users_csv", "events_parquet", "delta_data", "xml_data"]})
 ```
+- Enables heterogeneous data ingestion, normalization, and transformation.
 
 ---
 
-## Reading Data
+### g) Reading with Glob Patterns
 
-Use InputLoader to fetch inputs declared in your node. It supports sequential and (optionally) parallel loading when Spark is available.
+Automatically match and read multiple files using wildcard (glob) patterns in local mode:
 
 ```python
-from tauro.io import InputLoader
-
-node = {
-    "name": "example_node",
-    "input": ["dataset_parquet", "dataset_csv", "dataset_query"],
-    "parallel": True,       # parallelizes with Spark if available
-    "fail_fast": True,      # stop on first error (default True)
-}
-
-loader = InputLoader(context)
-dfs = loader.load_inputs(node)  # returns a list of DataFrames/objects
-```
-
-Supported input formats (via readers):
-- parquet, csv, json, delta, avro, orc, xml, pickle, query
-- Note: Some formats need Spark and/or plugins. See “Installation and Requirements”.
-
-CSV defaults can be overridden via options. For Delta, you may specify versionAsOf or timestampAsOf.
-
----
-
-## Writing Data
-
-Use OutputManager to write the output(s) declared on your node. It routes to:
-- DataWriter (filesystem/object storage), or
-- UnityCatalogManager (Databricks Unity Catalog), based on format.
-
-```python
-from tauro.io import OutputManager
-
-node = {"name": "writer_node", "output": ["out_delta:schema/sub/table"]}
-
-outputs = OutputManager(context)
-outputs.save_output(node, df, start_date="2025-01-01", end_date="2025-01-31")
-```
-
-### File/Object storage (DataWriter)
-
-- Supported formats (SupportedFormats enum):
-  - PARQUET
-  - JSON
-  - CSV
-  - DELTA
-  - PICKLE
-  - AVRO
-  - ORC
-  - XML
-  - QUERY
-  - UNITY_CATALOG
-
-- Write modes (WriteMode enum):
-  - OVERWRITE (default)
-  - APPEND
-  - IGNORE
-  - ERROR
-
-- Common writer config:
-  - format: required, e.g., "delta"
-  - write_mode: corresponds to WriteMode enum values
-  - overwrite_schema: True (format dependent; default True for Delta)
-  - partition: "col" or ["col1", "col2"]
-  - options: dict of format-specific options
-    - CSV default options: {"header": "true"}
-
-Example output_config:
-
-```yaml
-out_parquet:logs/app/events:
-  format: parquet
-  table_name: events
-  schema: logs
-  sub_folder: app
-  write_mode: append
-  partition: event_date
-```
-
-Path resolution:
-- Base path from context.output_path
-- Final path: <output_path>/<schema>/<sub_folder>/<table_name>
-- Cloud URIs supported (s3://, abfss://, gs://, dbfs:/). Local mode auto-creates folders.
-
-### Unity Catalog (UnityCatalogManager)
-
-- Requires Spark and UC enabled.
-- The manager writes Delta files to storage then ensures a UC table exists and points to that location.
-- Config keys:
-  - catalog_name: UC catalog
-  - schema: UC schema
-  - table_name
-  - partition_col: optional
-  - write_mode: optional, defaults to overwrite
-  - overwrite_schema: optional True for Delta
-  - overwrite_strategy: optional "replaceWhere"
-    - Requires partition_col, start_date, end_date
-  - optimize: optional True (default). Requires partition_col and date range.
-  - vacuum / vacuum_retention_hours: optional.
-
-Example:
-
-```yaml
-uc_out:analytics/sales/fact_sales:
-  format: unity_catalog
-  catalog_name: main
-  schema: analytics
-  table_name: fact_sales
-  partition_col: event_date
-  overwrite_strategy: replaceWhere
-  optimize: true
-  vacuum: true
-  vacuum_retention_hours: 168
-  description: "Daily sales fact table"
-```
-
-Writing:
-
-```python
-outputs.save_output(node={"output": ["uc_out:analytics/sales/fact_sales"]},
-                    df=df,
-                    start_date="2025-01-01",
-                    end_date="2025-01-31")
-```
-
----
-
-## DataFrame Conversion
-
-If you pass pandas or polars DataFrames to OutputManager, they will be converted to Spark DataFrames (if Spark is available):
-- pandas.DataFrame -> Spark via createDataFrame
-- polars.DataFrame -> Spark via to_pandas -> createDataFrame
-
-If Spark is not available and conversion is required, an error is raised.
-
----
-
-## Model Artifacts
-
-ModelArtifactManager can persist artifacts (e.g., metrics, models) under a model registry path.
-
-- context.global_settings.model_registry_path must be set (string path).
-- Node config should include a list under model_artifacts (with at least a name).
-
-Example:
-
-```python
-node = {
-    "name": "train_model",
-    "model_artifacts": [
-        {"name": "my_model"},       # will be saved under <model_registry_path>/my_model/<version>
-        {"name": "feature_importance"}
-    ]
-}
-
-outputs = OutputManager(context)
-outputs.save_output(node, df, model_version="v1")
-```
-
-In local mode, directories are created if missing.
-
----
-
-## Error Handling and Logging
-
-The module uses loguru for comprehensive logging and includes robust error handling:
-
-- Validation errors through ConfigValidator
-- IO operation errors with detailed context
-- Directory creation errors in local mode
-- Spark context availability errors
-- Detailed logging of operations and state changes
-
-Best Practices:
-- Use try-catch blocks around IO operations
-- Check Spark availability before distributed operations
-- Validate paths and permissions before writing
-- Monitor logs for operation status and errors
-- Keep fail_on_error=True in production to avoid silent failures
-
----
-
-## Configuration and Context
-
-The BaseIO class provides a flexible context handling system that supports both dictionary and object-based configurations:
-
-### Context Properties
-- `execution_mode`: 
-  - "local" for local execution
-  - "distributed" for Spark-based execution
-  - "databricks" (automatically normalized to "distributed")
-- `spark`: SparkSession object (optional, required for Spark operations)
-- `input_config`: Input dataset configurations
-- `output_config`: Output configurations
-- `output_path`: Base directory/URI for outputs
-- `global_settings`: General configuration flags
-
-### Context Access Methods (BaseIO)
-- `_ctx_get(key, default=None)`: Safe context access for both dict and object
-- `_ctx_has(key)`: Check key existence
-- `_ctx_spark()`: Get SparkSession if available
-- `_ctx_mode()`: Get normalized execution mode
-- `_is_local()`: Check if running in local mode
-- `_spark_available()`: Check Spark context availability
-- `_is_spark_connect()`: Detect Spark Connect sessions
-
-### Configuration Validation
-- Required fields validation
-- Output key format validation
-- Configuration type checking
-- Directory structure validation in local mode
-
----
-
-## Tips and Best Practices
-
-- Use partition columns whenever appropriate to improve write/read performance.
-- For Delta in UC, prefer overwrite_strategy=replaceWhere for incremental updates.
-- Always validate date formats in replaceWhere ranges.
-- Ensure the delta-spark package is installed if you use Delta outside of Databricks.
-- For XML, ensure the spark-xml library is available in the cluster/session.
-- Keep output keys descriptive and aligned with schema/sub_folder/table conventions.
-
----
-
-## Minimal End-to-End Example
-
-```python
-from tauro.io import InputLoader, OutputManager
-
 context = {
     "input_config": {
-        "in": {"format": "parquet", "filepath": "/data/in.parquet"},
+        "monthly_data": {"format": "csv", "filepath": "data/2025-09-*.csv"},
     },
-    "output_config": {
-        "out_delta:demo/raw/events": {"format": "delta", "table_name": "events", "schema": "demo", "sub_folder": "raw"},
-    },
-    "output_path": "/data/output",
     "execution_mode": "local",
-    "spark": spark,  # your SparkSession
-    "global_settings": {"fail_on_error": True},
 }
+input_loader = InputLoader(context)
+df = input_loader.load_inputs({"input": ["monthly_data"]})[0]
+```
+- Useful for batch loading of time-series or partitioned files.
 
-inp = InputLoader(context).load_inputs({"input": ["in"]})[0]
-OutputManager(context).save_output({"output": ["out_delta:demo/raw/events"]}, inp)
+---
+
+### h) Secure Query Execution
+
+Run only safe, validated SQL queries against Spark, preventing injection or dangerous commands:
+
+```python
+context = {
+    "input_config": {
+        "query_data": {"format": "query", "query": "SELECT * FROM analytics.events WHERE date = '2025-09-24'"},
+    },
+    "execution_mode": "distributed",
+}
+input_loader = InputLoader(context)
+query_df = input_loader.load_inputs({"input": ["query_data"]})[0]
+```
+- The framework will reject queries not starting with SELECT or containing unsafe patterns.
+
+---
+
+### i) Model Artifact Registry
+
+Save model artifacts (e.g., after ML training) with metadata and versioning:
+
+```python
+context = {
+    "global_settings": {"model_registry_path": "/mnt/models"},
+    "output_path": "/mnt/output",
+}
+node = {
+    "model_artifacts": [{"name": "classifier", "type": "sklearn", "metrics": {"accuracy": 0.99}}],
+    "name": "train_model"
+}
+output_manager = OutputManager(context)
+output_manager.save_output("dev", node, df, model_version="v1.0.0")
+```
+- Organizes model files and metadata for reproducibility and audit.
+
+---
+
+### j) Unity Catalog Table Management
+
+Automate creation and management of tables in Databricks Unity Catalog:
+
+```python
+config = {
+    "format": "unity_catalog",
+    "catalog_name": "main",
+    "schema": "events",
+    "table_name": "daily_summary",
+    "output_path": "s3://bucket/delta/output",
+}
+output_manager.save_output(
+    env="prod",
+    node={"output": ["uc_table"], "name": "unity_catalog_node"},
+    df=some_df,
+    start_date="2025-09-01",
+    end_date="2025-09-24"
+)
+```
+- Automatically ensures schema, links tables, adds comments, and optimizes storage.
+
+---
+
+### k) Error Tolerant Loading
+
+Gracefully handle missing files or format errors, filling with `None` or skipping faulty datasets:
+
+```python
+context = {
+    "input_config": {
+        "main_data": {"format": "csv", "filepath": "data/main.csv"},
+        "optional_data": {"format": "parquet", "filepath": "data/missing.parquet"},
+    },
+    "global_settings": {"fill_none_on_error": True},
+}
+input_loader = InputLoader(context)
+datasets = input_loader.load_inputs({"input": ["main_data", "optional_data"]})
+```
+- Prevents pipeline failure, enables flexible ETL and reporting.
+
+---
+
+## Error Handling & Logging
+
+All major operations are wrapped with detailed error handling and logging via [loguru](https://github.com/Delgan/loguru):
+
+- **ConfigurationError:** Invalid or missing configuration.
+- **ReadOperationError:** Input/data loading failures.
+- **WriteOperationError:** Output/data saving failures.
+- **FormatNotSupportedError:** Unsupported data formats.
+- **DataValidationError:** Data integrity issues.
+
+---
+
+## Extensibility
+
+To add a new format (e.g., ParquetV2):
+
+1. Implement a reader/writer in `readers.py`/`writers.py`.
+2. Register it in `ReaderFactory`/`WriterFactory`.
+3. Update `SupportedFormats` in `constants.py`.
+
+---
+
+## Installation
+
+Tauro IO is intended for use as part of the Tauro platform. To install the required dependencies:
+
+```bash
+pip install pyspark delta-spark pandas polars loguru
+```
+
+Additional packages are required for XML/Avro/ORC support.
+
+---
+
+## License
+
+```
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root.
 ```
 
 ---
 
-## API at a Glance
+## Contact
 
-- InputLoader
-  - load_inputs(node)
-- OutputManager
-  - save_output(node, df, start_date=None, end_date=None, model_version=None)
-- PathResolver
-  - resolve_output_path(dataset_config, out_key)
-- DataWriter
-  - write_data(df, path, config)
-- UnityCatalogManager
-  - write_to_unity_catalog(df, config, start_date, end_date, out_key)
-- ModelArtifactManager
-  - save_model_artifacts(node, model_version)
-
-Implementation uses BaseIO helpers to access context consistently.
-
----
+For support, suggestions, or contributions, please contact [Faustino Lopez Ramos](https://github.com/faustino125).
