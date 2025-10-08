@@ -3,7 +3,7 @@
 The `tauro.exec` module orchestrates the execution of Tauro data pipelines (batch and hybrid), turning configuration into a dependency-aware execution plan and running nodes in parallel while respecting dependencies. It integrates tightly with:
 
 - `tauro.config.Context` (for configuration, Spark session, and format policy)
-- `tauro.io.input.InputLoader` and `tauro.io.output.OutputManager` (for reading inputs and persisting outputs)
+- `tauro.io.input.InputLoader` and `tauro.io.output.DataOutputManager` (for reading inputs and persisting outputs)
 - `tauro.streaming` (for streaming-specific execution, coordinated elsewhere)
 
 This module provides:
@@ -76,7 +76,7 @@ Typical node configuration fields:
 - name: Node name (required).
 - function: Dotted path to the Python function to execute.
 - input: List of input identifiers (resolved by `InputLoader`) or per-source descriptors (depending on IO config).
-- output: List or descriptor of outputs (handled by `OutputManager`).
+- output: List or descriptor of outputs (handled by `DataOutputManager`).
 - dependencies: Node dependencies (string | dict | list; see below).
 - hyperparams/metrics/description: Optional ML-related metadata.
 
@@ -147,7 +147,7 @@ Responsibilities:
 - Load all necessary input DataFrames via `InputLoader`
 - Build a `Command` (NodeCommand or MLNodeCommand) depending on layer/context
 - Execute and capture the result
-- Validate and persist results via `OutputManager`
+- Validate and persist results via `DataOutputManager`
 - Release resources explicitly (unpersist/close/clear) to encourage GC
 
 Parallel execution:
@@ -188,7 +188,7 @@ Used by orchestrators to coordinate execution and react to failures.
 
 `BaseExecutor` wires everything together:
 - `context`: sourced from `tauro.config.Context` or compatible object
-- IO managers: `InputLoader` and `OutputManager`
+- IO managers: `InputLoader` and `DataOutputManager`
 - `NodeExecutor`: executes nodes with ML-aware behavior when applicable
 - ML prep:
   - Merge hyperparams and resolve model version from context or pipeline-level config
@@ -241,12 +241,12 @@ Note the signature uses keyword-only `start_date` and `end_date`. This is recomm
 from tauro.config import Context
 from tauro.exec.node_executor import NodeExecutor
 from tauro.io.input import InputLoader
-from tauro.io.output import OutputManager
+from tauro.io.output import DataOutputManager
 
 context = Context(...)
 
 input_loader = InputLoader(context)
-output_manager = OutputManager(context)
+output_manager = DataOutputManager(context)
 
 executor = NodeExecutor(context, input_loader, output_manager, max_workers=4)
 

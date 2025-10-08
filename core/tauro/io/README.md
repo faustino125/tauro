@@ -97,9 +97,9 @@ delta_writer.write(df, "/output/mytable", config)
 Automated output saving with Unity Catalog integration for Databricks:
 
 ```python
-from tauro.io.output import OutputManager
+from tauro.io.output import DataOutputManager
 
-output_manager = OutputManager(context)
+output_manager = DataOutputManager(context)
 output_manager.save_output(env, node, df, start_date, end_date, model_version)
 ```
 
@@ -315,7 +315,7 @@ node = {
     "model_artifacts": [{"name": "classifier", "type": "sklearn", "metrics": {"accuracy": 0.99}}],
     "name": "train_model"
 }
-output_manager = OutputManager(context)
+output_manager = DataOutputManager(context)
 output_manager.save_output("dev", node, df, model_version="v1.0.0")
 ```
 - Organizes model files and metadata for reproducibility and audit.

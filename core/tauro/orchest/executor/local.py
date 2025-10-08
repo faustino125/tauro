@@ -1,13 +1,7 @@
 from __future__ import annotations
-from typing import Dict, List, Callable, Optional, Set, Any
+from typing import Dict, List, Callable, Optional
 from datetime import datetime, timezone
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    Future,
-    wait,
-    FIRST_EXCEPTION,
-    as_completed,
-)
+from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_EXCEPTION
 from collections import defaultdict, deque
 import threading
 import time
@@ -20,7 +14,7 @@ from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
 from tauro.exec.node_executor import NodeExecutor
 from tauro.io.input import InputLoader
-from tauro.io.output import OutputManager
+from tauro.io.output import DataOutputManager
 
 from ..models import TaskRun, RunState
 
@@ -37,7 +31,7 @@ class LocalDagExecutor:
         self.max_workers = max_workers or gs.get("max_parallel_nodes", 4)
 
         self.input_loader = InputLoader(self.context)
-        self.output_manager = OutputManager(self.context)
+        self.output_manager = DataOutputManager(self.context)
         self.node_executor = NodeExecutor(
             self.context, self.input_loader, self.output_manager, self.max_workers
         )

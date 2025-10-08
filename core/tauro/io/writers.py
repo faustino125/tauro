@@ -185,13 +185,10 @@ class DeltaWriter(SparkWriterMixin):
         """Write data to Delta Lake: full batch, incremental, or selective writes."""
         try:
             config = normalize_partition_config(config)
-            writer = df.write.format("delta")
-            writer = self._apply_overwrite_and_replacewhere(writer, config)
-
+            writer = self._configure_spark_writer(df, config)
             options = config.get("options", {}) or {}
             for k, v in options.items():
                 writer = writer.option(k, v)
-
             writer.save(destination)
         except ConfigurationError as e:
             raise WriteOperationError(f"Error configuring Spark writer: {e}") from e

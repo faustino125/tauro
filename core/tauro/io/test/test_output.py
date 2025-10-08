@@ -6,14 +6,8 @@ import time
 from datetime import datetime
 
 from tauro.io.output import (
-    DataFrameConverter,
-    PathResolver,
-    DataWriter,
-    ModelArtifactManager,
-    UnityCatalogOperations,
     UnityCatalogManager,
-    OutputManager,
-    ErrorHandler,
+    DataOutputManager,
 )
 from tauro.io.exceptions import (
     ConfigurationError,
@@ -761,12 +755,12 @@ class TestUnityCatalogManager:
         )
 
 
-class TestOutputManager:
-    """Tests for OutputManager functionality."""
+class TestDataOutputManager:
+    """Tests for DataOutputManager functionality."""
 
     @pytest.fixture
     def output_manager(self):
-        """Fixture to create an OutputManager with mock context."""
+        """Fixture to create an DataOutputManager with mock context."""
         mock_context = {
             "spark": MagicMock(),
             "output_config": {
@@ -774,7 +768,7 @@ class TestOutputManager:
             },
             "global_settings": {"fail_on_error": True},
         }
-        return OutputManager(mock_context)
+        return DataOutputManager(mock_context)
 
     def test_save_output(self, output_manager):
         """Test saving output with valid configuration."""
@@ -893,7 +887,7 @@ class TestOutputManager:
             output_manager.save_output("dev", "not_a_dict", MagicMock())
 
     def test_save_output_integration(self, output_manager):
-        """Test full integration of OutputManager with all its dependencies."""
+        """Test full integration of DataOutputManager with all its dependencies."""
         mock_df = MagicMock()
 
         # Mock all dependencies to verify they work together
@@ -1042,8 +1036,8 @@ class TestOutputIntegration:
 
     def test_integration_all_components(self, mock_context, tmp_path):
         """Test integration of all output components working together."""
-        # Create real OutputManager with mocked dependencies
-        output_manager = OutputManager(mock_context)
+        # Create real DataOutputManager with mocked dependencies
+        output_manager = DataOutputManager(mock_context)
 
         # Mock dependencies but keep the real integration
         mock_df = MagicMock()

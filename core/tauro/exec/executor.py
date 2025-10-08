@@ -16,7 +16,7 @@ from tauro.exec.pipeline_state import NodeType, UnifiedPipelineState
 from tauro.exec.pipeline_validator import PipelineValidator
 from tauro.exec.utils import extract_pipeline_nodes, get_node_dependencies
 from tauro.io.input import InputLoader
-from tauro.io.output import OutputManager
+from tauro.io.output import DataOutputManager
 from tauro.streaming.constants import PipelineType
 from tauro.streaming.pipeline_manager import StreamingPipelineManager
 
@@ -27,7 +27,7 @@ class BaseExecutor:
     def __init__(self, context: Context):
         self.context = context
         self.input_loader = InputLoader(self.context)
-        self.output_manager = OutputManager(self.context)
+        self.output_manager = DataOutputManager(self.context)
         self.is_ml_layer = getattr(self.context, "is_ml_layer", False)
         gs = getattr(self.context, "global_settings", {}) or {}
         self.max_workers = gs.get("max_parallel_nodes", 4)
