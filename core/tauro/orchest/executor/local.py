@@ -35,15 +35,9 @@ class LocalDagExecutor:
         self.node_executor = NodeExecutor(
             self.context, self.input_loader, self.output_manager, self.max_workers
         )
-        # Event to signal a global stop when a failure occurs
         self._stop_event = threading.Event()
-
-        # Configurar manejo de señales para shutdown graceful
-        # Register signal handlers only if running in main thread and signals are available
         try:
             if threading.current_thread() is threading.main_thread():
-                # Some environments (like certain Windows shells or restricted runtimes)
-                # may not support signal.signal; guard to avoid crashing during import.
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
         except Exception:
@@ -100,11 +94,9 @@ class LocalDagExecutor:
         on_task_state(tr)
 
         def _work():
-            # If another node failure flagged global stop, don't start work
             if self._stop_event.is_set():
                 raise RuntimeError("Execution cancelled due to previous task failure")
 
-            # Delegate retry + execution logic to a helper to reduce complexity here
             self._execute_node_with_retries(
                 node_name,
                 start_date,
@@ -131,18 +123,21 @@ class LocalDagExecutor:
         on_task_state: Callable[[TaskRun], None],
         timeout_seconds: Optional[int] = None,
     ):
+        def _attempt():
+            """Attempt a single execution (raises on failure)."""
+            if timeout_seconds:
+                self._execute_with_timeout(
+                    node_name, start_date, end_date, timeout_seconds
+                )
+            else:
+                self.node_executor.execute_single_node(
+                    node_name, start_date, end_date, ml_info={}
+                )
+
         last_exc: Optional[Exception] = None
         for attempt in range(retries + 1):
             try:
-                # Ejecutar con timeout si está configurado
-                if timeout_seconds:
-                    self._execute_with_timeout(
-                        node_name, start_date, end_date, timeout_seconds
-                    )
-                else:
-                    self.node_executor.execute_single_node(
-                        node_name, start_date, end_date, ml_info={}
-                    )
+                _attempt()
                 return None
             except TimeoutError:
                 last_exc = TimeoutError(
@@ -150,14 +145,14 @@ class LocalDagExecutor:
                 )
                 if attempt < retries:
                     self._prepare_retry(tr, attempt, retry_delay_sec, on_task_state)
-                else:
-                    raise last_exc
+                    continue
+                raise last_exc
             except Exception as e:  # noqa: PERF203
                 last_exc = e
                 if attempt < retries:
                     self._prepare_retry(tr, attempt, retry_delay_sec, on_task_state)
-                else:
-                    raise
+                    continue
+                raise
         if last_exc:
             raise last_exc
 
@@ -187,16 +182,14 @@ class LocalDagExecutor:
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
-        # Esperar con timeout
         done.wait(timeout=timeout_seconds)
 
         if not done.is_set():
-            # Timeout ocurrido
             raise TimeoutError(
                 f"Node {node_name} execution timed out after {timeout_seconds} seconds"
             )
 
-        if exception is not None:
+        if exception:
             raise exception
 
         return result
@@ -208,7 +201,6 @@ class LocalDagExecutor:
         retry_delay_sec: int,
         on_task_state: Callable[[TaskRun], None],
     ) -> None:
-        # Sleep progressively if configured, update try number and notify state
         if retry_delay_sec > 0:
             sleep_time = retry_delay_sec * (attempt + 1)
             logger.info(
@@ -224,7 +216,6 @@ class LocalDagExecutor:
         fut: Future,
         task_runs: Dict[str, TaskRun],
         running: Dict[str, Future],
-        children: Dict[str, List[str]],
         on_task_state: Callable[[TaskRun], None],
     ) -> None:
         """
@@ -243,28 +234,37 @@ class LocalDagExecutor:
             tr.error = str(e)
             tr.finished_at = datetime.now(timezone.utc)
             on_task_state(tr)
-            # Signal global stop for other tasks
             self._stop_event.set()
-            # Try to cancel other queued futures and mark their TaskRun appropriately
-            for other, ofut in list(running.items()):
-                if other != node:
-                    cancelled = ofut.cancel()
-                    other_tr = task_runs.get(other)
-                    if other_tr:
-                        if cancelled:
-                            other_tr.state = RunState.CANCELLED
-                            other_tr.finished_at = datetime.now(timezone.utc)
-                            other_tr.error = "Cancelled due to another task failure"
-                        else:
-                            # Already running — we will mark as SKIPPED once they end (best-effort)
-                            other_tr.state = RunState.SKIPPED
-                            other_tr.finished_at = datetime.now(timezone.utc)
-                            other_tr.error = (
-                                "Marked as skipped due to another task failure"
-                            )
-                        on_task_state(other_tr)
-            # Propagate failure
+            self._cancel_and_mark_others(node, running, task_runs, on_task_state)
             raise
+
+    def _cancel_and_mark_others(
+        self,
+        failed_node: str,
+        running: Dict[str, Future],
+        task_runs: Dict[str, TaskRun],
+        on_task_state: Callable[[TaskRun], None],
+    ) -> None:
+        """Cancel other running futures and update their TaskRun states."""
+        for other, ofut in running.items():
+            if other == failed_node:
+                continue
+            try:
+                cancelled = ofut.cancel()
+            except Exception:
+                cancelled = False
+            other_tr = task_runs.get(other)
+            if not other_tr:
+                continue
+            if cancelled:
+                other_tr.state = RunState.CANCELLED
+                other_tr.finished_at = datetime.now(timezone.utc)
+                other_tr.error = "Cancelled due to another task failure"
+            else:
+                other_tr.state = RunState.SKIPPED
+                other_tr.finished_at = datetime.now(timezone.utc)
+                other_tr.error = "Marked as skipped due to another task failure"
+            on_task_state(other_tr)
 
     def _wait_and_process(
         self,
@@ -281,17 +281,14 @@ class LocalDagExecutor:
         - Updates indegree and ready queue for downstream nodes.
         """
         done, _pending = wait(
-            list(running.values()), timeout=0.1, return_when=FIRST_EXCEPTION
+            running.values(), timeout=0.1, return_when=FIRST_EXCEPTION
         )
 
         finished_nodes: List[str] = []
-        for node, fut in list(running.items()):
+        for node, fut in running.items():
             if fut in done:
                 finished_nodes.append(node)
-                # handle may raise to caller to indicate failure
-                self._handle_finished(
-                    node, fut, task_runs, running, children, on_task_state
-                )
+                self._handle_finished(node, fut, task_runs, running, on_task_state)
 
         for node in finished_nodes:
             running.pop(node, None)
@@ -319,71 +316,112 @@ class LocalDagExecutor:
         pipeline_nodes, node_cfgs = self._get_pipeline_nodes_and_configs(pipeline_name)
         dag = DependencyResolver.build_dependency_graph(pipeline_nodes, node_cfgs)
 
-        indegree: Dict[str, int] = defaultdict(int)
-        children: Dict[str, List[str]] = defaultdict(list)
-        for u, vs in dag.items():
-            _ = indegree[u]  # fuerza presencia con valor 0 por defecto
-            for v in vs:
-                indegree[v] += 1
-                children[u].append(v)
-        ready = deque([n for n in pipeline_nodes if indegree.get(n, 0) == 0])
+        indegree, children, ready = self._build_graph_state(pipeline_nodes, dag)
 
         max_workers = concurrency or self.max_workers
         running: Dict[str, Future] = {}
         task_runs: Dict[str, TaskRun] = {}
 
-        # Reset stop event at start of execution
         self._stop_event.clear()
 
         with ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix=f"node-{pipeline_name}-"
         ) as pool:
             try:
-                while (ready or running) and not self._stop_event.is_set():
-                    while (
-                        ready
-                        and len(running) < max_workers
-                        and not self._stop_event.is_set()
-                    ):
-                        node_to_run = ready.popleft()
-                        self._submit_task(
-                            pool,
-                            node_to_run,
-                            task_runs,
-                            running,
-                            on_task_state,
-                            start_date,
-                            end_date,
-                            retries,
-                            retry_delay_sec,
-                            timeout_seconds,
-                        )
-
-                    if not running:
-                        # Nothing running and nothing ready (might be due to stop or empty)
-                        continue
-
-                    # Extracted wait-and-process logic into helper to reduce cognitive complexity
-                    self._wait_and_process(
-                        running, task_runs, children, on_task_state, indegree, ready
-                    )
+                self._dispatch_and_wait(
+                    pool,
+                    ready,
+                    running,
+                    task_runs,
+                    children,
+                    indegree,
+                    on_task_state,
+                    start_date,
+                    end_date,
+                    retries,
+                    retry_delay_sec,
+                    timeout_seconds,
+                    max_workers,
+                )
             except Exception as e:
                 logger.exception(f"DAG execution failed: {e}")
                 raise
             finally:
-                # Best-effort: mark any tasks that were not started or still running as cancelled/skipped
-                for other, ofut in list(running.items()):
-                    cancelled = ofut.cancel()
-                    other_tr = task_runs.get(other)
-                    if other_tr:
-                        if cancelled:
-                            other_tr.state = RunState.CANCELLED
-                            other_tr.finished_at = datetime.now(timezone.utc)
-                            other_tr.error = "Cancelled during shutdown"
-                        else:
-                            other_tr.state = RunState.SKIPPED
-                            other_tr.finished_at = datetime.now(timezone.utc)
-                            other_tr.error = "Skipped during shutdown"
-                        on_task_state(other_tr)
-                # clear stop_event for potential reuse
+                self._finalize_running_tasks(running, task_runs, on_task_state)
                 self._stop_event.clear()
+
+    def _dispatch_and_wait(
+        self,
+        pool: ThreadPoolExecutor,
+        ready: deque,
+        running: Dict[str, Future],
+        task_runs: Dict[str, TaskRun],
+        children: Dict[str, List[str]],
+        indegree: Dict[str, int],
+        on_task_state: Callable[[TaskRun], None],
+        start_date: Optional[str],
+        end_date: Optional[str],
+        retries: int,
+        retry_delay_sec: int,
+        timeout_seconds: Optional[int],
+        max_workers: int,
+    ) -> None:
+        while (ready or running) and not self._stop_event.is_set():
+            while (
+                ready and len(running) < max_workers and not self._stop_event.is_set()
+            ):
+                node_to_run = ready.popleft()
+                self._submit_task(
+                    pool,
+                    node_to_run,
+                    task_runs,
+                    running,
+                    on_task_state,
+                    start_date,
+                    end_date,
+                    retries,
+                    retry_delay_sec,
+                    timeout_seconds,
+                )
+
+            if not running:
+                continue
+
+            self._wait_and_process(
+                running, task_runs, children, on_task_state, indegree, ready
+            )
+
+    def _finalize_running_tasks(
+        self,
+        running: Dict[str, Future],
+        task_runs: Dict[str, TaskRun],
+        on_task_state: Callable[[TaskRun], None],
+    ) -> None:
+        for other, ofut in running.items():
+            try:
+                cancelled = ofut.cancel()
+            except Exception:
+                cancelled = False
+            other_tr = task_runs.get(other)
+            if other_tr:
+                if cancelled:
+                    other_tr.state = RunState.CANCELLED
+                    other_tr.finished_at = datetime.now(timezone.utc)
+                    other_tr.error = "Cancelled during shutdown"
+                else:
+                    other_tr.state = RunState.SKIPPED
+                    other_tr.finished_at = datetime.now(timezone.utc)
+                    other_tr.error = "Skipped during shutdown"
+                on_task_state(other_tr)
+
+    def _build_graph_state(self, pipeline_nodes: List[str], dag: Dict[str, List[str]]):
+        """Build indegree map, children map and initial ready queue for the DAG."""
+        indegree: Dict[str, int] = defaultdict(int)
+        children: Dict[str, List[str]] = defaultdict(list)
+        for u, vs in dag.items():
+            _ = indegree[u]
+            for v in vs:
+                indegree[v] += 1
+                children[u].append(v)
+        ready = deque([n for n in pipeline_nodes if indegree.get(n, 0) == 0])
+        return indegree, children, ready

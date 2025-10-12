@@ -10,13 +10,14 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from loguru import logger
 import time
-from core.tauro.api.config import EnvironmentEnum
+from tauro.api.config import EnvironmentEnum
 import sentry_sdk  # type: ignore
 from prometheus_fastapi_instrumentator import Instrumentator  # type: ignore
 
 from tauro.api.config import ApiSettings
 from tauro.api.deps import get_settings
-from tauro.api.routes import pipelines, runs, schedules, control
+from tauro.api.routes import pipelines, runs, schedules, control, observability
+from tauro.api.routes import orchest_runner
 from tauro.api.utils import handle_exceptions, APIError, StructuredLogger
 from tauro.api.security import (
     SecurityHeadersMiddleware,
@@ -130,6 +131,17 @@ async def lifespan(app: FastAPI):
                 log.info("Store closed")
             except Exception as e:
                 log.exception("Error closing store", error=str(e))
+
+        # Shutdown runner if provides shutdown()
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            try:
+                shutdown_fn = getattr(runner, "shutdown", None)
+                if callable(shutdown_fn):
+                    shutdown_fn()
+                    log.info("Runner shutdown invoked")
+            except Exception as e:
+                log.exception("Error shutting down runner", error=str(e))
 
         log.info("Shutdown complete")
 
@@ -249,6 +261,9 @@ def _register_routes(app: FastAPI, settings: ApiSettings) -> None:
     app.include_router(runs.router, prefix=settings.api_prefix)
     app.include_router(schedules.router, prefix=settings.api_prefix)
     app.include_router(control.router, prefix=settings.api_prefix)
+    app.include_router(observability.router, prefix=settings.api_prefix)
+    # Orchest runner routes (delegates to pipeline_service)
+    app.include_router(orchest_runner.router, prefix=settings.api_prefix)
 
 
 def _add_health_checks(app: FastAPI, settings: ApiSettings) -> None:

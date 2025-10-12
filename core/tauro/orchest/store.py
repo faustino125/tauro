@@ -19,6 +19,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from .models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
 
 _DEFAULT_DB_PATH_ENV = "ORCHESTRATOR_DB_PATH"
+PIPELINE_ID_CLAUSE = "pipeline_id = ?"
 DEFAULT_DB_PATH = (
     Path(  # env override for runtime flexibility (useful in containers/CI)
         os.environ.get(_DEFAULT_DB_PATH_ENV)
@@ -26,6 +27,12 @@ DEFAULT_DB_PATH = (
     if os.environ.get(_DEFAULT_DB_PATH_ENV)
     else Path.home() / ".tauro" / "orchestrator.db"
 )
+
+# SQL constants to avoid duplicated string literals
+AND_JOIN = " AND "
+WHERE_PREFIX = " WHERE "
+ORDER_LIMIT_OFFSET = " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+ORDER_BY_CREATED_DESC = " ORDER BY created_at DESC"
 
 
 class Store:
@@ -87,10 +94,10 @@ class Store:
 
 
 class ConnectionPool:
-    """Pool de conexiones con reconexión automática y verificación de salud.
+    """Connection pool with automatic reconnection and health checks.
 
-    Ahora soporta creación perezosa: puede crear sólo `minsize` conexiones al inicio
-    y añadir conexiones hasta `maxsize` bajo demanda.
+    Supports lazy creation: it can create only `minsize` connections at startup
+    and add connections up to `maxsize` on demand.
     """
 
     def __init__(
@@ -109,15 +116,15 @@ class ConnectionPool:
             self._add_connection()
 
     def _add_connection(self) -> None:
-        """Añadir una nueva conexión al pool"""
+        """Add a new connection to the pool."""
         conn = sqlite3.connect(
             str(self._db_path),
             detect_types=sqlite3.PARSE_DECLTYPES,
             timeout=self._timeout,
         )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")  # Mejorar concurrencia
-        conn.execute("PRAGMA foreign_keys=ON")  # Habilitar claves foráneas
+        conn.execute("PRAGMA journal_mode=WAL")  # Improve concurrency
+        conn.execute("PRAGMA foreign_keys=ON")  # Enable foreign keys
 
         with self._lock:
             self._created_connections += 1
@@ -128,7 +135,7 @@ class ConnectionPool:
             conn.close()
 
     def _is_connection_valid(self, conn: sqlite3.Connection) -> bool:
-        """Verificar si una conexión es válida"""
+        """Check if a connection is valid."""
         try:
             conn.execute("SELECT 1")
             return True
@@ -145,7 +152,7 @@ class ConnectionPool:
         retry=retry_if_exception_type((sqlite3.OperationalError, queue.Empty)),
     )
     def get_connection(self, timeout: Optional[float] = None) -> sqlite3.Connection:
-        """Obtener una conexión del pool con reintentos"""
+        """Get a connection from the pool with retries."""
         try:
             conn = self._pool.get(timeout=timeout)
             if not self._is_connection_valid(conn):
@@ -153,7 +160,7 @@ class ConnectionPool:
                 raise sqlite3.OperationalError("Invalid connection")
             return conn
         except queue.Empty:
-            # Intentar crear conexión adicional si el pool está vacío
+            # Try to create an additional connection when the pool is empty
             with self._lock:
                 # Si aún podemos crear más conexiones, intentarlo
                 if self._created_connections < self._maxsize:
@@ -167,12 +174,12 @@ class ConnectionPool:
                 raise sqlite3.OperationalError("No connections available")
 
     def return_connection(self, conn: sqlite3.Connection) -> None:
-        """Devolver conexión al pool"""
+        """Return connection to the pool."""
         if conn is None:
             return
 
         try:
-            # Resetear la conexión para limpiar estado temporal
+            # Rollback to clear transient state
             conn.execute("ROLLBACK")
 
             if self._is_connection_valid(conn) and self._pool.qsize() < self._maxsize:
@@ -182,7 +189,7 @@ class ConnectionPool:
                 except queue.Full:
                     pass
 
-            # Si no se puede devolver al pool, cerrar la conexión
+            # If it cannot be returned to the pool, close the connection
             conn.close()
         except Exception:
             # Cerrar la conexión en caso de error
@@ -192,7 +199,7 @@ class ConnectionPool:
                 pass
 
     def close_all(self) -> None:
-        """Cerrar todas las conexiones"""
+        """Close all pooled connections."""
         while True:
             try:
                 conn = self._pool.get_nowait()
@@ -204,7 +211,7 @@ class ConnectionPool:
                 break
 
     def get_stats(self) -> Dict[str, Any]:
-        """Obtener estadísticas del pool"""
+        """Return pool statistics."""
         with self._lock:
             return {
                 "pool_size": self._pool.qsize(),
@@ -215,7 +222,7 @@ class ConnectionPool:
 
 
 class OrchestratorStore:
-    """Persistencia SQLite con reconexión automática y mejores prácticas"""
+    """SQLite persistence with automatic reconnection and best practices."""
 
     def __init__(
         self,
@@ -233,7 +240,7 @@ class OrchestratorStore:
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        """Context manager para obtener conexiones con manejo de errores"""
+        """Context manager to obtain connections with error handling."""
         conn = None
         try:
             conn = self.connection_pool.get_connection()
@@ -270,7 +277,7 @@ class OrchestratorStore:
                 version_row["v"] if version_row and version_row["v"] is not None else 0
             )
 
-            # Migración a versión 1
+            # Migration to version 1
             if current_version < 1:
                 con.executescript(
                     """
@@ -320,7 +327,7 @@ class OrchestratorStore:
                 )
                 current_version = 1
 
-            # Migración a versión 2
+            # Migration to version 2
             if current_version < 2:
                 con.executescript(
                     """
@@ -336,7 +343,7 @@ class OrchestratorStore:
                 )
                 current_version = 2
 
-            # Migración a versión 3 - Índices compuestos para mejor rendimiento
+            # Migration to version 3 - composite indexes for improved performance
             if current_version < 3:
                 con.executescript(
                     """
@@ -351,7 +358,7 @@ class OrchestratorStore:
                 )
                 current_version = 3
 
-            # Migración a versión 4 - Tabla de dead letter para schedules fallidos
+            # Migration to version 4 - dead letter table for failed schedules
             if current_version < 4:
                 con.executescript(
                     """
@@ -369,6 +376,65 @@ class OrchestratorStore:
                 )
                 con.execute(
                     "INSERT INTO _migrations (version, applied_at) VALUES (4, ?)",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+                current_version = 4
+
+            # Migration to version 5 - more indexes for improved performance
+            if current_version < 5:
+                con.executescript(
+                    """
+                            -- Index for pipeline/date lookups
+                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_pipeline_created_desc 
+                                ON pipeline_run(pipeline_id, created_at DESC);
+                    
+                            -- Index for active runs (RUNNING/QUEUED)
+                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_active_states 
+                                ON pipeline_run(state, started_at) 
+                                WHERE state IN ('RUNNING', 'QUEUED');
+                    
+                            -- Index for stuck runs lookup
+                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_stuck 
+                                ON pipeline_run(state, started_at) 
+                                WHERE state = 'RUNNING';
+                    
+                            -- Index for task runs by state and finished_at
+                            CREATE INDEX IF NOT EXISTS idx_task_run_state_finished 
+                                ON task_run(state, finished_at);
+                    
+                            -- Covering index for fast counts
+                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_state_created 
+                                ON pipeline_run(state, created_at, id);
+                        """
+                )
+                con.execute(
+                    "INSERT INTO _migrations (version, applied_at) VALUES (5, ?)",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+                current_version = 5
+
+            # Migration to version 6 - aggregated metrics table
+            if current_version < 6:
+                con.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS pipeline_metrics (
+                        pipeline_id TEXT PRIMARY KEY,
+                        total_runs INTEGER DEFAULT 0,
+                        successful_runs INTEGER DEFAULT 0,
+                        failed_runs INTEGER DEFAULT 0,
+                        avg_execution_time_seconds REAL DEFAULT 0,
+                        last_run_at TEXT,
+                        last_success_at TEXT,
+                        last_failure_at TEXT,
+                        updated_at TEXT NOT NULL
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_updated 
+                        ON pipeline_metrics(updated_at DESC);
+                """
+                )
+                con.execute(
+                    "INSERT INTO _migrations (version, applied_at) VALUES (6, ?)",
                     (datetime.now(timezone.utc).isoformat(),),
                 )
 
@@ -425,7 +491,7 @@ class OrchestratorStore:
         return self._row_to_pipeline_run(row)
 
     def _row_to_pipeline_run(self, row) -> PipelineRun:
-        """Convertir una fila de la base de datos a un objeto PipelineRun"""
+        """Convert a database row to a PipelineRun object."""
         return PipelineRun(
             id=row["id"],
             pipeline_id=row["pipeline_id"],
@@ -476,9 +542,8 @@ class OrchestratorStore:
         sql = "SELECT * FROM pipeline_run"
         params: List[Any] = []
         clauses: List[str] = []
-
         if pipeline_id:
-            clauses.append("pipeline_id = ?")
+            clauses.append(PIPELINE_ID_CLAUSE)
             params.append(pipeline_id)
         if state:
             clauses.append("state = ?")
@@ -491,8 +556,9 @@ class OrchestratorStore:
             params.append(created_before.isoformat())
 
         if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            sql += WHERE_PREFIX + AND_JOIN.join(clauses)
+
+        sql += ORDER_LIMIT_OFFSET
         params.extend([limit, offset])
 
         with self._conn() as con:
@@ -573,7 +639,7 @@ class OrchestratorStore:
         return [self._row_to_task_run(r) for r in rows]
 
     def _row_to_task_run(self, row) -> TaskRun:
-        """Convertir una fila de la base de datos a un objeto TaskRun"""
+        """Convert a database row to a TaskRun object."""
         return TaskRun(
             id=row["id"],
             pipeline_run_id=row["pipeline_run_id"],
@@ -638,9 +704,8 @@ class OrchestratorStore:
         sql = "SELECT * FROM schedule"
         params: List[Any] = []
         clauses: List[str] = []
-
         if pipeline_id:
-            clauses.append("pipeline_id = ?")
+            clauses.append(PIPELINE_ID_CLAUSE)
             params.append(pipeline_id)
         if enabled_only:
             clauses.append("enabled = 1")
@@ -649,8 +714,8 @@ class OrchestratorStore:
             params.append(kind.value)
 
         if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC"
+            sql += WHERE_PREFIX + AND_JOIN.join(clauses)
+        sql += ORDER_BY_CREATED_DESC
 
         with self._conn() as con:
             rows = con.execute(sql, params).fetchall()
@@ -723,7 +788,7 @@ class OrchestratorStore:
     def add_schedule_failure_to_dlq(
         self, schedule_id: str, pipeline_id: str, error: str
     ) -> None:
-        """Añadir un fallo de schedule a la dead letter queue"""
+        """Add a schedule failure entry to the dead letter queue."""
         with self._conn() as con:
             con.execute(
                 """
@@ -742,7 +807,7 @@ class OrchestratorStore:
     def get_schedule_failures(
         self, schedule_id: Optional[str] = None, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
-        """Obtener fallos de schedules de la dead letter queue"""
+        """Return schedule failures from the dead letter queue."""
         sql = "SELECT * FROM schedule_dead_letter"
         params = []
 
@@ -750,7 +815,7 @@ class OrchestratorStore:
             sql += " WHERE schedule_id = ?"
             params.append(schedule_id)
 
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        sql += ORDER_LIMIT_OFFSET
         params.extend([limit, offset])
 
         with self._conn() as con:
@@ -761,7 +826,7 @@ class OrchestratorStore:
     def get_stuck_pipeline_runs(
         self, timeout_minutes: int = 60, max_runs: int = 100
     ) -> List[PipelineRun]:
-        """Obtener ejecuciones atascadas (RUNNING por mucho tiempo)"""
+        """Return stuck executions (RUNNING for too long)."""
         cutoff_time = (
             datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
         ).isoformat()
@@ -783,8 +848,8 @@ class OrchestratorStore:
         self, max_days: int = 30, batch_size: int = 1000
     ) -> Dict[str, int]:
         """
-        Limpiar datos antiguos en lotes compatibles con SQLite (no usar DELETE ... LIMIT directamente).
-        Devuelve dict con conteos de eliminaciones por tabla.
+        Cleanup old data in batches compatible with SQLite (avoid DELETE ... LIMIT).
+        Returns counts of deletions per table.
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(days=max_days)).isoformat()
         result: Dict[str, int] = {
@@ -842,7 +907,7 @@ class OrchestratorStore:
 
     def vacuum(self) -> None:
         """
-        Ejecutar VACUUM en una conexión nueva para garantizar que NO esté dentro de una transacción/pool.
+        Run VACUUM on a new connection to ensure it is NOT inside a transaction/pool.
         """
         conn = sqlite3.connect(str(self.db_path), isolation_level=None)
         try:
@@ -854,7 +919,7 @@ class OrchestratorStore:
                 pass
 
     def close(self) -> None:
-        """Cerrar todas las conexiones del pool."""
+        """Close all connections in the pool."""
         try:
             self.connection_pool.close_all()
         except Exception:
@@ -862,7 +927,7 @@ class OrchestratorStore:
 
     def get_database_stats(self) -> Dict[str, Any]:
         """
-        Obtener estadísticas útiles de la DB (conteos por estado y tamaño en bytes).
+        Return useful DB statistics (counts by state and size in bytes).
         """
         stats: Dict[str, Any] = {}
         conn = self.connection_pool.get_connection()
@@ -884,7 +949,7 @@ class OrchestratorStore:
                 ("enabled" if bool(r["enabled"]) else "disabled"): r["cnt"]
                 for r in rows
             }
-            # tamaño de base de datos
+            # database size
             try:
                 pc_row = conn.execute("PRAGMA page_count").fetchone()
                 ps_row = conn.execute("PRAGMA page_size").fetchone()
@@ -893,7 +958,208 @@ class OrchestratorStore:
                 stats["database_size_bytes"] = page_count * page_size
             except Exception:
                 stats["database_size_bytes"] = 0
+
+            # Pool stats
+            stats["connection_pool"] = self.connection_pool.get_stats()
+
         finally:
             self.connection_pool.return_connection(conn)
 
         return stats
+
+    def _insert_pipeline_metrics_row(
+        self,
+        con: sqlite3.Connection,
+        pipeline_run: PipelineRun,
+        execution_time: Optional[float],
+    ) -> None:
+        """Insert a new metrics row for a pipeline."""
+        con.execute(
+            """
+            INSERT INTO pipeline_metrics (
+                pipeline_id, total_runs, successful_runs, failed_runs,
+                avg_execution_time_seconds, last_run_at, 
+                last_success_at, last_failure_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pipeline_run.pipeline_id,
+                1,
+                1 if pipeline_run.state == RunState.SUCCESS else 0,
+                1 if pipeline_run.state == RunState.FAILED else 0,
+                execution_time or 0,
+                pipeline_run.finished_at.isoformat()
+                if pipeline_run.finished_at
+                else None,
+                pipeline_run.finished_at.isoformat()
+                if pipeline_run.state == RunState.SUCCESS and pipeline_run.finished_at
+                else None,
+                pipeline_run.finished_at.isoformat()
+                if pipeline_run.state == RunState.FAILED and pipeline_run.finished_at
+                else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+    def _update_pipeline_metrics_row(
+        self,
+        con: sqlite3.Connection,
+        row: sqlite3.Row,
+        pipeline_run: PipelineRun,
+        execution_time: Optional[float],
+    ) -> None:
+        """Update an existing metrics row with the pipeline_run values."""
+        total_runs = row["total_runs"] + 1
+        successful_runs = row["successful_runs"] + (
+            1 if pipeline_run.state == RunState.SUCCESS else 0
+        )
+        failed_runs = row["failed_runs"] + (
+            1 if pipeline_run.state == RunState.FAILED else 0
+        )
+
+        # Calcular nuevo promedio de tiempo de ejecución
+        if execution_time:
+            current_avg = row["avg_execution_time_seconds"] or 0
+            new_avg = ((current_avg * row["total_runs"]) + execution_time) / total_runs
+        else:
+            new_avg = row["avg_execution_time_seconds"] or 0
+
+        con.execute(
+            """
+            UPDATE pipeline_metrics SET
+                total_runs = ?,
+                successful_runs = ?,
+                failed_runs = ?,
+                avg_execution_time_seconds = ?,
+                last_run_at = ?,
+                last_success_at = COALESCE(?, last_success_at),
+                last_failure_at = COALESCE(?, last_failure_at),
+                updated_at = ?
+            WHERE pipeline_id = ?
+            """,
+            (
+                total_runs,
+                successful_runs,
+                failed_runs,
+                new_avg,
+                pipeline_run.finished_at.isoformat()
+                if pipeline_run.finished_at
+                else None,
+                pipeline_run.finished_at.isoformat()
+                if pipeline_run.state == RunState.SUCCESS and pipeline_run.finished_at
+                else None,
+                pipeline_run.finished_at.isoformat()
+                if pipeline_run.state == RunState.FAILED and pipeline_run.finished_at
+                else None,
+                datetime.now(timezone.utc).isoformat(),
+                pipeline_run.pipeline_id,
+            ),
+        )
+
+    def update_pipeline_metrics(self, pipeline_run: PipelineRun) -> None:
+        """
+        Update aggregated metrics for a pipeline.
+        Should be called when a run finishes.
+        This version delegates logic to smaller helpers to reduce cognitive complexity.
+        """
+        if not pipeline_run.state.is_terminal():
+            return
+
+        execution_time: Optional[float] = None
+        if pipeline_run.started_at and pipeline_run.finished_at:
+            execution_time = (
+                pipeline_run.finished_at - pipeline_run.started_at
+            ).total_seconds()
+
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT * FROM pipeline_metrics WHERE pipeline_id = ?",
+                (pipeline_run.pipeline_id,),
+            ).fetchone()
+
+            if row is None:
+                self._insert_pipeline_metrics_row(con, pipeline_run, execution_time)
+            else:
+                self._update_pipeline_metrics_row(
+                    con, row, pipeline_run, execution_time
+                )
+
+    def get_pipeline_metrics(
+        self, pipeline_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Return aggregated pipeline metrics.
+        If pipeline_id is provided, returns metrics for that pipeline, otherwise for all pipelines.
+        """
+        with self._conn() as con:
+            if pipeline_id:
+                row = con.execute(
+                    "SELECT * FROM pipeline_metrics WHERE pipeline_id = ?",
+                    (pipeline_id,),
+                ).fetchone()
+                return [dict(row)] if row else []
+            else:
+                rows = con.execute(
+                    "SELECT * FROM pipeline_metrics ORDER BY updated_at DESC"
+                ).fetchall()
+                return [dict(row) for row in rows]
+
+    def get_pipeline_runs_paginated(
+        self,
+        pipeline_id: Optional[str] = None,
+        state: Optional[RunState] = None,
+        page: int = 1,
+        page_size: int = 50,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        # Construir query de conteo
+        count_sql = "SELECT COUNT(*) as total FROM pipeline_run"
+        params: List[Any] = []
+        clauses: List[str] = []
+
+        if pipeline_id:
+            clauses.append("pipeline_id = ?")
+            params.append(pipeline_id)
+        if state:
+            clauses.append("state = ?")
+            params.append(state.value)
+        if created_after:
+            clauses.append("created_at >= ?")
+            params.append(created_after.isoformat())
+        if created_before:
+            clauses.append("created_at <= ?")
+            params.append(created_before.isoformat())
+
+        if clauses:
+            count_sql += WHERE_PREFIX + AND_JOIN.join(clauses)
+
+        # Calcular offset correctamente
+        offset = (page - 1) * page_size if page > 0 else 0
+
+        with self._conn() as con:
+            # Obtener total
+            total = con.execute(count_sql, params).fetchone()["total"]
+
+            # Obtener datos
+            data_sql = "SELECT * FROM pipeline_run"
+            if clauses:
+                data_sql += WHERE_PREFIX + AND_JOIN.join(clauses)
+            data_sql += ORDER_LIMIT_OFFSET
+
+            rows = con.execute(data_sql, params + [page_size, offset]).fetchall()
+            runs = [self._row_to_pipeline_run(r) for r in rows]
+
+        total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
+
+        return {
+            "data": runs,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_items": total,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1,
+            },
+        }

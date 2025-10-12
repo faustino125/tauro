@@ -5,6 +5,9 @@ from pydantic import BaseModel, Field, validator, HttpUrl
 from enum import Enum
 from uuid import UUID
 
+RETRIES_DESCRIPTION = "Number of retries for failed tasks"
+RETRY_DELAY_DESCRIPTION = "Delay between retries in seconds"
+
 
 class RunState(str, Enum):
     PENDING = "PENDING"
@@ -39,14 +42,8 @@ class RunCreateRequest(BaseModel):
             raise ValueError("Pipeline ID cannot be empty")
         return v.strip()
 
-
-class RunStartRequest(BaseModel):
-    retries: int = Field(
-        0, ge=0, le=10, description="Number of retries for failed tasks"
-    )
-    retry_delay_sec: int = Field(
-        0, ge=0, le=3600, description="Delay between retries in seconds"
-    )
+    retries: int = Field(0, ge=0, le=10, description=RETRIES_DESCRIPTION)
+    retry_delay_sec: int = Field(0, ge=0, le=3600, description=RETRY_DELAY_DESCRIPTION)
     concurrency: Optional[int] = Field(
         None, ge=1, le=50, description="Maximum concurrent tasks"
     )
@@ -54,6 +51,34 @@ class RunStartRequest(BaseModel):
         None, ge=1, le=86400, description="Timeout for the entire run in seconds"
     )
     env: Optional[str] = Field(None, description="Environment to use for this run")
+
+
+class RunOptions(BaseModel):
+    retries: int = Field(0, ge=0, le=10, description=RETRIES_DESCRIPTION)
+
+
+class RunOptions(BaseModel):
+    retries: int = Field(0, ge=0, le=10, description=RETRIES_DESCRIPTION)
+    retry_delay_sec: int = Field(0, ge=0, le=3600, description=RETRY_DELAY_DESCRIPTION)
+    concurrency: Optional[int] = Field(
+        None, ge=1, le=100, description="Maximum concurrent tasks"
+    )
+    timeout_seconds: Optional[int] = Field(
+        None, ge=1, le=86400, description="Timeout for the entire run in seconds"
+    )
+    env: Optional[str] = Field(None, description="Environment to use for this run")
+    execution_mode: Optional[str] = Field(
+        None, description="Execution mode for streaming (sync|async)"
+    )
+    model_version: Optional[str] = Field(
+        None, description="Model version for ML pipelines"
+    )
+    hyperparams: Optional[Dict[str, Any]] = Field(
+        None, description="Hyperparameters for ML pipelines"
+    )
+    hyperparams: Optional[Dict[str, Any]] = Field(
+        None, description="Hyperparameters for ML pipelines"
+    )
 
 
 class TaskRunResponse(BaseModel):
@@ -103,16 +128,14 @@ class ScheduleCreateRequest(BaseModel):
     pipeline_id: str = Field(..., description="ID of the pipeline to schedule")
     kind: ScheduleKind = Field(ScheduleKind.INTERVAL, description="Type of schedule")
     expression: str = Field("60", description="Interval seconds or cron expression")
-    max_concurrency: int = Field(1, ge=1, le=100, description="Maximum concurrent runs")
     retries: int = Field(
         0, ge=0, le=10, description="Number of retries for failed tasks"
     )
-    retry_delay_sec: int = Field(
-        0, ge=0, le=3600, description="Delay between retries in seconds"
-    )
+    retry_delay_sec: int = Field(0, ge=0, le=3600, description=RETRY_DELAY_DESCRIPTION)
     timeout_seconds: Optional[int] = Field(
         None, ge=1, le=86400, description="Timeout for runs in seconds"
     )
+
     enabled: bool = Field(True, description="Whether the schedule is enabled")
 
     @validator("expression")

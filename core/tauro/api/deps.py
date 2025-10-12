@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Generator
 from contextlib import contextmanager
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from loguru import logger  # type: ignore
 import time
 import prometheus_client as prom
@@ -18,7 +18,7 @@ from tauro.orchest.scheduler import SchedulerService
 
 from tauro.api.config import ApiSettings, resolve_db_path
 
-from core.tauro.orchest.runner import OrchestratorRunner
+from tauro.orchest.runner import OrchestratorRunner
 
 # Métricas Prometheus
 REQUEST_DURATION = prom.Histogram(
@@ -85,11 +85,24 @@ def get_context(
     return get_context.cache[cache_key]
 
 
-@lru_cache(maxsize=1)
-def get_store(settings: ApiSettings = Depends(get_settings)) -> OrchestratorStore:
+def get_store(
+    request: Optional[Request] = None,
+    settings: ApiSettings = Depends(get_settings),
+) -> OrchestratorStore:
     """
-    Construir OrchestratorStore respetando su firma actual.
+    Obtener la instancia compartida de `OrchestratorStore`.
+
+    Prioriza la instancia creada en `app.state` (por el lifespan en `main.py`) cuando
+    la dependencia se resuelve durante una request. Si no hay request disponible
+    devuelve una instancia nueva como fallback.
     """
+    # Si estamos dentro de una request, preferir la instancia en app.state
+    if request is not None:
+        existing = getattr(request.app.state, "store", None)
+        if existing is not None:
+            return existing
+
+    # Fallback: crear una instancia (no cacheada aquí)
     db_path = settings.orchestrator_db_path
     if isinstance(db_path, str):
         db_path = Path(db_path)
@@ -97,21 +110,34 @@ def get_store(settings: ApiSettings = Depends(get_settings)) -> OrchestratorStor
 
 
 def get_runner(
+    request: Optional[Request] = None,
     context: Context = Depends(get_context),
     store: OrchestratorStore = Depends(get_store),
 ) -> OrchestratorRunner:
+    """Obtener el OrchestratorRunner compartido (prioriza app.state.runner)."""
+    if request is not None:
+        existing = getattr(request.app.state, "runner", None)
+        if existing is not None:
+            return existing
+
     return OrchestratorRunner(context, store)
 
 
 @lru_cache(maxsize=1)
 def get_scheduler(
+    request: Optional[Request] = None,
     context: Context = Depends(get_context),
     store: OrchestratorStore = Depends(get_store),
     settings: ApiSettings = Depends(get_settings),
 ) -> SchedulerService:
     """
-    Construir SchedulerService con la firma actual (sin max_concurrent_runs).
+    Obtener SchedulerService compartido (prioriza app.state.scheduler) o crear uno nuevo.
     """
+    if request is not None:
+        existing = getattr(request.app.state, "scheduler", None)
+        if existing is not None:
+            return existing
+
     return SchedulerService(context, store)
 
 

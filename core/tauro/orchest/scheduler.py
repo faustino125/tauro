@@ -12,6 +12,12 @@ from loguru import logger  # type: ignore
 from .models import ScheduleKind, Schedule, RunState
 from .store import OrchestratorStore
 from .runner import OrchestratorRunner
+from .resilience import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerOpenError,
+    get_resilience_manager,
+)
 from tauro.config.contexts import Context
 
 try:
@@ -33,7 +39,7 @@ def _parse_interval_seconds(expr: str) -> int:
 
 
 class SchedulerMetrics:
-    """Clase para recopilar métricas del scheduler"""
+    """Class to collect scheduler metrics."""
 
     def __init__(self):
         self._lock = RLock()
@@ -48,29 +54,38 @@ class SchedulerMetrics:
         }
 
     def increment(self, key: str, value: int = 1):
-        """Incrementar un contador de métricas"""
+        """Increment a metrics counter."""
         with self._lock:
             if key in self.metrics and isinstance(self.metrics[key], int):
                 self.metrics[key] += value
 
     def set_value(self, key: str, value: Any):
-        """Establecer un valor de métrica"""
+        """Set a metric value."""
         with self._lock:
             self.metrics[key] = value
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Obtener todas las métricas"""
+        """Return all collected metrics."""
         with self._lock:
             return self.metrics.copy()
 
 
 class SchedulerService:
+    """
+    Enhanced scheduler with:
+    - Per-schedule circuit breakers to isolate problematic schedules
+    - Improved health monitoring
+    - Detailed metrics
+    - Robust error handling
+    """
+
     def __init__(
         self,
         context: Context,
         store: Optional[OrchestratorStore] = None,
         stuck_run_timeout_minutes: int = 120,
         max_consecutive_failures: int = 10,
+        enable_circuit_breakers: bool = True,
     ):
         self.context = context
         self.store = store or OrchestratorStore()
@@ -84,13 +99,33 @@ class SchedulerService:
         self._consecutive_failures = 0
         self._lock = RLock()
 
-        # Configurar manejo de señales para shutdown graceful
+        # Resilience
+        self._enable_circuit_breakers = enable_circuit_breakers
+        self._resilience = get_resilience_manager()
+        self._schedule_circuit_breakers: Dict[str, CircuitBreaker] = {}
+
+        # Configure signal handlers for graceful shutdown
         self._register_signal_handlers()
+
+    def _get_schedule_circuit_breaker(self, schedule_id: str) -> CircuitBreaker:
+        """Get or create a circuit breaker for a specific schedule."""
+        if schedule_id not in self._schedule_circuit_breakers:
+            self._schedule_circuit_breakers[
+                schedule_id
+            ] = self._resilience.get_or_create_circuit_breaker(
+                f"schedule_{schedule_id}",
+                CircuitBreakerConfig(
+                    failure_threshold=3,  # Más restrictivo que el global
+                    success_threshold=2,
+                    timeout_seconds=300.0,  # 5 minutos
+                ),
+            )
+        return self._schedule_circuit_breakers[schedule_id]
 
     def _register_signal_handlers(self) -> None:
         """
-        Registrar handlers sólo si estamos en el hilo principal. Algunas plataformas/hilos
-        fallan si signal.signal se llama desde un hilo que no es el principal.
+        Register handlers only when running in the main thread. Some platforms/threads
+        fail if signal.signal is called from a non-main thread.
         """
         if threading.current_thread() is threading.main_thread():
             try:
@@ -98,11 +133,11 @@ class SchedulerService:
                 signal.signal(signal.SIGTERM, self._signal_handler)
             except Exception as exc:
                 logging.getLogger(__name__).warning(
-                    "No se pudieron registrar señales: %s", exc
+                    "Failed to register signals: %s", exc
                 )
         else:
             logging.getLogger(__name__).debug(
-                "Ejecución en hilo no principal: no se registran señales."
+                "Running in non-main thread: not registering signal handlers."
             )
 
     def _signal_handler(self, signum, frame) -> None:
@@ -137,10 +172,10 @@ class SchedulerService:
         logger.info("Scheduler stopped")
 
     def _monitor_loop(self):
-        """Bucle de monitorización para detectar ejecuciones atascadas"""
+        """Monitoring loop to detect stuck executions."""
         while not self._stop.is_set():
             try:
-                time.sleep(60)  # Revisar cada minuto
+                time.sleep(60)  # Check every minute
                 if self._stop.is_set():
                     break
 
@@ -152,7 +187,7 @@ class SchedulerService:
                 time.sleep(60)
 
     def _check_stuck_runs(self):
-        """Detectar y manejar ejecuciones atascadas"""
+        """Detect and handle stuck executions."""
         try:
             stuck_runs = self.store.get_stuck_pipeline_runs(
                 self.stuck_run_timeout_minutes
@@ -164,14 +199,14 @@ class SchedulerService:
                     f"that started at {run.started_at}. Marking as failed."
                 )
 
-                # Marcar como fallido
+                # Mark as failed
                 self.store.update_pipeline_run_state(
                     run.id,
                     RunState.FAILED,
                     error=f"Run stuck for more than {self.stuck_run_timeout_minutes} minutes",
                 )
 
-                # También marcar todas sus tareas como fallidas
+                # Also mark all its tasks as failed
                 task_runs = self.store.list_task_runs(run.id)
                 for task_run in task_runs:
                     if task_run.state == RunState.RUNNING:
@@ -185,7 +220,7 @@ class SchedulerService:
             logger.exception(f"Error checking stuck runs: {e}")
 
     def _check_schedule_health(self):
-        """Verificar la salud de los schedules y deshabilitar los problemáticos"""
+        """Check schedule health and disable problematic schedules."""
         try:
             # Revisar la dead letter queue para schedules con muchos fallos
             failures = self.store.get_schedule_failures(limit=100)
@@ -198,7 +233,7 @@ class SchedulerService:
                     failures_by_schedule[schedule_id] = []
                 failures_by_schedule[schedule_id].append(failure)
 
-            # Deshabilitar schedules con muchos fallos consecutivos
+            # Disable schedules with many consecutive failures
             for schedule_id, schedule_failures in failures_by_schedule.items():
                 if len(schedule_failures) >= self.max_consecutive_failures:
                     logger.warning(
@@ -293,23 +328,68 @@ class SchedulerService:
     def _create_and_start_run(self, s: Schedule, now: datetime) -> bool:
         """
         Create the pipeline run, start it in a thread and bump the next run.
+        Uses per-schedule circuit breakers to isolate problematic schedules.
         Returns True if the scheduler should stop (due to reaching failure threshold), otherwise False.
         """
-        pr = self.store.create_pipeline_run(s.pipeline_id, params={})
-        self.store.update_pipeline_run_state(pr.id, RunState.QUEUED)
-        self._metrics.increment("runs_created")
 
-        logger.info(f"[Scheduler] Created run {pr.id} for pipeline '{s.pipeline_id}'")
+        def _create_run():
+            """Internal function to create a run (used with circuit breaker)."""
+            pr = self.store.create_pipeline_run(s.pipeline_id, params={})
+            self.store.update_pipeline_run_state(pr.id, RunState.QUEUED)
+            self._metrics.increment("runs_created")
 
-        Thread(
-            target=self._start_run_in_thread,
-            args=(pr.id, s),
-            daemon=True,
-        ).start()
+            logger.info(
+                f"[Scheduler] Created run {pr.id} for pipeline '{s.pipeline_id}'",
+                extra={
+                    "schedule_id": s.id,
+                    "pipeline_id": s.pipeline_id,
+                    "run_id": pr.id,
+                },
+            )
 
-        # bump next run (DB update) - do after scheduling the run to reduce races
-        self._bump_next_run(s, now)
-        return False
+            Thread(
+                target=self._start_run_in_thread,
+                args=(pr.id, s),
+                daemon=True,
+                name=f"SchedulerRun-{pr.id[:8]}",
+            ).start()
+
+            return pr.id
+
+        try:
+            # Use per-schedule circuit breaker if enabled
+            if self._enable_circuit_breakers:
+                cb = self._get_schedule_circuit_breaker(s.id)
+                cb.call(_create_run)
+            else:
+                _create_run()
+
+            # bump next run (DB update) - do after scheduling the run to reduce races
+            self._bump_next_run(s, now)
+
+            # Reset consecutive failures counter on success
+            with self._lock:
+                self._consecutive_failures = 0
+
+            return False
+
+        except CircuitBreakerOpenError as e:
+            logger.warning(
+                f"Schedule {s.id} rejected by circuit breaker",
+                extra={
+                    "schedule_id": s.id,
+                    "pipeline_id": s.pipeline_id,
+                    "error": str(e),
+                },
+            )
+            self._metrics.increment("errors")
+            self.store.add_schedule_failure_to_dlq(
+                s.id, s.pipeline_id, f"Circuit breaker OPEN: {str(e)}"
+            )
+            return False
+
+        except Exception as e:
+            return self._handle_schedule_creation_error(s, e)
 
     def _handle_schedule_creation_error(self, s: Schedule, e: Exception) -> bool:
         logger.exception(f"Failed to create run for schedule {s.id}: {e}")
@@ -408,5 +488,101 @@ class SchedulerService:
             time.sleep(0.1)
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Obtener métricas del scheduler"""
-        return self._metrics.get_metrics()
+        """Return scheduler metrics including circuit breakers."""
+        metrics = self._metrics.get_metrics()
+
+        # Añadir métricas de circuit breakers si están habilitados
+        if self._enable_circuit_breakers:
+            cb_metrics = {}
+            for schedule_id, cb in self._schedule_circuit_breakers.items():
+                cb_stats = cb.get_metrics()
+                cb_metrics[schedule_id] = {
+                    "state": cb_stats.state.value,
+                    "failure_count": cb_stats.failure_count,
+                    "total_calls": cb_stats.total_calls,
+                    "rejected_calls": cb_stats.rejected_calls,
+                }
+            metrics["schedule_circuit_breakers"] = cb_metrics
+
+        return metrics
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """Return scheduler health status."""
+        metrics = self.get_metrics()
+
+        is_healthy = True
+        issues: List[str] = []
+        warnings: List[str] = []
+
+        # Verificar si el scheduler está corriendo
+        is_running = self._thread is not None and self._thread.is_alive()
+        if not is_running:
+            is_healthy = False
+            issues.append("Scheduler is not running")
+
+        # Verificar fallos consecutivos
+        if self._consecutive_failures >= self.max_consecutive_failures // 2:
+            warnings.append(f"High consecutive failures: {self._consecutive_failures}")
+
+        if self._consecutive_failures >= self.max_consecutive_failures:
+            is_healthy = False
+            issues.append("Maximum consecutive failures reached")
+
+        # Verificar circuit breakers de forma delegada
+        if self._enable_circuit_breakers:
+            open_circuits, half_open_circuits = self._get_circuit_breaker_summary(
+                metrics
+            )
+            if open_circuits:
+                warnings.append(
+                    f"{len(open_circuits)} schedule(s) with OPEN circuit breaker"
+                )
+                issues.extend(
+                    [f"Schedule {sid}: circuit breaker OPEN" for sid in open_circuits]
+                )
+            if half_open_circuits:
+                warnings.append(f"{len(half_open_circuits)} schedule(s) recovering")
+
+        # Verificar tasa de error de forma delegada
+        error_rate = self._compute_error_rate(metrics)
+        if error_rate is not None:
+            if error_rate > 0.5:
+                is_healthy = False
+                issues.append(f"High error rate: {error_rate:.1%}")
+            elif error_rate > 0.2:
+                warnings.append(f"Elevated error rate: {error_rate:.1%}")
+
+        return {
+            "healthy": is_healthy,
+            "running": is_running,
+            "issues": issues,
+            "warnings": warnings,
+            "metrics": metrics,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _get_circuit_breaker_summary(
+        self, metrics: Dict[str, Any]
+    ) -> tuple[List[str], List[str]]:
+        """Return lists of open and half-open circuit breaker schedule ids."""
+        open_circuits: List[str] = []
+        half_open_circuits: List[str] = []
+        cb_data_map = metrics.get("schedule_circuit_breakers", {})
+        for schedule_id, cb_data in cb_data_map.items():
+            state = cb_data.get("state")
+            if state == "OPEN":
+                open_circuits.append(schedule_id)
+            elif state == "HALF_OPEN":
+                half_open_circuits.append(schedule_id)
+        return open_circuits, half_open_circuits
+
+    def _compute_error_rate(self, metrics: Dict[str, Any]) -> Optional[float]:
+        """Compute error rate as errors / cycles or None if cycles == 0."""
+        total_cycles = metrics.get("cycles", 0)
+        if not total_cycles:
+            return None
+        errors = metrics.get("errors", 0)
+        try:
+            return float(errors) / float(total_cycles)
+        except Exception:
+            return None
