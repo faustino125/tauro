@@ -10,8 +10,9 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from loguru import logger
 import time
-import sentry_sdk
-from prometheus_fastapi_instrumentator import Instrumentator
+from core.tauro.api.config import EnvironmentEnum
+import sentry_sdk  # type: ignore
+from prometheus_fastapi_instrumentator import Instrumentator  # type: ignore
 
 from tauro.api.config import ApiSettings
 from tauro.api.deps import get_settings
@@ -136,6 +137,14 @@ async def lifespan(app: FastAPI):
 def _configure_logging(settings: ApiSettings) -> None:
     """Configurar logging estructurado"""
     logger.remove()
+    # Asegurar que el directorio de logs existe
+    try:
+        from pathlib import Path
+
+        Path("logs").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Si falla, continuamos; loguru puede manejar stdout
+        pass
 
     # Console logging
     logger.add(
@@ -160,7 +169,7 @@ def _configure_middlewares(app: FastAPI, settings: ApiSettings) -> None:
     """Configurar middlewares de seguridad y monitoreo"""
 
     # HTTPS redirect en producción
-    if settings.environment == "prod":
+    if settings.environment == EnvironmentEnum.PRODUCTION:
         app.add_middleware(HTTPSRedirectMiddleware)
 
     # CORS
@@ -207,9 +216,22 @@ def _register_exception_handlers(app: FastAPI) -> None:
         log.warning(
             "API error", path=request.url.path, code=exc.code, status=exc.status_code
         )
+        # Añadir Retry-After header cuando aplique (rate limit)
+        headers = {}
+        if exc.status_code == 429:
+            retry_after = (
+                exc.details.get("retry_after")
+                if isinstance(exc.details, dict)
+                else None
+            )
+            if retry_after is None:
+                retry_after = 60
+            headers["Retry-After"] = str(retry_after)
+
         return JSONResponse(
             status_code=exc.status_code,
             content={"message": exc.message, "code": exc.code, "details": exc.details},
+            headers=headers,
         )
 
     @app.exception_handler(Exception)
@@ -311,8 +333,12 @@ def create_app(settings: Optional[ApiSettings] = None) -> FastAPI:
         title=settings.app_name,
         description="Tauro Orchestrator API for managing data pipelines",
         version="1.0.0",
-        docs_url=settings.docs_url if settings.environment != "prod" else None,
-        openapi_url=settings.openapi_url if settings.environment != "prod" else None,
+        docs_url=settings.docs_url
+        if settings.environment != EnvironmentEnum.PRODUCTION
+        else None,
+        openapi_url=settings.openapi_url
+        if settings.environment != EnvironmentEnum.PRODUCTION
+        else None,
         redoc_url=None,
         lifespan=lifespan,
     )
@@ -337,11 +363,14 @@ if __name__ == "__main__":
 
     settings = get_settings()
 
+    # Prefer raw_environment if provided for Sentry and others
     uvicorn.run(
         "tauro.api.main:app",
         host=settings.host,
         port=settings.port,
         workers=settings.workers,
-        log_level=settings.log_level,
+        log_level=settings.log_level.value
+        if hasattr(settings.log_level, "value")
+        else str(settings.log_level),
         reload=settings.environment == EnvironmentEnum.DEVELOPMENT,
     )

@@ -8,6 +8,9 @@ from datetime import datetime
 from tauro.io.output import (
     UnityCatalogManager,
     DataOutputManager,
+    PathManager,
+    DataFrameManager,
+    UnityCatalogManager as UnityCatalogOperations,
 )
 from tauro.io.exceptions import (
     ConfigurationError,
@@ -19,6 +22,19 @@ from tauro.io.constants import (
     DEFAULT_VACUUM_RETENTION_HOURS,
     CLOUD_URI_PREFIXES,
 )
+
+# Aliases for easier testing
+PathResolver = PathManager
+DataFrameConverter = DataFrameManager
+DataWriter = DataOutputManager
+ModelArtifactManager = DataOutputManager  # Simplified for testing
+
+
+class ErrorHandler:
+    """Simple error handler for testing"""
+
+    def __init__(self, fail_on_error=True):
+        self.fail_on_error = fail_on_error
 
 
 class TestDataFrameConverter:
@@ -190,6 +206,37 @@ class TestPathResolver:
         mock_validator.validate_output_key.assert_called_once_with(
             "test_schema.test_folder.test_table"
         )
+
+    def test_resolve_output_path_with_environment_local(self, mock_validator):
+        """Test resolving output path with environment for local execution mode."""
+        context = {"output_path": "/base/path", "execution_mode": "local"}
+        resolver = PathResolver(context, mock_validator)
+
+        result = resolver.resolve_output_path(
+            {}, "test_schema.test_folder.test_table", env="dev"
+        )
+
+        assert str(result) == "/base/path/dev/test_schema/test_folder/test_table"
+
+    def test_resolve_output_path_with_environment_databricks(self, mock_validator):
+        """Test resolving output path with environment for databricks execution mode."""
+        context = {"output_path": "s3://bucket/path", "execution_mode": "databricks"}
+        resolver = PathResolver(context, mock_validator)
+
+        result = resolver.resolve_output_path(
+            {}, "test_schema.test_folder.test_table", env="prod"
+        )
+
+        assert result == "s3://bucket/path/prod/test_schema/test_folder/test_table"
+
+    def test_resolve_output_path_without_environment(self, resolver, mock_validator):
+        """Test resolving output path without environment (backward compatibility)."""
+        dataset_config = {}
+        result = resolver.resolve_output_path(
+            dataset_config, "test_schema.test_folder.test_table"
+        )
+
+        assert str(result) == "/base/path/test_schema/test_folder/test_table"
 
     @pytest.mark.parametrize(
         "prefix",

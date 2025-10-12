@@ -186,11 +186,13 @@ class PathManager(BaseIO):
         super().__init__(context)
         self.config_validator = config_validator
 
-    def resolve_output_path(self, dataset_config: Dict[str, Any], out_key: str) -> str:
+    def resolve_output_path(
+        self, dataset_config: Dict[str, Any], out_key: str, env: Optional[str] = None
+    ) -> str:
         """Resolve complete output path."""
         components = self._extract_components(dataset_config, out_key)
         base_path = self._get_base_path()
-        return self._build_path(base_path, components)
+        return self._build_path(base_path, components, env)
 
     def _extract_components(
         self, dataset_config: Dict[str, Any], out_key: str
@@ -213,9 +215,20 @@ class PathManager(BaseIO):
             raise ConfigurationError("output_path not configured")
         return str(output_path)
 
-    def _build_path(self, base_path: str, components: PathComponents) -> str:
+    def _build_path(
+        self, base_path: str, components: PathComponents, env: Optional[str] = None
+    ) -> str:
         """Build final path from components."""
-        parts = [components.schema]
+        execution_mode = self._get_execution_mode()
+        should_include_env = (
+            execution_mode in ("local", "databricks", "distributed") and env
+        )
+
+        parts = []
+        if should_include_env:
+            parts.append(env)
+
+        parts.append(components.schema)
         if components.sub_folder:
             parts.append(components.sub_folder)
         parts.append(components.table_name)
@@ -400,40 +413,74 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         spark = self._ctx_spark()
         quoted_name = self.quote_table_name(full_table_name)
 
-        if config.description or config.partition_col:
-            comment = f"{config.description or 'Data table'}. Partition: {config.partition_col or 'N/A'}"
-            escaped_comment = self.escape_string(comment)
-            try:
-                spark.sql(f"COMMENT ON TABLE {quoted_name} IS '{escaped_comment}'")
-                logger.info(f"Added comment to {full_table_name}")
-            except Exception as e:
-                logger.error(f"Error adding comment: {e}")
+        self._add_comment_if_needed(spark, quoted_name, full_table_name, config)
+        self._optimize_if_needed(
+            spark, quoted_name, full_table_name, config, start_date, end_date
+        )
+        self._vacuum_if_needed(spark, quoted_name, full_table_name, config)
 
-        if config.optimize and config.partition_col and start_date and end_date:
-            try:
-                quoted_col = self.quote_identifier(config.partition_col)
-                start_esc = self.escape_string(start_date)
-                end_esc = self.escape_string(end_date)
-                spark.sql(
-                    f"""
-                    OPTIMIZE {quoted_name}
-                    WHERE {quoted_col} BETWEEN '{start_esc}' AND '{end_esc}'
-                """
-                )
-                logger.info(f"Optimized table {full_table_name}")
-            except Exception as e:
-                logger.error(f"Error optimizing table: {e}")
+    def _add_comment_if_needed(
+        self,
+        spark,
+        quoted_name: str,
+        full_table_name: str,
+        config: UnityCatalogConfig,
+    ) -> None:
+        """Add comment to table if description or partition_col is provided."""
+        if not (config.description or config.partition_col):
+            return
 
-        if config.vacuum or config.vacuum_retention_hours:
-            hours = max(
-                MIN_VACUUM_RETENTION_HOURS,
-                config.vacuum_retention_hours or DEFAULT_VACUUM_RETENTION_HOURS,
-            )
-            try:
-                spark.sql(f"VACUUM {quoted_name} RETAIN {hours} HOURS")
-                logger.info(f"Vacuumed table {full_table_name}")
-            except Exception as e:
-                logger.error(f"Error vacuuming table: {e}")
+        comment = f"{config.description or 'Data table'}. Partition: {config.partition_col or 'N/A'}"
+        escaped_comment = self.escape_string(comment)
+        try:
+            spark.sql(f"COMMENT ON TABLE {quoted_name} IS '{escaped_comment}'")
+            logger.info(f"Added comment to {full_table_name}")
+        except Exception as e:
+            logger.error(f"Error adding comment: {e}")
+
+    def _optimize_if_needed(
+        self,
+        spark,
+        quoted_name: str,
+        full_table_name: str,
+        config: UnityCatalogConfig,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> None:
+        """Optimize table for the given partition range if requested."""
+        if not (config.optimize and config.partition_col and start_date and end_date):
+            return
+
+        try:
+            quoted_col = self.quote_identifier(config.partition_col)
+            start_esc = self.escape_string(start_date)
+            end_esc = self.escape_string(end_date)
+            sql = f"OPTIMIZE {quoted_name} WHERE {quoted_col} BETWEEN '{start_esc}' AND '{end_esc}'"
+            spark.sql(sql)
+            logger.info(f"Optimized table {full_table_name}")
+        except Exception as e:
+            logger.error(f"Error optimizing table: {e}")
+
+    def _vacuum_if_needed(
+        self,
+        spark,
+        quoted_name: str,
+        full_table_name: str,
+        config: UnityCatalogConfig,
+    ) -> None:
+        """Run VACUUM on table if requested or retention configured."""
+        if not (config.vacuum or config.vacuum_retention_hours):
+            return
+
+        hours = max(
+            MIN_VACUUM_RETENTION_HOURS,
+            config.vacuum_retention_hours or DEFAULT_VACUUM_RETENTION_HOURS,
+        )
+        try:
+            spark.sql(f"VACUUM {quoted_name} RETAIN {hours} HOURS")
+            logger.info(f"Vacuumed table {full_table_name}")
+        except Exception as e:
+            logger.error(f"Error vacuuming table: {e}")
 
 
 class DataOutputManager(BaseIO):
@@ -506,7 +553,7 @@ class DataOutputManager(BaseIO):
                 df, output_config, start_date, end_date, out_key, env
             )
         else:
-            self._write_traditional(df, output_config, out_key)
+            self._write_traditional(df, output_config, out_key, env)
 
     def _write_unity_catalog(
         self,
@@ -584,9 +631,11 @@ class DataOutputManager(BaseIO):
         except Exception as e:
             raise WriteOperationError(f"Unity Catalog write failed: {e}") from e
 
-    def _write_traditional(self, df: any, config: Dict[str, Any], out_key: str) -> None:
+    def _write_traditional(
+        self, df: any, config: Dict[str, Any], out_key: str, env: Optional[str] = None
+    ) -> None:
         """Write to traditional storage."""
-        path = self.path_manager.resolve_output_path(config, out_key)
+        path = self.path_manager.resolve_output_path(config, out_key, env)
 
         if not is_cloud_path(path):
             Path(path).parent.mkdir(parents=True, exist_ok=True)

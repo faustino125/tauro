@@ -6,6 +6,7 @@ import time
 
 from loguru import logger  # type: ignore
 from fastapi import APIRouter, Request, HTTPException
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from typing import Any, Dict
 import asyncio
@@ -178,6 +179,8 @@ class OrchestratorRunner:
         return True
 
 
+SERVICE_NOT_INITIALIZED = "Service not initialized"
+
 router = APIRouter()
 
 
@@ -193,9 +196,16 @@ async def create_run(req: Request, body: RunCreate):
     """
     pipeline_service = getattr(req.app.state, "pipeline_service", None)
     if pipeline_service is None:
-        raise HTTPException(status_code=500, detail="Service not initialized")
+        raise HTTPException(status_code=500, detail=SERVICE_NOT_INITIALIZED)
 
-    run_id = await pipeline_service.run_pipeline(body.pipeline_id, body.params)
+    maybe = pipeline_service.run_pipeline(body.pipeline_id, body.params)
+    if asyncio.iscoroutine(maybe):
+        run_id = await maybe
+    else:
+        # If the implementation is synchronous/blocking, run it in a threadpool
+        run_id = await run_in_threadpool(
+            pipeline_service.run_pipeline, body.pipeline_id, body.params
+        )
     return {"run_id": run_id}
 
 
@@ -203,7 +213,7 @@ async def create_run(req: Request, body: RunCreate):
 async def get_run(req: Request, run_id: str):
     pipeline_service = getattr(req.app.state, "pipeline_service", None)
     if pipeline_service is None:
-        raise HTTPException(status_code=500, detail="Service not initialized")
+        raise HTTPException(status_code=500, detail=SERVICE_NOT_INITIALIZED)
 
     res = pipeline_service.get_run(run_id)
     if asyncio.iscoroutine(res):
@@ -217,7 +227,7 @@ async def get_run(req: Request, run_id: str):
 async def list_runs(req: Request):
     pipeline_service = getattr(req.app.state, "pipeline_service", None)
     if pipeline_service is None:
-        raise HTTPException(status_code=500, detail="Service not initialized")
+        raise HTTPException(status_code=500, detail=SERVICE_NOT_INITIALIZED)
 
     res = pipeline_service.list_runs()
     if asyncio.iscoroutine(res):
@@ -229,9 +239,13 @@ async def list_runs(req: Request):
 async def cancel_run(req: Request, run_id: str):
     pipeline_service = getattr(req.app.state, "pipeline_service", None)
     if pipeline_service is None:
-        raise HTTPException(status_code=500, detail="Service not initialized")
+        raise HTTPException(status_code=500, detail=SERVICE_NOT_INITIALIZED)
 
-    cancelled = await pipeline_service.cancel_run(run_id)
+    maybe = pipeline_service.cancel_run(run_id)
+    if asyncio.iscoroutine(maybe):
+        cancelled = await maybe
+    else:
+        cancelled = await run_in_threadpool(pipeline_service.cancel_run, run_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="Run not found or cannot cancel")
     return {"cancelled": True}

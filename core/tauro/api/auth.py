@@ -3,16 +3,19 @@ from functools import lru_cache
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 import threading
+import uuid
 
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.security.api_key import APIKeyHeader
 import hmac
-from cachetools import TTLCache
-from jose import jwt, JWTError
-from passlib.context import CryptContext
+from cachetools import TTLCache  # type: ignore
+from jose import jwt, JWTError  # type: ignore
+from passlib.context import CryptContext  # type: ignore
 
 from tauro.api.config import ApiSettings
+
+from tauro.api.deps import get_settings
 from .config import settings
 
 # Contexto de cifrado para contraseñas
@@ -78,7 +81,8 @@ def create_access_token(
 ) -> str:
     """Crea JWT firmado"""
     if expires_delta is None:
-        expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        # ApiSettings uses snake_case names (jwt_expiration_minutes)
+        expires_delta = timedelta(minutes=settings.jwt_expiration_minutes)
 
     to_encode = {
         "sub": str(subject),
@@ -91,7 +95,7 @@ def create_access_token(
         to_encode.update(extra)
 
     return jwt.encode(
-        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
     )
 
 
@@ -99,7 +103,7 @@ def decode_access_token(token: str) -> Dict[str, Any]:
     """Decodifica y valida JWT"""
     try:
         payload = jwt.decode(
-            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
         )
         return payload
     except JWTError as e:
@@ -109,16 +113,22 @@ def decode_access_token(token: str) -> Dict[str, Any]:
         )
 
 
-def verify_token(token: str, settings: ApiSettings) -> bool:
-    """Verificar token con cache thread-safe"""
+def verify_api_key(token: str, settings: ApiSettings) -> bool:
+    """Verificar API key simple con cache thread-safe.
+
+    Esta función solo valida claves simples (X-API-Key) comparando contra
+    `settings.auth_token`. La verificación de JWT se realiza por separado.
+    """
     with _cache_lock:
         if token in _token_cache:
             return _token_cache[token]
 
-    # Verificar token
-    is_valid = bool(
-        settings.auth_token and hmac.compare_digest(token, settings.auth_token)
-    )
+    is_valid = False
+    if settings.auth_token:
+        try:
+            is_valid = hmac.compare_digest(token, settings.auth_token)
+        except Exception:
+            is_valid = False
 
     with _cache_lock:
         _token_cache[token] = is_valid
@@ -160,13 +170,8 @@ def get_current_user(
             detail="Missing authentication token",
         )
 
-    if not verify_token(token, settings):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token"
-        )
-
-    # Si es JWT, extraer información del payload
-    if token.startswith("eyJ"):  # heuristic para detectar JWT
+    # Si parece un JWT, intentamos decodificar y validar la firma primero.
+    if token.startswith("eyJ"):
         try:
             payload = decode_access_token(token)
             return {
@@ -176,12 +181,17 @@ def get_current_user(
                 "jti": payload.get("jti"),
             }
         except HTTPException:
+            # Token JWT inválido -> 401
             raise
         except Exception:
-            # Fallback a autenticación básica si el JWT falla
+            # Si no se pudo procesar como JWT, intentamos como api key
             pass
 
-    return {"id": "api-user", "role": "user", "ip": client_ip}
+    # Si no es JWT válido, verificar API key simple
+    if verify_api_key(token, settings):
+        return {"id": "api-user", "role": "user", "ip": client_ip}
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token")
 
 
 def get_admin_user(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:

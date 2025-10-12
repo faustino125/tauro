@@ -495,8 +495,45 @@ class AppConfigManager:
 
     def get_env_config(self, env: str) -> Dict[str, str]:
         """Get configuration paths for specific environment."""
-        env = env.lower()
+        # Step 1: normalize and validate the environment name
+        norm_env = self._normalize_env(env)
+
         env_configs = self.settings["env_config"]
+
+        # Step 2: resolve sandbox fallback or verify presence
+        resolved_env = self._resolve_env_fallback(norm_env, env_configs)
+
+        # Step 3: merge base and environment specific configs
+        merged = self._merge_base_and_env(env_configs, resolved_env)
+
+        # Step 4: validate and build absolute paths
+        return self._validate_and_build_paths(merged)
+
+    def _normalize_env(self, env: str) -> str:
+        from tauro.cli.core import normalize_environment, is_allowed_environment
+
+        norm_env = normalize_environment(env)
+        if not norm_env or not is_allowed_environment(norm_env):
+            available = list(self.settings.get("env_config", {}).keys())
+            raise ConfigurationError(
+                f"Environment '{env}' not found or not allowed. Available: {available}"
+            )
+        return norm_env
+
+    def _resolve_env_fallback(self, env: str, env_configs: Dict[str, Any]) -> str:
+        from tauro.cli.core import is_sandbox_environment, get_base_environment
+
+        if is_sandbox_environment(env) and env not in env_configs:
+            base_env = get_base_environment(env)
+            if base_env in env_configs:
+                logger.info(
+                    f"Environment '{env}' not found, falling back to '{base_env}' configuration"
+                )
+                return base_env
+            available = list(env_configs.keys())
+            raise ConfigurationError(
+                f"Environment '{env}' not found and no '{base_env}' fallback available. Available: {available}"
+            )
 
         if env not in env_configs:
             available = list(env_configs.keys())
@@ -504,24 +541,27 @@ class AppConfigManager:
                 f"Environment '{env}' not found. Available: {available}"
             )
 
+        return env
+
+    def _merge_base_and_env(
+        self, env_configs: Dict[str, Any], env: str
+    ) -> Dict[str, str]:
         base_config = env_configs.get("base", {})
         env_config = env_configs.get(env, {})
-        merged = {**base_config, **env_config}
+        return {**base_config, **env_config}
 
-        result = {}
+    def _validate_and_build_paths(self, merged: Dict[str, str]) -> Dict[str, str]:
+        result: Dict[str, str] = {}
         for key, path in merged.items():
-            if path:
-                full_path = self.base_path / path
-                try:
-                    validated = SecurityValidator.validate_path(
-                        self.base_path, full_path
-                    )
-                    result[key] = str(validated)
-
-                    if not validated.exists():
-                        logger.warning(f"Config path missing: {validated}")
-                except SecurityError as e:
-                    logger.error(f"Invalid config path: {e}")
-                    result[key] = str(full_path)
-
+            if not path:
+                continue
+            full_path = self.base_path / path
+            try:
+                validated = SecurityValidator.validate_path(self.base_path, full_path)
+                result[key] = str(validated)
+                if not validated.exists():
+                    logger.warning(f"Config path missing: {validated}")
+            except SecurityError as e:
+                logger.error(f"Invalid config path: {e}")
+                result[key] = str(full_path)
         return result

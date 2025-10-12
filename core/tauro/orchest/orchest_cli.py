@@ -30,7 +30,11 @@ def _parser() -> argparse.ArgumentParser:
         description="Tauro Orchestrator CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--env", required=True, choices=["base", "dev", "pre_prod", "prod"])
+    p.add_argument(
+        "--env",
+        required=True,
+        help="Execution environment (base, dev, sandbox, prod, or sandbox_<developer>)",
+    )
     p.add_argument("--base-path")
     p.add_argument("--layer-name")
     p.add_argument("--use-case")

@@ -39,8 +39,17 @@ class LocalDagExecutor:
         self._stop_event = threading.Event()
 
         # Configurar manejo de señales para shutdown graceful
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Register signal handlers only if running in main thread and signals are available
+        try:
+            if threading.current_thread() is threading.main_thread():
+                # Some environments (like certain Windows shells or restricted runtimes)
+                # may not support signal.signal; guard to avoid crashing during import.
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+        except Exception:
+            logger.debug(
+                "Signal handlers not registered for LocalDagExecutor (platform/thread limitation)"
+            )
 
     def _signal_handler(self, signum, frame):
         """Manejar señales de terminación"""

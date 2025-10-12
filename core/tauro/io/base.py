@@ -54,6 +54,15 @@ class BaseIO:
         """Get normalized execution mode."""
         return self.context_manager.get_execution_mode()
 
+    def _get_execution_mode(self) -> Optional[str]:
+        """Backward-compatible alias for getting execution mode.
+
+        Some older components expect a method named `_get_execution_mode` on
+        BaseIO-derived classes. Provide a thin wrapper that returns the
+        ContextManager's normalized execution mode.
+        """
+        return self.context_manager.get_execution_mode()
+
     def _is_local(self) -> bool:
         """Check if execution mode is local."""
         return self.context_manager.is_local_mode()

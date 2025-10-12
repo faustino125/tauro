@@ -18,6 +18,8 @@ from tauro.orchest.scheduler import SchedulerService
 
 from tauro.api.config import ApiSettings, resolve_db_path
 
+from core.tauro.orchest.runner import OrchestratorRunner
+
 # Métricas Prometheus
 REQUEST_DURATION = prom.Histogram(
     "http_request_duration_seconds",

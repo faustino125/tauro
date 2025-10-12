@@ -74,7 +74,7 @@ High‑level flow:
   - settings_dsl.json (points to DSL section files).
 - Section files (per environment mapping inside settings):
   - global_settings, pipelines, nodes, input, output.
-- Environments: base, dev, pre_prod, prod.
+- Environments: base, dev, sandbox, prod.
 
 AppConfigManager reads the settings index and returns validated, absolute paths for each required config section per environment. SecurityValidator ensures paths do not escape the project and are safe to use.
 

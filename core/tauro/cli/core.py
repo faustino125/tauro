@@ -417,3 +417,110 @@ def validate_date_range(start_date: Optional[str], end_date: Optional[str]) -> N
             raise ValidationError(
                 f"Start date {start_date} must be <= end date {end_date}"
             )
+
+
+def is_sandbox_environment(env_name: str) -> bool:
+    """Check if environment name is a sandbox environment (sandbox or sandbox_*)."""
+    if not env_name:
+        return False
+    return env_name == "sandbox" or env_name.startswith("sandbox_")
+
+
+def get_sandbox_developer(env_name: str) -> Optional[str]:
+    """Extract developer name from sandbox environment name."""
+    if not is_sandbox_environment(env_name):
+        return None
+
+    if env_name == "sandbox":
+        return None  # Generic sandbox
+
+    # Extract developer name from sandbox_<developer>
+    parts = env_name.split("_", 1)
+    if len(parts) == 2 and parts[0] == "sandbox":
+        return parts[1]
+
+    return None
+
+
+def get_base_environment(env_name: str) -> str:
+    """Get base environment name (e.g., sandbox_juan -> sandbox)."""
+    if is_sandbox_environment(env_name):
+        return "sandbox"
+    return env_name
+
+
+def validate_environment_name(env_name: str) -> bool:
+    """Validate environment name format."""
+    from typing import Optional
+
+    # Use normalization and allowed list
+    norm = normalize_environment(env_name) if env_name else None
+    if not norm:
+        return False
+    return is_allowed_environment(norm)
+
+
+# ----- New helpers for scalable env handling -----
+DEFAULT_ENVIRONMENTS = ["base", "dev", "sandbox", "prod"]
+
+# Aliases map (user-friendly names -> canonical)
+ENV_ALIASES = {
+    "development": "dev",
+    "prod": "prod",
+    "production": "prod",
+    "staging": "dev",
+}
+
+
+def normalize_environment(env_name: Optional[str]) -> Optional[str]:
+    """Normalize environment name: lower-case, map aliases, and trim.
+
+    Returns canonical name (e.g. 'production' -> 'prod', 'SANDBox_juan' -> 'sandbox_juan').
+    If env_name is falsy returns None.
+    """
+    if not env_name:
+        return None
+    env = env_name.strip().lower()
+
+    # Map aliases for exact matches
+    if env in ENV_ALIASES:
+        return ENV_ALIASES[env]
+
+    # If sandbox developer pattern, normalize prefix
+    if env == "sandbox":
+        return "sandbox"
+    if env.startswith("sandbox_"):
+        # sanitize developer part: allow alnum and underscore only
+        dev = env.split("_", 1)[1]
+        safe_dev = "".join(c for c in dev if c.isalnum() or c == "_")
+        return f"sandbox_{safe_dev}" if safe_dev else "sandbox"
+
+    return env
+
+
+def allowed_environments() -> List[str]:
+    """Return the list of allowed canonical environments.
+
+    This includes DEFAULT_ENVIRONMENTS plus any additional comma-separated
+    environments defined in TAURO_ALLOWED_ENVS environment variable.
+    """
+    extra = os.getenv("TAURO_ALLOWED_ENVS", "")
+    extras = [e.strip().lower() for e in extra.split(",") if e.strip()] if extra else []
+    # Normalize extras as well
+    normalized_extras = [normalize_environment(e) for e in extras]
+    uniq = []
+    for e in DEFAULT_ENVIRONMENTS + normalized_extras:
+        if e and e not in uniq:
+            uniq.append(e)
+    return uniq
+
+
+def is_allowed_environment(env_name: str) -> bool:
+    """Check whether an environment is allowed (after normalization)."""
+    norm = normalize_environment(env_name)
+    if not norm:
+        return False
+    # sandbox variants should be accepted as long as prefix is sandbox
+    if norm == "sandbox" or norm.startswith("sandbox_"):
+        return True
+    return norm in allowed_environments()

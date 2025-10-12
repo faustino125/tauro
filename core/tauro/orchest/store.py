@@ -1,4 +1,7 @@
 from __future__ import annotations
+from asyncio import Lock
+import os
+import time
 from typing import Any, Dict, Generator, Iterable, List, Optional
 from pathlib import Path
 from contextlib import contextmanager
@@ -8,10 +11,21 @@ import sqlite3
 import threading
 import queue
 from uuid import uuid4
+import uuid
+
+# Retry utilities for robust DB/pool operations
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type  # type: ignore
 
 from .models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
 
-DEFAULT_DB_PATH = Path.home() / ".tauro" / "orchestrator.db"
+_DEFAULT_DB_PATH_ENV = "ORCHESTRATOR_DB_PATH"
+DEFAULT_DB_PATH = (
+    Path(  # env override for runtime flexibility (useful in containers/CI)
+        os.environ.get(_DEFAULT_DB_PATH_ENV)
+    )
+    if os.environ.get(_DEFAULT_DB_PATH_ENV)
+    else Path.home() / ".tauro" / "orchestrator.db"
+)
 
 
 class Store:
@@ -73,18 +87,25 @@ class Store:
 
 
 class ConnectionPool:
-    """Pool de conexiones con reconexión automática y verificación de salud"""
+    """Pool de conexiones con reconexión automática y verificación de salud.
 
-    def __init__(self, db_path: str, maxsize: int = 5, timeout: int = 30) -> None:
+    Ahora soporta creación perezosa: puede crear sólo `minsize` conexiones al inicio
+    y añadir conexiones hasta `maxsize` bajo demanda.
+    """
+
+    def __init__(
+        self, db_path: str, maxsize: int = 5, timeout: int = 30, minsize: int = 0
+    ) -> None:
         self._db_path = db_path
         self._maxsize = maxsize
         self._timeout = timeout
+        self._minsize = max(0, minsize)
         self._pool = queue.Queue(maxsize)
         self._lock = threading.RLock()
         self._created_connections = 0
 
-        # Inicializar pool
-        for _ in range(maxsize):
+        # Inicializar pool con minsize conexiones (lazy)
+        for _ in range(self._minsize):
             self._add_connection()
 
     def _add_connection(self) -> None:
@@ -133,8 +154,14 @@ class ConnectionPool:
             return conn
         except queue.Empty:
             # Intentar crear conexión adicional si el pool está vacío
+            with self._lock:
+                # Si aún podemos crear más conexiones, intentarlo
+                if self._created_connections < self._maxsize:
+                    try:
+                        self._add_connection()
+                    except Exception:
+                        pass
             try:
-                self._add_connection()
                 return self._pool.get(timeout=timeout)
             except queue.Empty:
                 raise sqlite3.OperationalError("No connections available")
@@ -195,10 +222,13 @@ class OrchestratorStore:
         db_path: Path = DEFAULT_DB_PATH,
         max_connections: int = 10,
         timeout: int = 30,
+        min_connections: int = 0,
     ):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection_pool = ConnectionPool(db_path, max_connections, timeout)
+        self.connection_pool = ConnectionPool(
+            db_path, max_connections, timeout, min_connections
+        )
         self._init_schema()
 
     @contextmanager

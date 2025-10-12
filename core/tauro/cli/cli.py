@@ -55,8 +55,7 @@ class ArgumentParser:
         # Environment and pipeline
         parser.add_argument(
             "--env",
-            choices=["base", "dev", "pre_prod", "prod"],
-            help="Execution environment",
+            help="Execution environment (base, dev, sandbox, prod, or sandbox_<developer>)",
         )
         parser.add_argument("--pipeline", help="Pipeline name to execute")
         parser.add_argument("--node", help="Specific node to execute (optional)")
@@ -118,6 +117,11 @@ class ArgumentParser:
             choices=["yaml", "json", "dsl"],
             default="yaml",
             help="Config format for generated template",
+        )
+        parser.add_argument(
+            "--sandbox-developers",
+            nargs="*",
+            help="List of developer names for sandbox environments (e.g., --sandbox-developers juan pedro)",
         )
         parser.add_argument(
             "--no-sample-code",
@@ -190,6 +194,7 @@ class ConfigValidator:
         ConfigValidator._validate_streaming(config)
         ConfigValidator._validate_pipeline_execution(config)
         ConfigValidator._validate_dates(config)
+        ConfigValidator._validate_environment(config)
 
     @staticmethod
     def _validate_streaming(config: CLIConfig) -> None:
@@ -227,6 +232,17 @@ class ConfigValidator:
             sd = parse_iso_date(config.start_date) if config.start_date else None
             ed = parse_iso_date(config.end_date) if config.end_date else None
             validate_date_range(sd, ed)
+
+    @staticmethod
+    def _validate_environment(config: CLIConfig) -> None:
+        """Validate environment name format."""
+        from tauro.cli.core import validate_environment_name
+
+        if config.env and not validate_environment_name(config.env):
+            raise ValidationError(
+                f"Invalid environment name '{config.env}'. "
+                f"Valid formats: base, dev, sandbox, prod, or sandbox_<developer>"
+            )
 
 
 class SpecialModeHandler:

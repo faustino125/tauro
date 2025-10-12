@@ -11,9 +11,16 @@ from enum import Enum
 
 class EnvironmentEnum(str, Enum):
     DEVELOPMENT = "dev"
-    STAGING = "staging"
     PRODUCTION = "prod"
+    SANDBOX = "sandbox"
     TESTING = "test"
+
+    @classmethod
+    def _missing_(cls, value):
+        """Handle sandbox_* environments."""
+        if isinstance(value, str) and value.startswith("sandbox_"):
+            return cls.SANDBOX
+        return None
 
 
 class LogLevelEnum(str, Enum):
@@ -37,6 +44,10 @@ class InvalidCORSOriginsError(PydanticValueError):
 class ApiSettings(BaseSettings):
     # App
     app_name: str = Field("Tauro Orchestrator API", env="TAURO_APP_NAME")
+    # Preserve the raw environment string (e.g. 'sandbox_juan') while keeping
+    # the typed enum for common cases. Some parts of the codebase (CLI,
+    # AppConfigManager) expect the full sandbox_<dev> name, so we keep it.
+    raw_environment: Optional[str] = Field(default=None, env="TAURO_ENVIRONMENT")
     environment: EnvironmentEnum = Field(
         EnvironmentEnum.DEVELOPMENT, env="TAURO_ENVIRONMENT"
     )
@@ -160,16 +171,16 @@ class ApiSettings(BaseSettings):
         if v is not None:
             return v
 
-        # Path por defecto basado en environment
         home = Path(os.path.expanduser("~"))
-        env = values.get("environment", "dev")
+
+        env = values.get("raw_environment") or values.get("environment") or "dev"
         return home / ".tauro" / f"orchestrator_{env}.db"
 
     @validator("jwt_secret_key", pre=True, always=True)
     def _generate_jwt_secret(cls, v, values):
         if not v:
-            # Generar secret seguro por defecto si no está configurado
-            if values.get("environment") == EnvironmentEnum.PRODUCTION:
+            env_enum = values.get("environment")
+            if env_enum == EnvironmentEnum.PRODUCTION:
                 raise ValueError("JWT secret key is required in production")
             return secrets.token_urlsafe(64)
         return v

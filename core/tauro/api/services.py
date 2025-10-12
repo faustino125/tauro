@@ -2,10 +2,11 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 from tauro.streaming.pipeline_manager import PipelineManager
 from tauro.exec.executor import PipelineExecutor
+
+from core.tauro.cli.streaming_cli import status
 
 from .utils import handle_exceptions, log_execution_time, log, APIError, NotFoundError
 
@@ -187,7 +188,8 @@ class PipelineService:
             try:
                 await task
             except asyncio.CancelledError:
-                pass
+                # Preserve cancellation semantics by re-raising after any local cleanup
+                raise
             except Exception:
                 log.exception("Exception while cancelling task", run_id=run_id)
 
@@ -211,7 +213,7 @@ class PipelineService:
             return []
         return lister(limit=limit, offset=offset)
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Obtener estadísticas del servicio"""
         async with self._lock:
             return {

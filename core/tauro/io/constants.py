@@ -40,5 +40,4 @@ DEFAULT_CSV_OPTIONS = {"header": "true"}
 DEFAULT_VACUUM_RETENTION_HOURS = 168  # 7 days
 MIN_VACUUM_RETENTION_HOURS = 168
 
-# Centralized prefixes for cloud/distributed filesystems
 CLOUD_URI_PREFIXES = ("s3://", "abfss://", "gs://", "dbfs:/")

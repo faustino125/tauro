@@ -63,7 +63,7 @@ Tauro separates configuration into one index file (“settings”) and five sect
   - input.(yaml|json|dsl)
   - output.(yaml|json|dsl)
 
-Environments supported by the CLI: base, dev, pre_prod, prod.
+Environments supported by the CLI: base, dev, sandbox, prod.
 
 Auto-discovery scans for: settings_yml.json, settings_json.json, settings_dsl.json, settings.json, config.json, tauro.json. Discovery selects the best match by path score or interactive selection.
 
@@ -76,7 +76,7 @@ Security: The CLI validates paths to avoid directory traversal, hidden paths, sy
 All flags below are from `cli.py` unless stated otherwise.
 
 - Execute a pipeline
-  tauro --env <base|dev|pre_prod|prod> --pipeline <name> [--node <node_name>] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--dry-run]
+  tauro --env <base|dev|sandbox|prod> --pipeline <name> [--node <node_name>] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--dry-run]
 
 - Validate configuration only
   tauro --env dev --pipeline my_pipeline --validate-only
@@ -136,7 +136,7 @@ Notes:
 
 The template generator produces:
 - A settings index file (settings_yml.json or settings_json.json)
-- Config files under ./config for base/dev/pre_prod/prod
+- Config files under ./config for base/dev/sandbox/prod
 - Minimal package structure and example node functions
 - A README, requirements, and .gitignore
 

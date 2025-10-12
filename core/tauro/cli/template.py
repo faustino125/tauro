@@ -78,7 +78,7 @@ class BaseTemplate(ABC):
         """Generate the main settings.json file with environment mappings."""
         file_ext = self._get_file_extension()
 
-        # Include 'pre_prod' to align with CLI environment choices
+        # Include 'sandbox' to align with CLI environment choices
         return {
             "base_path": ".",
             "env_config": {
@@ -94,10 +94,10 @@ class BaseTemplate(ABC):
                     "input_config_path": f"config/dev/input{file_ext}",
                     "output_config_path": f"config/dev/output{file_ext}",
                 },
-                "pre_prod": {
-                    "global_settings_path": f"config/pre_prod/global_settings{file_ext}",
-                    "input_config_path": f"config/pre_prod/input{file_ext}",
-                    "output_config_path": f"config/pre_prod/output{file_ext}",
+                "sandbox": {
+                    "global_settings_path": f"config/sandbox/global_settings{file_ext}",
+                    "input_config_path": f"config/sandbox/input{file_ext}",
+                    "output_config_path": f"config/sandbox/output{file_ext}",
                 },
                 "prod": {
                     "global_settings_path": f"config/prod/global_settings{file_ext}",
@@ -401,6 +401,7 @@ class TemplateGenerator:
         template_type: TemplateType,
         project_name: str,
         create_sample_code: bool = True,
+        developer_sandboxes: Optional[List[str]] = None,
     ) -> None:
         """Generate complete project structure from template."""
         logger.info(
@@ -413,10 +414,10 @@ class TemplateGenerator:
         )
 
         # Create directory structure
-        self._create_directory_structure()
+        self._create_directory_structure(developer_sandboxes)
 
         # Generate configuration files
-        self._generate_config_files(template)
+        self._generate_config_files(template, developer_sandboxes)
 
         # Generate sample code if requested
         if create_sample_code:
@@ -429,12 +430,14 @@ class TemplateGenerator:
             f"Project '{project_name}' generated successfully at {self.output_path}"
         )
 
-    def _create_directory_structure(self) -> None:
+    def _create_directory_structure(
+        self, developer_sandboxes: Optional[List[str]] = None
+    ) -> None:
         """Create project directory structure."""
         directories = [
             "config",
             "config/dev",
-            "config/pre_prod",
+            "config/sandbox",
             "config/prod",
             "pipelines",
             "pipelines/bronze",
@@ -453,6 +456,11 @@ class TemplateGenerator:
             "logs",
         ]
 
+        # Add developer sandbox directories
+        if developer_sandboxes:
+            for dev in developer_sandboxes:
+                directories.append(f"config/sandbox_{dev}")
+
         for directory in directories:
             dir_path = self.output_path / directory
             dir_path.mkdir(parents=True, exist_ok=True)
@@ -461,7 +469,9 @@ class TemplateGenerator:
             if directory.startswith("pipelines") or directory == "src":
                 (dir_path / "__init__.py").touch()
 
-    def _generate_config_files(self, template: BaseTemplate) -> None:
+    def _generate_config_files(
+        self, template: BaseTemplate, developer_sandboxes: Optional[List[str]] = None
+    ) -> None:
         """Generate all configuration files."""
         configs = {
             "global_settings": template.generate_global_settings(),
@@ -476,7 +486,13 @@ class TemplateGenerator:
         self._write_json_file(settings_file, template.generate_settings_json())
 
         # Generate configuration files for each environment
-        for env in ["base", "dev", "pre_prod", "prod"]:
+        environments = ["base", "dev", "sandbox", "prod"]
+
+        # Add developer sandbox environments
+        if developer_sandboxes:
+            environments.extend([f"sandbox_{dev}" for dev in developer_sandboxes])
+
+        for env in environments:
             config_dir = self.output_path / "config" / (env if env != "base" else "")
 
             for config_name, config_data in configs.items():
@@ -755,6 +771,7 @@ class TemplateCommand:
         create_sample_code: bool = True,
         list_templates: bool = False,
         interactive: bool = False,
+        sandbox_developers: Optional[List[str]] = None,
     ) -> int:
         """Handle template generation command."""
         try:
@@ -775,6 +792,7 @@ class TemplateCommand:
                 output_path,
                 config_format,
                 create_sample_code,
+                sandbox_developers,
             )
 
         except TemplateError as e:
@@ -877,6 +895,7 @@ class TemplateCommand:
         output_path: Optional[str],
         config_format: str,
         create_sample_code: bool,
+        sandbox_developers: Optional[List[str]] = None,
     ) -> int:
         """Generate template with specified parameters."""
         try:
@@ -915,7 +934,7 @@ class TemplateCommand:
             # Generate template
             self.generator = TemplateGenerator(output_dir, format_enum)
             self.generator.generate_project(
-                template_enum, project_name, create_sample_code
+                template_enum, project_name, create_sample_code, sandbox_developers
             )
 
             # Show success message with next steps
@@ -1004,4 +1023,5 @@ def handle_template_command(parsed_args) -> int:
         config_format=parsed_args.format,
         create_sample_code=not parsed_args.no_sample_code,
         list_templates=parsed_args.list_templates,
+        sandbox_developers=getattr(parsed_args, "sandbox_developers", None),
     )
