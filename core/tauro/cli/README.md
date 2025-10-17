@@ -1,19 +1,21 @@
 # Tauro CLI
 
-Command-line interface for the Tauro data pipeline framework. This CLI lets you:
+Command-line interface for the Tauro data pipeline framework. This CLI provides a unified interface for executing batch and streaming pipelines, managing orchestration, generating project templates, and handling configuration.
 
-- Execute batch (and hybrid) pipelines
-- Manage streaming pipelines (run, check status, stop)
-- Discover and select configuration files by environment
-- Generate a minimal Medallion-style project template
+The CLI is organized into subcommands for different operations:
+- `run`: Direct pipeline execution
+- `orchestrate`: Pipeline orchestration management (runs, schedules, etc.)
+- `stream`: Streaming pipeline management
+- `template`: Project template generation
+- `config`: Configuration management and discovery
 
-The CLI in this folder is composed of:
-- `cli.py`: main entry point and argument parser (argparse)
-- `streaming_cli.py`: streaming subcommands (click)
-- `config.py`: configuration discovery and format loaders
-- `execution.py`: context initialization and execution wrapper
-- `core.py`: shared types, logging setup, validation, and utilities
-- `template.py`: project template generator
+## Components
+
+- `cli.py`: Main entry point with unified argument parser and subcommand dispatch
+- `core.py`: Shared utilities, error handling, security validation, and logging setup
+- `config.py`: Configuration discovery, loading (YAML/JSON/DSL), and management
+- `execution.py`: Context initialization and pipeline execution wrapper
+- `template.py`: Project template generator with Medallion architecture support
 
 Requirements: Python 3.9+, `loguru`. Optional: `pyyaml` (YAML configs), streaming stack (e.g., Kafka client), Spark/Delta if your pipelines use them.
 
@@ -22,35 +24,35 @@ Requirements: Python 3.9+, `loguru`. Optional: `pyyaml` (YAML configs), streamin
 ## Quick start
 
 1) Generate a starter project (Medallion: Bronze, Silver, Gold)
-- YAML (default):
-  tauro --template medallion_basic --project-name demo_project
-- JSON:
-  tauro --template medallion_basic --project-name demo_project --format json
+```bash
+tauro template --template medallion_basic --project-name demo_project
+# Or with JSON configs:
+tauro template --template medallion_basic --project-name demo_project --format json
+```
 
 2) Run a batch pipeline (after customizing configs and code)
-- From the project root:
-  tauro --env dev --pipeline bronze_batch_ingestion
+```bash
+tauro run --env dev --pipeline bronze_batch_ingestion
+```
 
 3) Start a streaming pipeline (async)
-- Using the main CLI:
-  tauro --streaming --streaming-command run \
-        --streaming-config ./settings_json.json \
-        --streaming-pipeline bronze_streaming_ingestion \
-        --streaming-mode async
+```bash
+tauro stream run --config config/streaming.py --pipeline real_time_processing
+```
 
 4) Check status or stop a streaming execution
-- Status (all):
-  tauro --streaming --streaming-command status --streaming-config ./settings_json.json
-- Stop (by ID):
-  tauro --streaming --streaming-command stop \
-        --streaming-config ./settings_json.json \
-        --execution-id <your_execution_id>
+```bash
+# Status (all):
+tauro stream status --config config/streaming.py
+# Stop (by ID):
+tauro stream stop --config config/streaming.py --execution-id <your_execution_id>
+```
 
 ---
 
 ## Configuration model
 
-Tauro separates configuration into one index file (“settings”) and five section files:
+Tauro separates configuration into one index file ("settings") and five section files:
 
 - Index settings file (auto-discovered):
   - YAML: settings_yml.json
@@ -63,7 +65,7 @@ Tauro separates configuration into one index file (“settings”) and five sect
   - input.(yaml|json|dsl)
   - output.(yaml|json|dsl)
 
-Environments supported by the CLI: base, dev, sandbox, prod.
+Environments supported: base, dev, sandbox, prod, and sandbox_<developer> variants.
 
 Auto-discovery scans for: settings_yml.json, settings_json.json, settings_dsl.json, settings.json, config.json, tauro.json. Discovery selects the best match by path score or interactive selection.
 
@@ -71,64 +73,106 @@ Security: The CLI validates paths to avoid directory traversal, hidden paths, sy
 
 ---
 
-## Main commands
+## Main subcommands
 
-All flags below are from `cli.py` unless stated otherwise.
+### Pipeline Execution (`run`)
 
-- Execute a pipeline
-  tauro --env <base|dev|sandbox|prod> --pipeline <name> [--node <node_name>] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--dry-run]
+Execute pipelines directly without orchestration:
 
-- Validate configuration only
-  tauro --env dev --pipeline my_pipeline --validate-only
+```bash
+tauro run --env <base|dev|sandbox|prod|sandbox_<developer>> --pipeline <name> [--node <node_name>] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--dry-run]
+```
 
-- List discovered configs
-  tauro --list-configs
+Options:
+- `--validate-only`: Validate configuration without executing
+- `--dry-run`: Log actions without executing
+- `--verbose`/`--quiet`: Control logging verbosity
 
-- List pipelines (from active config dir)
-  tauro --list-pipelines
+### Orchestration Management (`orchestrate`)
 
-- Show pipeline info
-  tauro --pipeline-info my_pipeline
+Manage scheduled pipeline runs and orchestration:
 
-- Clear config discovery cache
-  tauro --clear-cache
+**Run Management:**
+```bash
+tauro orchestrate run-create --pipeline my_pipeline
+tauro orchestrate run-start --run-id <id> [--retries N] [--max-concurrency N]
+tauro orchestrate run-status --run-id <id>
+tauro orchestrate run-list [--pipeline <name>]
+tauro orchestrate run-tasks --run-id <id>
+tauro orchestrate run-cancel --run-id <id>
+```
 
-### Logging
+**Schedule Management:**
+```bash
+tauro orchestrate schedule-add --pipeline my_pipeline --schedule-kind INTERVAL --expression "3600"
+tauro orchestrate schedule-list [--pipeline <name>]
+tauro orchestrate schedule-start [--poll-interval 1.0]
+tauro orchestrate backfill --pipeline my_pipeline --count 10
+```
 
-- Set level: --log-level DEBUG|INFO|WARNING|ERROR|CRITICAL (default INFO)
-- Verbose (overrides level to DEBUG): --verbose
-- Quiet (only ERROR): --quiet
-- Log file path: --log-file ./path/to/log.log (default logs/tauro.log)
+**Database Management:**
+```bash
+tauro orchestrate db-stats
+tauro orchestrate db-cleanup --days 30
+tauro orchestrate db-vacuum
+```
 
-### Dates
+### Streaming Pipelines (`stream`)
 
-- --start-date and --end-date must be ISO format YYYY-MM-DD
-- The CLI validates start_date <= end_date
+Manage real-time streaming pipelines:
+
+```bash
+# Run streaming pipeline
+tauro stream run --config <settings_file> --pipeline <pipeline_name> [--mode sync|async] [--model-version <ver>] [--hyperparams '{"key": "value"}']
+
+# Check status
+tauro stream status --config <settings_file> [--execution-id <id>]
+
+# Stop pipeline
+tauro stream stop --config <settings_file> --execution-id <id> [--timeout 60]
+```
+
+### Template Generation (`template`)
+
+Generate project templates and boilerplate code:
+
+```bash
+# List available templates
+tauro template --list-templates
+
+# Generate project
+tauro template --template medallion_basic --project-name my_project [--format yaml|json|dsl] [--no-sample-code]
+
+# Interactive generation
+tauro template --template-interactive
+```
+
+### Configuration Management (`config`)
+
+Manage Tauro configuration and discovery:
+
+```bash
+# List discovered configs
+tauro config list-configs
+
+# List pipelines for environment
+tauro config list-pipelines --env dev
+
+# Show pipeline info
+tauro config pipeline-info --pipeline my_pipeline --env dev
+
+# Clear config cache
+tauro config clear-cache
+```
 
 ---
 
-## Streaming commands
+## Logging
 
-You can manage streaming pipelines directly from the main CLI using the `--streaming` family of flags. Internally, this delegates to `streaming_cli.py`.
-
-- Run
-  tauro --streaming --streaming-command run \
-        --streaming-config <settings_file> \
-        --streaming-pipeline <pipeline_name> \
-        [--streaming-mode sync|async] \
-        [--model-version <ver>] \
-        [--hyperparams '{"key": "value"}']
-
-- Status (single or all)
-  tauro --streaming --streaming-command status --streaming-config <settings_file> [--execution-id <id>]
-
-- Stop
-  tauro --streaming --streaming-command stop --streaming-config <settings_file> --execution-id <id>
-
-Notes:
-- `--hyperparams` expects a valid JSON string.
-- In async mode, `run` returns an execution_id. Use it with `status`/`stop`.
-- Output can be table or JSON when using the click commands directly; via the main CLI the default is a table.
+- Set level: `--log-level DEBUG|INFO|WARNING|ERROR|CRITICAL` (default INFO)
+- Verbose (overrides level to DEBUG): `--verbose`
+- Quiet (only ERROR): `--quiet`
+- Log file path: `--log-file ./path/to/log.log` (default logs/tauro.log)
 
 ---
 
@@ -138,40 +182,39 @@ The template generator produces:
 - A settings index file (settings_yml.json or settings_json.json)
 - Config files under ./config for base/dev/sandbox/prod
 - Minimal package structure and example node functions
-- A README, requirements, and .gitignore
+- A README, requirements.txt, and .gitignore
 
-Commands:
-- List templates:
-  tauro --list-templates
-- Generate (YAML):
-  tauro --template medallion_basic --project-name demo_project
-- Generate (JSON):
-  tauro --template medallion_basic --project-name demo_project --format json
-- Interactive:
-  tauro --template-interactive
-- Without sample code:
-  tauro --template medallion_basic --project-name demo_project --no-sample-code
-
-Tip: The CLI accepts --format yaml|json. If your build includes DSL, you may generate/configure DSL at your own risk.
+Supported templates:
+- `medallion_basic`: Simple Medallion architecture with batch and streaming examples
 
 ---
 
 ## Programmatic API (advanced)
 
-- Config discovery/management:
-  - `ConfigManager`
-  - `ConfigDiscovery`
-- Context initialization:
-  - `ContextInitializer.initialize(env)` -> `Context`
-- Execution:
-  - `PipelineExecutor.execute(pipeline_name, node_name?, start_date?, end_date?, dry_run?)`
-  - `PipelineExecutor.list_pipelines()`
-  - `PipelineExecutor.get_pipeline_info(pipeline_name)`
+**Configuration Management:**
+```python
+from tauro.cli.config import ConfigManager, ConfigDiscovery
+cm = ConfigManager(base_path="./", layer_name="my_layer", use_case="analytics")
+```
 
-Streaming (from `tauro.exec.executor`):
-- `run_pipeline(pipeline_name, execution_mode, model_version?, hyperparams?)`
-- `get_streaming_pipeline_status(execution_id)`
-- `stop_streaming_pipeline(execution_id, timeout=60)`
+**Context Initialization:**
+```python
+from tauro.cli.execution import ContextInitializer
+ctx = ContextInitializer(cm).initialize("dev")
+```
+
+**Pipeline Execution:**
+```python
+from tauro.cli.execution import PipelineExecutor
+executor = PipelineExecutor(ctx)
+executor.execute("my_pipeline", start_date="2025-01-01", end_date="2025-12-31")
+```
+
+**Streaming Operations:**
+```python
+from tauro.cli.cli import run_cli_impl, status_cli_impl, stop_cli_impl
+run_cli_impl(config="./config.py", pipeline="streaming_pipeline")
+```
 
 ---
 
@@ -191,7 +234,6 @@ Streaming (from `tauro.exec.executor`):
 
 - Logging is configured via `LoggerManager.setup` (console + file).
 - Paths are validated strictly by `SecurityValidator`; avoid symlinks and hidden paths.
-- Auto-discovery caches results for a short time; use `--clear-cache` to reset.
-- The streaming subcommands are implemented with click but are callable from the main CLI.
-
----
+- Auto-discovery caches results for a short time; use `config clear-cache` to reset.
+- The CLI supports both programmatic and command-line usage patterns.
+- Environment normalization supports sandbox variants (sandbox_developer1, etc.) with fallback to base sandbox config.

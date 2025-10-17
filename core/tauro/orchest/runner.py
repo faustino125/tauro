@@ -1,12 +1,11 @@
 from __future__ import annotations
-from typing import Dict, Optional, List, Callable
+from typing import Dict, Optional, List
 from datetime import datetime, timezone
 import threading
 import time
 
 from loguru import logger  # type: ignore
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any, Dict
 import threading
 import time
@@ -14,15 +13,12 @@ from datetime import datetime, timezone
 from collections import deque
 
 from tauro.config.contexts import Context
-from .models import PipelineRun, TaskRun, RunState
-from .store import OrchestratorStore
-from .executor.local import LocalDagExecutor
-from .resilience import (
-    CircuitBreaker,
+from tauro.orchest.models import PipelineRun, TaskRun, RunState
+from tauro.orchest.store import OrchestratorStore
+from tauro.orchest.executor.local import LocalDagExecutor
+from tauro.orchest.resilience import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
-    Bulkhead,
-    RetryPolicy,
     get_resilience_manager,
 )
 
@@ -46,7 +42,7 @@ class OrchestratorRunner:
         circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
     ):
         self.context = context
-        self.store = store or OrchestratorStore()
+        self.store = store or OrchestratorStore(context=context)
 
         # Worker pool with dynamic scaling
         self._max_workers = max_workers or 4
@@ -389,9 +385,11 @@ class OrchestratorRunner:
         """
 
         def _execute():
-            """Wrapper to execute under bulkhead protection."""
-            pr = self.create_run(pipeline_id, params or {})
+            """Wrapper to execute under bulkhead protection.
 
+            Uses the `pr` created in the outer scope to avoid creating two
+            pipeline runs (one returned to the caller and another executed).
+            """
             try:
                 # Use bulkhead to limit concurrent executions
                 result = self._bulkhead.execute(

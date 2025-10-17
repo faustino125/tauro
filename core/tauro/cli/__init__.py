@@ -1,4 +1,7 @@
-from .cli import TauroCLI, main
+from .cli import UnifiedCLI, main
+
+# Backwards compatibility: older code may import TauroCLI
+TauroCLI = UnifiedCLI
 from .config import ConfigDiscovery, ConfigManager
 from .core import (
     CLIConfig,
@@ -22,7 +25,6 @@ from .template import (
     TemplateGenerator,
     TemplateType,
 )
-from .streaming_cli import streaming_commands
 
 __all__ = [
     "ConfigFormat",
@@ -42,10 +44,10 @@ __all__ = [
     "ConfigManager",
     "ContextInitializer",
     "CLIPipelineExecutor",
-    "TauroCLI",
+    "UnifiedCLI",
+    "TauroCLI",  # legacy alias
     "main",
     "TemplateCommand",
     "TemplateGenerator",
     "TemplateType",
-    "streaming_commands",
 ]

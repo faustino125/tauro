@@ -1,141 +1,301 @@
-from __future__ import annotations
-from typing import List, Dict, Optional
-from __future__ import annotations
-
-from typing import List, Dict, Optional, Any
-import asyncio
-
-from fastapi import APIRouter, Request, HTTPException, Body, Depends, Query, status
+from fastapi import APIRouter, HTTPException, Depends, status, Query
+from typing import List, Optional
 from loguru import logger
 
-from tauro.api.auth import get_current_user
-from tauro.api.deps import get_context
-from tauro.config.contexts import Context
-from tauro.exec.executor import PipelineExecutor
+from tauro.api.core import (
+    get_config_manager,
+    get_orchestrator_runner,
+    get_orchestrator_store,
+)
+from tauro.api.schemas import (
+    PipelineInfo,
+    PipelineListResponse,
+    PipelineRunRequest,
+    PipelineRunResponse,
+    RunListResponse,
+    RunCancelRequest,
+    MessageResponse,
+    RunState,
+)
 
-router = APIRouter()
+router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
 
-class PipelineCreate(Dict):
-    """Lightweight placeholder for pipeline creation payload.
+# =============================================================================
+# Pipeline Management
+# =============================================================================
 
-    We keep this simple to avoid increasing runtime dependencies in this
-    refactor. Callers already validate payloads at higher levels.
+
+@router.get("", response_model=PipelineListResponse)
+async def list_pipelines(
+    config_manager=Depends(get_config_manager),
+):
     """
+    Listar todos los pipelines disponibles.
 
-
-@router.post("/", status_code=201)
-async def create_pipeline(req: Request, body: PipelineCreate):
-    """Create pipeline. Prefer pipeline_service.create_pipeline if available, else store."""
-    ps = getattr(req.app.state, "pipeline_service", None)
-    store = getattr(req.app.state, "store", None)
-    if ps and hasattr(ps, "create_pipeline"):
-        res = ps.create_pipeline(body.get("id"), body.get("spec"))
-        if asyncio.iscoroutine(res):
-            res = await res
-        return res
-    if store and hasattr(store, "create_pipeline"):
-        return store.create_pipeline(body.get("id"), body.get("spec"))
-    raise HTTPException(status_code=500, detail="No backend to create pipeline")
-
-
-@router.get("", response_model=List[str])
-def list_pipelines(
-    user: dict = Depends(get_current_user),
-    context: Context = Depends(get_context),
-    search: Optional[str] = Query(None, description="Filter pipelines by name"),
-    limit: int = Query(
-        100, ge=1, le=1000, description="Maximum number of pipelines to return"
-    ),
-):
-    """Get a list of all available pipelines."""
-    try:
-        executor = PipelineExecutor(context, None)
-        pipelines = sorted(executor.list_pipelines())
-
-        if search:
-            pipelines = [p for p in pipelines if search.lower() in p.lower()]
-
-        if limit and len(pipelines) > limit:
-            pipelines = pipelines[:limit]
-
-        return pipelines
-    except Exception as e:
-        logger.error(f"Failed to list pipelines: {e}")
+    Retorna la lista de pipelines configurados en el sistema.
+    """
+    if not config_manager:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list pipelines: {str(e)}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ConfigManager not available",
+        )
+
+    try:
+        # Obtener configuración de pipelines
+        pipelines_config = config_manager.load_config("pipeline")
+
+        pipelines = []
+        for pipeline_id, pipeline_config in pipelines_config.items():
+            pipelines.append(
+                PipelineInfo(
+                    id=pipeline_id,
+                    name=pipeline_config.get("name", pipeline_id),
+                    description=pipeline_config.get("description"),
+                    type=pipeline_config.get("type", "batch"),
+                    nodes=pipeline_config.get("nodes", []),
+                )
+            )
+
+        return PipelineListResponse(pipelines=pipelines, total=len(pipelines))
+
+    except Exception as e:
+        logger.error(f"Error listing pipelines: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
-@router.get("/{pipeline_id}")
-def get_pipeline_info(
+@router.get("/{pipeline_id}", response_model=PipelineInfo)
+async def get_pipeline(
     pipeline_id: str,
-    user: dict = Depends(get_current_user),
-    context: Context = Depends(get_context),
+    config_manager=Depends(get_config_manager),
 ):
-    """Get detailed information about a specific pipeline."""
-    try:
-        executor = PipelineExecutor(context, None)
-        info = executor.get_pipeline_info(pipeline_id)
+    """Obtener información de un pipeline específico"""
+    if not config_manager:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ConfigManager not available",
+        )
 
-        if not info:
+    try:
+        pipelines_config = config_manager.load_config("pipeline")
+
+        if pipeline_id not in pipelines_config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Pipeline '{pipeline_id}' not found",
             )
 
-        return info
+        pipeline_config = pipelines_config[pipeline_id]
+
+        return PipelineInfo(
+            id=pipeline_id,
+            name=pipeline_config.get("name", pipeline_id),
+            description=pipeline_config.get("description"),
+            type=pipeline_config.get("type", "batch"),
+            nodes=pipeline_config.get("nodes", []),
+        )
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get pipeline info for {pipeline_id}: {e}")
+        logger.error(f"Error getting pipeline {pipeline_id}: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get pipeline info: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
-@router.get("/{pipeline_id}/nodes", response_model=List[str])
-def get_pipeline_nodes(
-    pipeline_id: str,
-    user: dict = Depends(get_current_user),
-    context: Context = Depends(get_context),
-):
-    """Get the list of nodes in a pipeline."""
-    try:
-        executor = PipelineExecutor(context, None)
-        info = executor.get_pipeline_info(pipeline_id)
-
-        if not info:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Pipeline '{pipeline_id}' not found",
-            )
-
-        nodes = info.get("nodes", [])
-        if not nodes and "pipeline" in info:
-            nodes = info["pipeline"].get("nodes", [])
-
-        return nodes
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get pipeline nodes for {pipeline_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get pipeline nodes: {str(e)}",
-        )
+# =============================================================================
+# Pipeline Execution
+# =============================================================================
 
 
-@router.post("/{pipeline_id}/run")
+@router.post(
+    "/{pipeline_id}/runs",
+    response_model=PipelineRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def run_pipeline(
-    req: Request, pipeline_id: str, params: Dict[str, Any] = Body(default_factory=dict)
+    pipeline_id: str,
+    request: PipelineRunRequest,
+    runner=Depends(get_orchestrator_runner),
 ):
-    """Launch pipeline execution using pipeline_service.run_pipeline."""
-    pipeline_service = getattr(req.app.state, "pipeline_service", None)
-    if pipeline_service is None:
-        raise HTTPException(status_code=500, detail="Service not initialized")
+    """
+    Ejecutar un pipeline.
 
-    run_id = await pipeline_service.run_pipeline(pipeline_id, params or {})
-    return {"run_id": run_id}
+    Crea una nueva ejecución del pipeline especificado con los parámetros dados.
+    """
+    if not runner:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OrchestratorRunner not available",
+        )
+
+    try:
+        # Crear y ejecutar run
+        run = runner.create_run(
+            pipeline_id=pipeline_id,
+            params=request.params,
+        )
+
+        # Ejecutar en background
+        runner.run_async(run.run_id)
+
+        return PipelineRunResponse(
+            run_id=run.run_id,
+            pipeline_id=run.pipeline_id,
+            state=RunState(run.state.value),
+            created_at=run.created_at,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            params=run.params,
+            error=run.error,
+            tags=request.tags,
+        )
+
+    except Exception as e:
+        logger.error(f"Error running pipeline {pipeline_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+
+# =============================================================================
+# Run Management
+# =============================================================================
+
+
+@router.get("/{pipeline_id}/runs", response_model=RunListResponse)
+async def list_runs(
+    pipeline_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    state: Optional[RunState] = None,
+    store=Depends(get_orchestrator_store),
+):
+    """
+    Listar ejecuciones de un pipeline.
+
+    Retorna el historial de ejecuciones del pipeline especificado.
+    """
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OrchestratorStore not available",
+        )
+
+    try:
+        # Obtener runs del store
+        filters = {"pipeline_id": pipeline_id}
+        if state:
+            filters["state"] = state.value
+
+        all_runs = store.list_pipeline_runs(**filters)
+
+        # Pagination
+        total = len(all_runs)
+        runs = all_runs[offset : offset + limit]
+
+        return RunListResponse(
+            runs=[
+                PipelineRunResponse(
+                    run_id=run.run_id,
+                    pipeline_id=run.pipeline_id,
+                    state=RunState(run.state.value),
+                    created_at=run.created_at,
+                    started_at=run.started_at,
+                    finished_at=run.finished_at,
+                    params=run.params,
+                    error=run.error,
+                )
+                for run in runs
+            ],
+            total=total,
+        )
+
+    except Exception as e:
+        logger.error(f"Error listing runs for pipeline {pipeline_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+
+@router.get("/runs/{run_id}", response_model=PipelineRunResponse)
+async def get_run(
+    run_id: str,
+    store=Depends(get_orchestrator_store),
+):
+    """Obtener estado de una ejecución específica"""
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OrchestratorStore not available",
+        )
+
+    try:
+        run = store.get_pipeline_run(run_id)
+
+        if not run:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run '{run_id}' not found",
+            )
+
+        return PipelineRunResponse(
+            run_id=run.run_id,
+            pipeline_id=run.pipeline_id,
+            state=RunState(run.state.value),
+            created_at=run.created_at,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            params=run.params,
+            error=run.error,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting run {run_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=MessageResponse)
+async def cancel_run(
+    run_id: str,
+    request: RunCancelRequest = RunCancelRequest(),
+    runner=Depends(get_orchestrator_runner),
+):
+    """
+    Cancelar una ejecución en progreso.
+
+    Intenta cancelar la ejecución especificada si está en estado PENDING o RUNNING.
+    """
+    if not runner:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OrchestratorRunner not available",
+        )
+
+    try:
+        success = await runner.cancel_run(run_id)
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Run cannot be cancelled (may be already finished)",
+            )
+
+        return MessageResponse(
+            message=f"Run {run_id} cancelled successfully", detail=request.reason
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling run {run_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )

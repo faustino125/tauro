@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 from loguru import logger  # type: ignore
 

@@ -532,12 +532,88 @@ class NodeExecutor:
         if not module_path or not function_name:
             raise ValueError("Node configuration must include 'module' and 'function'")
 
-        try:
-            module = _import_module_cached(module_path)
-        except ImportError as e:
-            logger.error(f"Failed to import module '{module_path}': {str(e)}")
-            raise ImportError(f"Cannot import module '{module_path}': {str(e)}")
+        module = self._import_module_with_fallback(module_path)
+        func = self._get_function_from_module(module, function_name, module_path)
+        self._validate_function_signature(func, function_name)
+        return func
 
+    def _import_module_with_fallback(self, module_path: str):
+        try:
+            return _import_module_cached(module_path)
+        except ImportError as e:
+            logger.debug(
+                f"Initial import failed for '{module_path}', trying fallback import paths: {e}"
+            )
+            import importlib
+            import sys
+            from pathlib import Path
+
+            candidates = self._gather_import_candidates()
+            uniq_candidates = self._deduplicate_candidates(candidates)
+            added = self._add_candidates_to_syspath(uniq_candidates)
+
+            try:
+                module = importlib.import_module(module_path)
+            except Exception as e2:
+                logger.error(
+                    f"Failed to import module '{module_path}' after adding candidates: {e2}"
+                )
+                self._remove_candidates_from_syspath(added, sys)
+                raise ImportError(f"Cannot import module '{module_path}': {str(e)}")
+            finally:
+                self._remove_candidates_from_syspath(added, sys)
+            return module
+
+    def _gather_import_candidates(self):
+        from pathlib import Path
+
+        candidates = []
+        try:
+            cwd = Path.cwd()
+            candidates.extend([str(cwd), str(cwd / "src"), str(cwd / "lib")])
+        except Exception:
+            pass
+
+        try:
+            cp = getattr(self.context, "config_paths", None)
+            if isinstance(cp, dict) and cp:
+                first = next(iter(cp.values()))
+                p = Path(first)
+                candidates.append(str(p.parent))
+                candidates.append(str(p.parent / "src"))
+        except Exception:
+            pass
+        return candidates
+
+    def _deduplicate_candidates(self, candidates):
+        seen = set()
+        return [c for c in candidates if c and not (c in seen or seen.add(c))]
+
+    def _add_candidates_to_syspath(self, uniq_candidates):
+        import sys
+        from pathlib import Path
+
+        added = []
+        for c in uniq_candidates:
+            try:
+                pc = Path(c)
+                if pc.exists() and pc.is_dir() and c not in sys.path:
+                    sys.path.insert(0, c)
+                    added.append(c)
+                    logger.debug(f"Temporarily added to sys.path: {c}")
+            except Exception:
+                continue
+        return added
+
+    def _remove_candidates_from_syspath(self, added, sys):
+        for c in added:
+            try:
+                while c in sys.path:
+                    sys.path.remove(c)
+            except Exception:
+                pass
+
+    def _get_function_from_module(self, module, function_name, module_path):
         if not hasattr(module, function_name):
             available_funcs = [
                 attr
@@ -552,14 +628,14 @@ class NodeExecutor:
                 f"Function '{function_name}' not found in module '{module_path}'. "
                 f"Available functions: {available_str}"
             )
-
         func = getattr(module, function_name)
-
         if not callable(func):
             raise TypeError(
                 f"Object '{function_name}' in module '{module_path}' is not callable"
             )
+        return func
 
+    def _validate_function_signature(self, func, function_name):
         try:
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
@@ -586,5 +662,3 @@ class NodeExecutor:
             logger.warning(
                 f"Signature validation skipped for {function_name}: {str(e)}"
             )
-
-        return func

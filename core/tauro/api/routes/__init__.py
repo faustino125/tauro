@@ -1,11 +1,11 @@
-"""Package-level exports for API routers.
+"""Routes package"""
 
-This module centralizes the router objects so other modules can import
-`from tauro.api.routes import pipelines, runs, schedules, control` safely.
-"""
-from . import pipelines as pipelines
-from . import runs as runs
-from . import schedules as schedules
-from . import control as control
+from .pipelines import router as pipelines_router
+from .scheduling import router as scheduling_router
+from .monitoring import router as monitoring_router
 
-__all__ = ["pipelines", "runs", "schedules", "control"]
+__all__ = [
+    "pipelines_router",
+    "scheduling_router",
+    "monitoring_router",
+]

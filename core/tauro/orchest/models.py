@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional, Literal, Any, List
+from typing import Dict, Optional, Literal, Any
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -75,26 +75,10 @@ class Schedule:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-@dataclass
-class SchedulerMetrics:
-    """Métricas del scheduler"""
-
-    cycles: int = 0
-    schedules_processed: int = 0
-    runs_created: int = 0
-    errors: int = 0
-    last_cycle_time: float = 0
-    avg_cycle_time: float = 0
-    start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    consecutive_failures: int = 0
-
-
-@dataclass
-class DatabaseStats:
-    """Estadísticas de la base de datos"""
-
-    pipeline_runs_by_state: Dict[str, int] = field(default_factory=dict)
-    task_runs_by_state: Dict[str, int] = field(default_factory=dict)
-    schedules_by_status: Dict[str, int] = field(default_factory=dict)
-    database_size_bytes: int = 0
-    record_count: Dict[str, int] = field(default_factory=dict)
+__all__ = [
+    "RunState",
+    "TaskRun",
+    "PipelineRun",
+    "ScheduleKind",
+    "Schedule",
+]

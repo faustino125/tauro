@@ -9,10 +9,10 @@ import logging
 
 from loguru import logger  # type: ignore
 
-from .models import ScheduleKind, Schedule, RunState
-from .store import OrchestratorStore
-from .runner import OrchestratorRunner
-from .resilience import (
+from tauro.orchest.models import ScheduleKind, Schedule, RunState
+from tauro.orchest.store import OrchestratorStore
+from tauro.orchest.runner import OrchestratorRunner
+from tauro.orchest.resilience import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
@@ -357,15 +357,35 @@ class SchedulerService:
             return pr.id
 
         try:
+            # Compute the next_run value we will set (bump)
+            if s.kind == ScheduleKind.INTERVAL:
+                interval = _parse_interval_seconds(s.expression)
+                next_run = now + timedelta(seconds=interval)
+            elif s.kind == ScheduleKind.CRON and HAS_CRONITER:
+                try:
+                    base_time = s.next_run_at or now
+                    cron_iter = croniter(s.expression, base_time)
+                    next_run = cron_iter.get_next(datetime)
+                except Exception:
+                    next_run = now + timedelta(seconds=60)
+            else:
+                # fallback conservative bump
+                next_run = now + timedelta(seconds=60)
+
+            # Attempt to atomically claim the schedule for this runner. If claim
+            # succeeds we proceed to create the run; otherwise another instance
+            # already claimed it.
+            claimed = self.store.claim_schedule_next_run(s.id, s.next_run_at, next_run)
+            if not claimed:
+                # someone else claimed it
+                return False
+
             # Use per-schedule circuit breaker if enabled
             if self._enable_circuit_breakers:
                 cb = self._get_schedule_circuit_breaker(s.id)
                 cb.call(_create_run)
             else:
                 _create_run()
-
-            # bump next run (DB update) - do after scheduling the run to reduce races
-            self._bump_next_run(s, now)
 
             # Reset consecutive failures counter on success
             with self._lock:

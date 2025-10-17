@@ -131,6 +131,10 @@ class BaseTemplate(ABC):
         }
 
 
+_BRONZE_STREAMING_MODULE = "pipelines.bronze.streaming"
+_TEMPLATE_CANCELLED_MSG = "Template generation cancelled"
+
+
 class MedallionBasicTemplate(BaseTemplate):
     """Simple Medallion template supporting batch and streaming pipelines."""
 
@@ -233,7 +237,7 @@ class MedallionBasicTemplate(BaseTemplate):
             # Streaming to Bronze
             "stream_from_kafka": {
                 "description": "Read sales events from Kafka",
-                "module": "pipelines.bronze.streaming",
+                "module": _BRONZE_STREAMING_MODULE,
                 "function": "stream_from_kafka",
                 "input": ["kafka_topic_sales"],
                 "output": ["raw_stream"],
@@ -241,7 +245,7 @@ class MedallionBasicTemplate(BaseTemplate):
             },
             "process_stream": {
                 "description": "Parse and filter streaming events",
-                "module": "pipelines.bronze.streaming",
+                "module": _BRONZE_STREAMING_MODULE,
                 "function": "process_stream",
                 "input": ["raw_stream"],
                 "output": ["processed_stream"],
@@ -249,7 +253,7 @@ class MedallionBasicTemplate(BaseTemplate):
             },
             "write_stream": {
                 "description": "Write streaming data to Bronze (Delta/Parquet)",
-                "module": "pipelines.bronze.streaming",
+                "module": _BRONZE_STREAMING_MODULE,
                 "function": "write_stream",
                 "input": ["processed_stream"],
                 "output": ["bronze_stream"],
@@ -753,9 +757,6 @@ spark-warehouse/
             f.write(content)
 
 
-TEMPLATE_GENERATION_CANCELLED = "Template generation cancelled"
-
-
 class TemplateCommand:
     """Handles the --template command functionality."""
 
@@ -847,7 +848,7 @@ class TemplateCommand:
                     )
                     continue
                 except (KeyboardInterrupt, EOFError):
-                    logger.info("Template generation cancelled")
+                    logger.info(_TEMPLATE_CANCELLED_MSG)
                     return ExitCode.GENERAL_ERROR.value
 
             # Get project name
@@ -928,7 +929,7 @@ class TemplateCommand:
                 logger.warning(
                     f"Directory {output_dir} already exists and is not empty"
                 )
-                logger.info("Template generation cancelled")
+                logger.info(_TEMPLATE_CANCELLED_MSG)
                 return ExitCode.VALIDATION_ERROR.value
 
             # Generate template

@@ -16,7 +16,7 @@ from tauro.exec.node_executor import NodeExecutor
 from tauro.io.input import InputLoader
 from tauro.io.output import DataOutputManager
 
-from ..models import TaskRun, RunState
+from tauro.orchest.models import TaskRun, RunState
 
 
 class LocalDagExecutor:
@@ -56,22 +56,78 @@ class LocalDagExecutor:
         pipeline = self.context.pipelines.get(pipeline_name)
         if not pipeline:
             raise ValueError(f"Pipeline '{pipeline_name}' not found")
-        pipeline_nodes = []
         nodes_config = self.context.nodes_config or {}
 
-        maybe_nodes = []
-        if isinstance(pipeline, dict):
-            maybe_nodes = list(
-                {n for n in (pipeline.get("nodes") or []) if isinstance(n, str)}
-            )
-        pipeline_nodes = maybe_nodes
-
-        node_cfgs = {n: nodes_config[n] for n in pipeline_nodes if n in nodes_config}
-        if not node_cfgs:
-            raise ValueError(f"No node configs found for pipeline '{pipeline_name}'")
+        maybe_nodes, inline_node_cfgs = self._parse_pipeline_nodes(
+            pipeline, pipeline_name
+        )
+        pipeline_nodes = list(dict.fromkeys(maybe_nodes))
+        node_cfgs = self._build_node_configs(
+            pipeline_nodes, nodes_config, inline_node_cfgs, pipeline_name
+        )
 
         PipelineValidator.validate_node_configs(pipeline_nodes, node_cfgs)
         return pipeline_nodes, node_cfgs
+
+    def _parse_pipeline_nodes(
+        self, pipeline, pipeline_name: str
+    ) -> tuple[List[str], Dict[str, Dict]]:
+        maybe_nodes: List[str] = []
+        inline_node_cfgs: Dict[str, Dict] = {}
+
+        if isinstance(pipeline, dict):
+            raw_nodes = pipeline.get("nodes") or []
+            for entry in raw_nodes:
+                self._process_node_entry(
+                    entry, maybe_nodes, inline_node_cfgs, pipeline_name
+                )
+        return maybe_nodes, inline_node_cfgs
+
+    def _process_node_entry(
+        self,
+        entry,
+        maybe_nodes: List[str],
+        inline_node_cfgs: Dict[str, Dict],
+        pipeline_name: str,
+    ):
+        if isinstance(entry, str):
+            maybe_nodes.append(entry)
+        elif isinstance(entry, dict):
+            if "name" in entry and isinstance(entry["name"], str):
+                name = entry["name"]
+                maybe_nodes.append(name)
+                cfg = {k: v for k, v in entry.items() if k != "name"}
+                if cfg:
+                    inline_node_cfgs[name] = cfg
+            elif len(entry) == 1:
+                name = list(entry.keys())[0]
+                maybe_nodes.append(name)
+                val = entry[name]
+                if isinstance(val, dict):
+                    inline_node_cfgs[name] = val
+            else:
+                logger.debug(
+                    "Ignoring unknown node entry format in pipeline '%s': %s",
+                    pipeline_name,
+                    entry,
+                )
+
+    def _build_node_configs(
+        self,
+        pipeline_nodes: List[str],
+        nodes_config: Dict[str, Dict],
+        inline_node_cfgs: Dict[str, Dict],
+        pipeline_name: str,
+    ) -> Dict[str, Dict]:
+        node_cfgs: Dict[str, Dict] = {}
+        for n in pipeline_nodes:
+            if n in nodes_config:
+                node_cfgs[n] = nodes_config[n]
+            elif n in inline_node_cfgs:
+                node_cfgs[n] = inline_node_cfgs[n]
+        if not node_cfgs:
+            raise ValueError(f"No node configs found for pipeline '{pipeline_name}'")
+        return node_cfgs
 
     def _submit_task(
         self,

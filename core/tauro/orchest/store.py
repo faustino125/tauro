@@ -1,506 +1,379 @@
 from __future__ import annotations
-from asyncio import Lock
+
+import json
 import os
-import time
-from typing import Any, Dict, Generator, Iterable, List, Optional
+import threading
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-import json
-import sqlite3
-import threading
-import queue
 from uuid import uuid4
-import uuid
+import gzip
 
-# Retry utilities for robust DB/pool operations
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type  # type: ignore
+from loguru import logger  # type: ignore
+from sqlalchemy.orm import Session
+from .db import engine, get_session
 
-from .models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
-
-_DEFAULT_DB_PATH_ENV = "ORCHESTRATOR_DB_PATH"
-PIPELINE_ID_CLAUSE = "pipeline_id = ?"
-DEFAULT_DB_PATH = (
-    Path(  # env override for runtime flexibility (useful in containers/CI)
-        os.environ.get(_DEFAULT_DB_PATH_ENV)
-    )
-    if os.environ.get(_DEFAULT_DB_PATH_ENV)
-    else Path.home() / ".tauro" / "orchestrator.db"
+from tauro.orchest.models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
+from tauro.orchest.models_db import (
+    Base,
+    PipelineRunDB,
+    TaskRunDB,
+    ScheduleDB,
+    ScheduleDeadLetterDB,
+    PipelineMetricsDB,
+    RunResultDB,
 )
-
-# SQL constants to avoid duplicated string literals
-AND_JOIN = " AND "
-WHERE_PREFIX = " WHERE "
-ORDER_LIMIT_OFFSET = " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-ORDER_BY_CREATED_DESC = " ORDER BY created_at DESC"
-
-
-class Store:
-    def __init__(self):
-        self._lock = Lock()
-        self.runs: Dict[str, Dict[str, Any]] = {}
-        self.pipelines: Dict[str, Dict[str, Any]] = {}
-
-    def create_run(self, pipeline_id: str, config: Dict[str, Any]) -> str:
-        run_id = str(uuid.uuid4())
-        entry = {
-            "id": run_id,
-            "pipeline_id": pipeline_id,
-            "config": config,
-            "status": "created",
-            "created_at": time.time(),
-            "logs": [],
-        }
-        with self._lock:
-            self.runs[run_id] = entry
-        return run_id
-
-    def update_run_status(self, run_id: str, status: str):
-        with self._lock:
-            r = self.runs.get(run_id)
-            if r is not None:
-                r["status"] = status
-                r["updated_at"] = time.time()
-
-    def update_run_result(self, run_id: str, result: Any, status: str = "success"):
-        with self._lock:
-            r = self.runs.get(run_id)
-            if r is not None:
-                r["result"] = result
-                r["status"] = status
-                r["updated_at"] = time.time()
-
-    def update_run_error(self, run_id: str, error: str, status: str = "failed"):
-        with self._lock:
-            r = self.runs.get(run_id)
-            if r is not None:
-                r.setdefault("errors", []).append({"ts": time.time(), "error": error})
-                r["status"] = status
-                r["updated_at"] = time.time()
-
-    def append_run_log(self, run_id: str, line: str):
-        with self._lock:
-            r = self.runs.get(run_id)
-            if r is not None:
-                r.setdefault("logs", []).append({"ts": time.time(), "line": line})
-
-    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return self.runs.get(run_id)
-
-    def list_runs(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            return list(self.runs.values())
-
-
-class ConnectionPool:
-    """Connection pool with automatic reconnection and health checks.
-
-    Supports lazy creation: it can create only `minsize` connections at startup
-    and add connections up to `maxsize` on demand.
-    """
-
-    def __init__(
-        self, db_path: str, maxsize: int = 5, timeout: int = 30, minsize: int = 0
-    ) -> None:
-        self._db_path = db_path
-        self._maxsize = maxsize
-        self._timeout = timeout
-        self._minsize = max(0, minsize)
-        self._pool = queue.Queue(maxsize)
-        self._lock = threading.RLock()
-        self._created_connections = 0
-
-        # Inicializar pool con minsize conexiones (lazy)
-        for _ in range(self._minsize):
-            self._add_connection()
-
-    def _add_connection(self) -> None:
-        """Add a new connection to the pool."""
-        conn = sqlite3.connect(
-            str(self._db_path),
-            detect_types=sqlite3.PARSE_DECLTYPES,
-            timeout=self._timeout,
-        )
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")  # Improve concurrency
-        conn.execute("PRAGMA foreign_keys=ON")  # Enable foreign keys
-
-        with self._lock:
-            self._created_connections += 1
-
-        try:
-            self._pool.put(conn, block=False)
-        except queue.Full:
-            conn.close()
-
-    def _is_connection_valid(self, conn: sqlite3.Connection) -> bool:
-        """Check if a connection is valid."""
-        try:
-            conn.execute("SELECT 1")
-            return True
-        except (
-            sqlite3.ProgrammingError,
-            sqlite3.InterfaceError,
-            sqlite3.OperationalError,
-        ):
-            return False
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((sqlite3.OperationalError, queue.Empty)),
-    )
-    def get_connection(self, timeout: Optional[float] = None) -> sqlite3.Connection:
-        """Get a connection from the pool with retries."""
-        try:
-            conn = self._pool.get(timeout=timeout)
-            if not self._is_connection_valid(conn):
-                conn.close()
-                raise sqlite3.OperationalError("Invalid connection")
-            return conn
-        except queue.Empty:
-            # Try to create an additional connection when the pool is empty
-            with self._lock:
-                # Si aún podemos crear más conexiones, intentarlo
-                if self._created_connections < self._maxsize:
-                    try:
-                        self._add_connection()
-                    except Exception:
-                        pass
-            try:
-                return self._pool.get(timeout=timeout)
-            except queue.Empty:
-                raise sqlite3.OperationalError("No connections available")
-
-    def return_connection(self, conn: sqlite3.Connection) -> None:
-        """Return connection to the pool."""
-        if conn is None:
-            return
-
-        try:
-            # Rollback to clear transient state
-            conn.execute("ROLLBACK")
-
-            if self._is_connection_valid(conn) and self._pool.qsize() < self._maxsize:
-                try:
-                    self._pool.put(conn, block=False)
-                    return
-                except queue.Full:
-                    pass
-
-            # If it cannot be returned to the pool, close the connection
-            conn.close()
-        except Exception:
-            # Cerrar la conexión en caso de error
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def close_all(self) -> None:
-        """Close all pooled connections."""
-        while True:
-            try:
-                conn = self._pool.get_nowait()
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            except queue.Empty:
-                break
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Return pool statistics."""
-        with self._lock:
-            return {
-                "pool_size": self._pool.qsize(),
-                "max_size": self._maxsize,
-                "created_connections": self._created_connections,
-                "available": self._pool.qsize(),
-            }
 
 
 class OrchestratorStore:
-    """SQLite persistence with automatic reconnection and best practices."""
+    """Database-backed persistence for orchestrator metadata using PostgreSQL."""
 
     def __init__(
         self,
-        db_path: Path = DEFAULT_DB_PATH,
-        max_connections: int = 10,
-        timeout: int = 30,
-        min_connections: int = 0,
-    ):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection_pool = ConnectionPool(
-            db_path, max_connections, timeout, min_connections
+        *,
+        context: Optional[Any] = None,
+        scope: Optional[str] = None,
+    ) -> None:
+        # For compatibility, but not used in DB mode
+        if scope is None:
+            scope = os.environ.get("ORCHESTRATOR_SCOPE")
+        if scope is None and context is not None and hasattr(context, "execution_mode"):
+            try:
+                scope = str(getattr(context, "execution_mode"))
+            except Exception:
+                scope = None
+        if not scope:
+            scope = "DEV"
+
+        self._scope = scope
+
+        # Initialize database tables
+        self._init_db()
+
+        # Locks for thread safety
+        self._locks: Dict[str, threading.RLock] = {
+            "pipeline_run": threading.RLock(),
+            "task_run": threading.RLock(),
+            "schedule": threading.RLock(),
+            "schedule_dead_letter": threading.RLock(),
+            "pipeline_metrics": threading.RLock(),
+            "run_result": threading.RLock(),
+        }
+
+        logger.debug(
+            f"OrchestratorStore initialized with PostgreSQL for scope {self._scope}"
         )
-        self._init_schema()
 
-    @contextmanager
-    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        """Context manager to obtain connections with error handling."""
-        conn = None
-        try:
-            conn = self.connection_pool.get_connection()
-            yield conn
-            conn.commit()
-        except Exception:
-            if conn:
-                conn.rollback()
-            raise
-        finally:
-            if conn:
-                self.connection_pool.return_connection(conn)
+    def _init_db(self) -> None:
+        """Initialize database tables."""
+        Base.metadata.create_all(bind=engine)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(sqlite3.OperationalError),
-    )
-    def _init_schema(self):
-        with self._conn() as con:
-            con.execute(
-                """
-                CREATE TABLE IF NOT EXISTS _migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                )
-            """
-            )
+    def __enter__(self) -> "OrchestratorStore":
+        return self
 
-            version_row = con.execute(
-                "SELECT MAX(version) AS v FROM _migrations"
-            ).fetchone()
-            current_version = (
-                version_row["v"] if version_row and version_row["v"] is not None else 0
-            )
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # pragma: no cover
+        return None
 
-            # Migration to version 1
-            if current_version < 1:
-                con.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS pipeline_run (
-                        id TEXT PRIMARY KEY,
-                        pipeline_id TEXT NOT NULL,
-                        state TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        started_at TEXT,
-                        finished_at TEXT,
-                        params TEXT,
-                        error TEXT
-                    );
-                    CREATE TABLE IF NOT EXISTS task_run (
-                        id TEXT PRIMARY KEY,
-                        pipeline_run_id TEXT NOT NULL,
-                        task_id TEXT NOT NULL,
-                        state TEXT NOT NULL,
-                        try_number INTEGER NOT NULL DEFAULT 0,
-                        started_at TEXT,
-                        finished_at TEXT,
-                        log_uri TEXT,
-                        error TEXT,
-                        FOREIGN KEY (pipeline_run_id) REFERENCES pipeline_run(id)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_task_run_pipeline ON task_run(pipeline_run_id);
-
-                    CREATE TABLE IF NOT EXISTS schedule (
-                        id TEXT PRIMARY KEY,
-                        pipeline_id TEXT NOT NULL,
-                        kind TEXT NOT NULL,
-                        expression TEXT NOT NULL,
-                        enabled INTEGER NOT NULL,
-                        max_concurrency INTEGER NOT NULL DEFAULT 1,
-                        retry_policy TEXT,
-                        timeout_seconds INTEGER,
-                        next_run_at TEXT,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_schedule_pipeline ON schedule(pipeline_id);
-                """
-                )
-                con.execute(
-                    "INSERT INTO _migrations (version, applied_at) VALUES (1, ?)",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                current_version = 1
-
-            # Migration to version 2
-            if current_version < 2:
-                con.executescript(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_pipeline_run_pipeline_state ON pipeline_run(pipeline_id, state);
-                    CREATE INDEX IF NOT EXISTS idx_pipeline_run_state ON pipeline_run(state);
-                    CREATE INDEX IF NOT EXISTS idx_pipeline_run_created_at ON pipeline_run(created_at);
-                    CREATE INDEX IF NOT EXISTS idx_schedule_enabled ON schedule(enabled);
-                """
-                )
-                con.execute(
-                    "INSERT INTO _migrations (version, applied_at) VALUES (2, ?)",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                current_version = 2
-
-            # Migration to version 3 - composite indexes for improved performance
-            if current_version < 3:
-                con.executescript(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_pipeline_run_pipeline_state_created ON pipeline_run(pipeline_id, state, created_at);
-                    CREATE INDEX IF NOT EXISTS idx_task_run_pipeline_state ON task_run(pipeline_run_id, state);
-                    CREATE INDEX IF NOT EXISTS idx_schedule_next_run ON schedule(next_run_at) WHERE enabled = 1;
-                """
-                )
-                con.execute(
-                    "INSERT INTO _migrations (version, applied_at) VALUES (3, ?)",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                current_version = 3
-
-            # Migration to version 4 - dead letter table for failed schedules
-            if current_version < 4:
-                con.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS schedule_dead_letter (
-                        id TEXT PRIMARY KEY,
-                        schedule_id TEXT NOT NULL,
-                        pipeline_id TEXT NOT NULL,
-                        error TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY (schedule_id) REFERENCES schedule(id)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_schedule_dl_schedule ON schedule_dead_letter(schedule_id);
-                    CREATE INDEX IF NOT EXISTS idx_schedule_dl_created ON schedule_dead_letter(created_at);
-                """
-                )
-                con.execute(
-                    "INSERT INTO _migrations (version, applied_at) VALUES (4, ?)",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                current_version = 4
-
-            # Migration to version 5 - more indexes for improved performance
-            if current_version < 5:
-                con.executescript(
-                    """
-                            -- Index for pipeline/date lookups
-                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_pipeline_created_desc 
-                                ON pipeline_run(pipeline_id, created_at DESC);
-                    
-                            -- Index for active runs (RUNNING/QUEUED)
-                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_active_states 
-                                ON pipeline_run(state, started_at) 
-                                WHERE state IN ('RUNNING', 'QUEUED');
-                    
-                            -- Index for stuck runs lookup
-                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_stuck 
-                                ON pipeline_run(state, started_at) 
-                                WHERE state = 'RUNNING';
-                    
-                            -- Index for task runs by state and finished_at
-                            CREATE INDEX IF NOT EXISTS idx_task_run_state_finished 
-                                ON task_run(state, finished_at);
-                    
-                            -- Covering index for fast counts
-                            CREATE INDEX IF NOT EXISTS idx_pipeline_run_state_created 
-                                ON pipeline_run(state, created_at, id);
-                        """
-                )
-                con.execute(
-                    "INSERT INTO _migrations (version, applied_at) VALUES (5, ?)",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                current_version = 5
-
-            # Migration to version 6 - aggregated metrics table
-            if current_version < 6:
-                con.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS pipeline_metrics (
-                        pipeline_id TEXT PRIMARY KEY,
-                        total_runs INTEGER DEFAULT 0,
-                        successful_runs INTEGER DEFAULT 0,
-                        failed_runs INTEGER DEFAULT 0,
-                        avg_execution_time_seconds REAL DEFAULT 0,
-                        last_run_at TEXT,
-                        last_success_at TEXT,
-                        last_failure_at TEXT,
-                        updated_at TEXT NOT NULL
-                    );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_updated 
-                        ON pipeline_metrics(updated_at DESC);
-                """
-                )
-                con.execute(
-                    "INSERT INTO _migrations (version, applied_at) VALUES (6, ?)",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-
-    # Helper to parse ISO datetimes robustly (None-safe)
     @staticmethod
     def _parse_dt(value: Optional[str]) -> Optional[datetime]:
         if not value:
             return None
         try:
-            dt = datetime.fromisoformat(value)
-            # If naive, assume UTC to keep consistent
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            return datetime.fromisoformat(value)
         except Exception:
             try:
-                # fallback: parse as timestamp float-ish string
-                ts = float(value)
-                return datetime.fromtimestamp(ts, tz=timezone.utc)
+                return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z")
             except Exception:
                 return None
 
+    def _write(self, entity: str, id: str, data: Dict[str, Any]) -> None:
+        # Validar datos antes de guardar
+        self._validate_data(entity, data)
+
+        lock = self._locks.get(entity)
+        if lock:
+            with lock:
+                with self._conn() as session:
+                    self._db_write(session, entity, id, data)
+        else:
+            with self._conn() as session:
+                self._db_write(session, entity, id, data)
+
+    def _db_write(
+        self, session: Session, entity: str, id: str, data: Dict[str, Any]
+    ) -> None:
+        """Write data to database."""
+        if entity == "pipeline_run":
+            db_obj = PipelineRunDB(
+                id=data["id"],
+                pipeline_id=data["pipeline_id"],
+                state=data["state"],
+                created_at=self._parse_dt(data.get("created_at")),
+                started_at=self._parse_dt(data.get("started_at")),
+                finished_at=self._parse_dt(data.get("finished_at")),
+                params=data.get("params"),
+                error=data.get("error"),
+            )
+            session.merge(db_obj)
+        elif entity == "task_run":
+            db_obj = TaskRunDB(
+                id=data["id"],
+                pipeline_run_id=data["pipeline_run_id"],
+                task_id=data["task_id"],
+                state=data["state"],
+                try_number=data.get("try_number", 0),
+                started_at=self._parse_dt(data.get("started_at")),
+                finished_at=self._parse_dt(data.get("finished_at")),
+                log_uri=data.get("log_uri"),
+                error=data.get("error"),
+            )
+            session.merge(db_obj)
+        elif entity == "schedule":
+            db_obj = ScheduleDB(
+                id=data["id"],
+                pipeline_id=data["pipeline_id"],
+                kind=data["kind"],
+                expression=data["expression"],
+                enabled=data.get("enabled", True),
+                max_concurrency=data.get("max_concurrency", 1),
+                retry_policy=data.get("retry_policy"),
+                timeout_seconds=data.get("timeout_seconds"),
+                next_run_at=self._parse_dt(data.get("next_run_at")),
+                created_at=self._parse_dt(data.get("created_at")),
+                updated_at=self._parse_dt(data.get("updated_at")),
+            )
+            session.merge(db_obj)
+        elif entity == "pipeline_metrics":
+            db_obj = PipelineMetricsDB(
+                pipeline_id=data["pipeline_id"],
+                total_runs=data.get("total_runs", 0),
+                successful_runs=data.get("successful_runs", 0),
+                failed_runs=data.get("failed_runs", 0),
+                avg_execution_time_seconds=data.get("avg_execution_time_seconds", 0.0),
+                last_run_at=self._parse_dt(data.get("last_run_at")),
+                last_success_at=self._parse_dt(data.get("last_success_at")),
+                last_failure_at=self._parse_dt(data.get("last_failure_at")),
+                updated_at=self._parse_dt(data.get("updated_at")),
+            )
+            session.merge(db_obj)
+        elif entity == "schedule_dead_letter":
+            db_obj = ScheduleDeadLetterDB(
+                id=data["id"],
+                schedule_id=data["schedule_id"],
+                pipeline_id=data["pipeline_id"],
+                error=data["error"],
+                created_at=self._parse_dt(data.get("created_at")),
+            )
+            session.add(db_obj)  # Add instead of merge for dead letter
+        elif entity == "run_result":
+            db_obj = RunResultDB(
+                run_id=data["run_id"],
+                status=data["status"],
+                result=data.get("result"),
+                created_at=self._parse_dt(data.get("created_at")),
+            )
+            session.merge(db_obj)
+
+    def _read(self, entity: str, id: str) -> Optional[Dict[str, Any]]:
+        with self._conn() as session:
+            return self._db_read(session, entity, id)
+
+    def _db_read(
+        self, session: Session, entity: str, id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Read data from database."""
+        converters = {
+            "pipeline_run": self._convert_pipeline_run_db,
+            "task_run": self._convert_task_run_db,
+            "schedule": self._convert_schedule_db,
+            "pipeline_metrics": self._convert_pipeline_metrics_db,
+            "run_result": self._convert_run_result_db,
+            "schedule_dead_letter": self._convert_schedule_dead_letter_db,
+        }
+
+        converter = converters.get(entity)
+        if not converter:
+            return None
+
+        db_class = self._get_db_class(entity)
+        obj = session.query(db_class).filter(db_class.id == id).first()
+        return converter(obj) if obj else None
+
+    def _list(self, entity: str) -> List[Dict[str, Any]]:
+        with self._conn() as session:
+            return self._db_list(session, entity)
+
+    def _db_list(self, session: Session, entity: str) -> List[Dict[str, Any]]:
+        """List all entities from database."""
+        converters = {
+            "pipeline_run": self._convert_pipeline_run_db,
+            "task_run": self._convert_task_run_db,
+            "schedule": self._convert_schedule_db,
+            "pipeline_metrics": self._convert_pipeline_metrics_db,
+            "run_result": self._convert_run_result_db,
+            "schedule_dead_letter": self._convert_schedule_dead_letter_db,
+        }
+
+        converter = converters.get(entity)
+        if not converter:
+            return []
+
+        db_class = self._get_db_class(entity)
+        objs = session.query(db_class).all()
+        return [converter(obj) for obj in objs]
+
+    def _get_db_class(self, entity: str):
+        """Get the database class for an entity."""
+        classes = {
+            "pipeline_run": PipelineRunDB,
+            "task_run": TaskRunDB,
+            "schedule": ScheduleDB,
+            "pipeline_metrics": PipelineMetricsDB,
+            "run_result": RunResultDB,
+            "schedule_dead_letter": ScheduleDeadLetterDB,
+        }
+        return classes.get(entity)
+
+    def _convert_pipeline_run_db(self, obj) -> Dict[str, Any]:
+        """Convert PipelineRunDB to dict."""
+        return {
+            "id": obj.id,
+            "pipeline_id": obj.pipeline_id,
+            "state": obj.state,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "started_at": obj.started_at.isoformat() if obj.started_at else None,
+            "finished_at": obj.finished_at.isoformat() if obj.finished_at else None,
+            "params": obj.params,
+            "error": obj.error,
+        }
+
+    def _convert_task_run_db(self, obj) -> Dict[str, Any]:
+        """Convert TaskRunDB to dict."""
+        return {
+            "id": obj.id,
+            "pipeline_run_id": obj.pipeline_run_id,
+            "task_id": obj.task_id,
+            "state": obj.state,
+            "try_number": obj.try_number,
+            "started_at": obj.started_at.isoformat() if obj.started_at else None,
+            "finished_at": obj.finished_at.isoformat() if obj.finished_at else None,
+            "log_uri": obj.log_uri,
+            "error": obj.error,
+        }
+
+    def _convert_schedule_db(self, obj) -> Dict[str, Any]:
+        """Convert ScheduleDB to dict."""
+        return {
+            "id": obj.id,
+            "pipeline_id": obj.pipeline_id,
+            "kind": obj.kind,
+            "expression": obj.expression,
+            "enabled": obj.enabled,
+            "max_concurrency": obj.max_concurrency,
+            "retry_policy": obj.retry_policy,
+            "timeout_seconds": obj.timeout_seconds,
+            "next_run_at": obj.next_run_at.isoformat() if obj.next_run_at else None,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+        }
+
+    def _convert_pipeline_metrics_db(self, obj) -> Dict[str, Any]:
+        """Convert PipelineMetricsDB to dict."""
+        return {
+            "pipeline_id": obj.pipeline_id,
+            "total_runs": obj.total_runs,
+            "successful_runs": obj.successful_runs,
+            "failed_runs": obj.failed_runs,
+            "avg_execution_time_seconds": obj.avg_execution_time_seconds,
+            "last_run_at": obj.last_run_at.isoformat() if obj.last_run_at else None,
+            "last_success_at": obj.last_success_at.isoformat()
+            if obj.last_success_at
+            else None,
+            "last_failure_at": obj.last_failure_at.isoformat()
+            if obj.last_failure_at
+            else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+        }
+
+    def _convert_run_result_db(self, obj) -> Dict[str, Any]:
+        """Convert RunResultDB to dict."""
+        return {
+            "run_id": obj.run_id,
+            "status": obj.status,
+            "result": obj.result,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+        }
+
+    def _convert_schedule_dead_letter_db(self, obj) -> Dict[str, Any]:
+        """Convert ScheduleDeadLetterDB to dict."""
+        return {
+            "id": obj.id,
+            "schedule_id": obj.schedule_id,
+            "pipeline_id": obj.pipeline_id,
+            "error": obj.error,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+        }
+
+    @contextmanager
+    def _conn(self):
+        """Context manager for database session."""
+        session = get_session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def ensure_connection(self, timeout: float = 1.0) -> bool:  # pragma: no cover
+        _ = timeout
+        return True
+
+    # ---------- Pipeline runs ----------
     def create_pipeline_run(
         self, pipeline_id: str, params: Optional[Dict[str, Any]] = None
     ) -> PipelineRun:
         pr = PipelineRun(pipeline_id=pipeline_id, params=params or {})
-        with self._conn() as con:
-            con.execute(
-                """
-                INSERT INTO pipeline_run (id, pipeline_id, state, created_at, started_at, finished_at, params, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    pr.id,
-                    pr.pipeline_id,
-                    pr.state.value,
-                    pr.created_at.isoformat(),
-                    None,
-                    None,
-                    json.dumps(pr.params),
-                    None,
-                ),
-            )
+        data = {
+            "id": pr.id,
+            "pipeline_id": pr.pipeline_id,
+            "state": pr.state.value,
+            "created_at": pr.created_at.isoformat(),
+            "started_at": None,
+            "finished_at": None,
+            "params": json.dumps(pr.params or {}),
+            "error": None,
+        }
+        self._write("pipeline_run", pr.id, data)
+        logger.info(f"Created PipelineRun {pr.id} for pipeline '{pipeline_id}'")
         return pr
 
     def get_pipeline_run(self, run_id: str) -> Optional[PipelineRun]:
-        with self._conn() as con:
-            row = con.execute(
-                "SELECT * FROM pipeline_run WHERE id = ?", (run_id,)
-            ).fetchone()
+        row = self._read("pipeline_run", run_id)
         if not row:
             return None
-
-        return self._row_to_pipeline_run(row)
-
-    def _row_to_pipeline_run(self, row) -> PipelineRun:
-        """Convert a database row to a PipelineRun object."""
+        try:
+            params_val = row.get("params")
+            params = (
+                json.loads(params_val)
+                if isinstance(params_val, str)
+                else (params_val or {})
+            )
+        except Exception:
+            params = {}
         return PipelineRun(
-            id=row["id"],
-            pipeline_id=row["pipeline_id"],
-            state=RunState(row["state"]),
-            created_at=self._parse_dt(row["created_at"]) or datetime.now(timezone.utc),
-            started_at=self._parse_dt(row["started_at"]),
-            finished_at=self._parse_dt(row["finished_at"]),
-            params=json.loads(row["params"] or "{}"),
-            error=row["error"] if "error" in row.keys() else None,
+            id=row.get("id", ""),
+            pipeline_id=row.get("pipeline_id", ""),
+            state=RunState(row.get("state", RunState.PENDING.value)),
+            created_at=self._parse_dt(row.get("created_at"))
+            or datetime.now(timezone.utc),
+            started_at=self._parse_dt(row.get("started_at")),
+            finished_at=self._parse_dt(row.get("finished_at")),
+            params=params,
+            error=row.get("error"),
         )
 
     def update_pipeline_run_state(
@@ -511,24 +384,17 @@ class OrchestratorStore:
         finished_at: Optional[datetime] = None,
         error: Optional[str] = None,
     ) -> None:
-        with self._conn() as con:
-            con.execute(
-                """
-                UPDATE pipeline_run
-                SET state = ?, 
-                    started_at = COALESCE(?, started_at), 
-                    finished_at = COALESCE(?, finished_at),
-                    error = COALESCE(?, error)
-                WHERE id = ?
-                """,
-                (
-                    new_state.value,
-                    started_at.isoformat() if started_at else None,
-                    finished_at.isoformat() if finished_at else None,
-                    error,
-                    run_id,
-                ),
-            )
+        row = self._read("pipeline_run", run_id) or {}
+        if not row:
+            return
+        row["state"] = new_state.value
+        if started_at:
+            row["started_at"] = started_at.isoformat()
+        if finished_at:
+            row["finished_at"] = finished_at.isoformat()
+        if error is not None:
+            row["error"] = error
+        self._write("pipeline_run", run_id, row)
 
     def list_pipeline_runs(
         self,
@@ -539,53 +405,42 @@ class OrchestratorStore:
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
     ) -> List[PipelineRun]:
-        sql = "SELECT * FROM pipeline_run"
-        params: List[Any] = []
-        clauses: List[str] = []
-        if pipeline_id:
-            clauses.append(PIPELINE_ID_CLAUSE)
-            params.append(pipeline_id)
-        if state:
-            clauses.append("state = ?")
-            params.append(state.value)
-        if created_after:
-            clauses.append("created_at >= ?")
-            params.append(created_after.isoformat())
-        if created_before:
-            clauses.append("created_at <= ?")
-            params.append(created_before.isoformat())
+        rows = self._list("pipeline_run")
+        result: List[PipelineRun] = []
+        for r in rows:
+            created = self._parse_dt(r.get("created_at"))
+            if (
+                (pipeline_id and r.get("pipeline_id") != pipeline_id)
+                or (state and r.get("state") != state.value)
+                or (created_after and created and created < created_after)
+                or (created_before and created and created > created_before)
+            ):
+                continue
+            pr = self.get_pipeline_run(r.get("id", ""))
+            if pr:
+                result.append(pr)
 
-        if clauses:
-            sql += WHERE_PREFIX + AND_JOIN.join(clauses)
+        result.sort(
+            key=lambda x: x.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return result[offset : offset + limit]
 
-        sql += ORDER_LIMIT_OFFSET
-        params.extend([limit, offset])
-
-        with self._conn() as con:
-            rows = con.execute(sql, params).fetchall()
-
-        return [self._row_to_pipeline_run(r) for r in rows]
-
+    # ---------- Task runs ----------
     def create_task_run(self, pipeline_run_id: str, task_id: str) -> TaskRun:
         tr = TaskRun(pipeline_run_id=pipeline_run_id, task_id=task_id)
-        with self._conn() as con:
-            con.execute(
-                """
-                INSERT INTO task_run (id, pipeline_run_id, task_id, state, try_number, started_at, finished_at, log_uri, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    tr.id,
-                    tr.pipeline_run_id,
-                    tr.task_id,
-                    tr.state.value,
-                    tr.try_number,
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-            )
+        data = {
+            "id": tr.id,
+            "pipeline_run_id": tr.pipeline_run_id,
+            "task_id": tr.task_id,
+            "state": tr.state.value,
+            "try_number": tr.try_number,
+            "started_at": None,
+            "finished_at": None,
+            "log_uri": None,
+            "error": None,
+        }
+        self._write("task_run", tr.id, data)
         return tr
 
     def update_task_run_state(
@@ -598,60 +453,57 @@ class OrchestratorStore:
         error: Optional[str] = None,
         log_uri: Optional[str] = None,
     ) -> None:
-        with self._conn() as con:
-            con.execute(
-                """
-                UPDATE task_run
-                SET state = ?,
-                    try_number = COALESCE(?, try_number),
-                    started_at = COALESCE(?, started_at),
-                    finished_at = COALESCE(?, finished_at),
-                    error = COALESCE(?, error),
-                    log_uri = COALESCE(?, log_uri)
-                WHERE id = ?
-                """,
-                (
-                    new_state.value,
-                    try_number,
-                    started_at.isoformat() if started_at else None,
-                    finished_at.isoformat() if finished_at else None,
-                    error,
-                    log_uri,
-                    task_run_id,
-                ),
-            )
+        row = self._read("task_run", task_run_id) or {}
+        if not row:
+            return
+        row["state"] = new_state.value
+        if try_number is not None:
+            row["try_number"] = int(try_number)
+        if started_at:
+            row["started_at"] = started_at.isoformat()
+        if finished_at:
+            row["finished_at"] = finished_at.isoformat()
+        if error is not None:
+            row["error"] = error
+        if log_uri is not None:
+            row["log_uri"] = log_uri
+        self._write("task_run", task_run_id, row)
 
     def list_task_runs(
         self, pipeline_run_id: str, state: Optional[RunState] = None
     ) -> List[TaskRun]:
-        sql = "SELECT * FROM task_run WHERE pipeline_run_id = ?"
-        params = [pipeline_run_id]
+        rows = self._list("task_run")
+        out: List[TaskRun] = []
+        for r in rows:
+            if r.get("pipeline_run_id") != pipeline_run_id:
+                continue
+            if state and r.get("state") != state.value:
+                continue
+            out.append(
+                TaskRun(
+                    id=r.get("id", ""),
+                    pipeline_run_id=r.get("pipeline_run_id", ""),
+                    task_id=r.get("task_id", ""),
+                    state=RunState(r.get("state", RunState.PENDING.value)),
+                    try_number=int(r.get("try_number", 0)),
+                    started_at=self._parse_dt(r.get("started_at")),
+                    finished_at=self._parse_dt(r.get("finished_at")),
+                    log_uri=r.get("log_uri"),
+                    error=r.get("error"),
+                )
+            )
 
-        if state:
-            sql += " AND state = ?"
-            params.append(state.value)
+        def _ordkey(tr: TaskRun):
+            return (
+                0 if tr.started_at else 1,
+                tr.started_at or datetime.min.replace(tzinfo=timezone.utc),
+                tr.id,
+            )
 
-        sql += " ORDER BY (started_at IS NOT NULL), started_at, id"
+        out.sort(key=_ordkey)
+        return out
 
-        with self._conn() as con:
-            rows = con.execute(sql, params).fetchall()
-
-        return [self._row_to_task_run(r) for r in rows]
-
-    def _row_to_task_run(self, row) -> TaskRun:
-        """Convert a database row to a TaskRun object."""
-        return TaskRun(
-            id=row["id"],
-            pipeline_run_id=row["pipeline_run_id"],
-            task_id=row["task_id"],
-            state=RunState(row["state"]),
-            try_number=row["try_number"],
-            started_at=self._parse_dt(row["started_at"]),
-            finished_at=self._parse_dt(row["finished_at"]),
-            log_uri=row["log_uri"],
-            error=row["error"],
-        )
-
+    # ---------- Schedules ----------
     def create_schedule(
         self,
         pipeline_id: str,
@@ -673,27 +525,47 @@ class OrchestratorStore:
             next_run_at=next_run_at,
             enabled=enabled,
         )
-        with self._conn() as con:
-            con.execute(
-                """
-                INSERT INTO schedule (id, pipeline_id, kind, expression, enabled, max_concurrency, retry_policy, timeout_seconds, next_run_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sch.id,
-                    sch.pipeline_id,
-                    sch.kind.value,
-                    sch.expression,
-                    1 if sch.enabled else 0,
-                    sch.max_concurrency,
-                    json.dumps(sch.retry_policy),
-                    sch.timeout_seconds,
-                    sch.next_run_at.isoformat() if sch.next_run_at else None,
-                    sch.created_at.isoformat(),
-                    sch.updated_at.isoformat(),
-                ),
-            )
+        data = {
+            "id": sch.id,
+            "pipeline_id": sch.pipeline_id,
+            "kind": sch.kind.value,
+            "expression": sch.expression,
+            "enabled": bool(sch.enabled),
+            "max_concurrency": int(sch.max_concurrency),
+            "retry_policy": json.dumps(sch.retry_policy or {}),
+            "timeout_seconds": sch.timeout_seconds,
+            "next_run_at": sch.next_run_at.isoformat() if sch.next_run_at else None,
+            "created_at": sch.created_at.isoformat(),
+            "updated_at": sch.updated_at.isoformat(),
+        }
+        self._write("schedule", sch.id, data)
         return sch
+
+    def _schedule_matches_filters(
+        self,
+        r: Dict[str, Any],
+        pipeline_id: Optional[str],
+        enabled_only: bool,
+        kind: Optional[ScheduleKind],
+    ) -> bool:
+        if pipeline_id and r.get("pipeline_id") != pipeline_id:
+            return False
+        if enabled_only and not bool(r.get("enabled", True)):
+            return False
+        if kind and r.get("kind") != kind.value:
+            return False
+        return True
+
+    def _parse_retry_policy_value(self, r: Dict[str, Any]) -> Dict[str, Any]:
+        retry_val = r.get("retry_policy")
+        try:
+            return (
+                json.loads(retry_val)
+                if isinstance(retry_val, str)
+                else (retry_val or {})
+            )
+        except Exception:
+            return {"retries": 0, "delay": 0}
 
     def list_schedules(
         self,
@@ -701,53 +573,44 @@ class OrchestratorStore:
         enabled_only: bool = False,
         kind: Optional[ScheduleKind] = None,
     ) -> List[Schedule]:
-        sql = "SELECT * FROM schedule"
-        params: List[Any] = []
-        clauses: List[str] = []
-        if pipeline_id:
-            clauses.append(PIPELINE_ID_CLAUSE)
-            params.append(pipeline_id)
-        if enabled_only:
-            clauses.append("enabled = 1")
-        if kind:
-            clauses.append("kind = ?")
-            params.append(kind.value)
+        rows = self._list("schedule")
+        out: List[Schedule] = []
 
-        if clauses:
-            sql += WHERE_PREFIX + AND_JOIN.join(clauses)
-        sql += ORDER_BY_CREATED_DESC
+        for r in rows:
+            if not self._schedule_matches_filters(r, pipeline_id, enabled_only, kind):
+                continue
 
-        with self._conn() as con:
-            rows = con.execute(sql, params).fetchall()
+            retry_policy = self._parse_retry_policy_value(r)
 
-        return [self._row_to_schedule(r) for r in rows]
+            out.append(
+                Schedule(
+                    id=r.get("id", ""),
+                    pipeline_id=r.get("pipeline_id", ""),
+                    kind=ScheduleKind(r.get("kind", ScheduleKind.INTERVAL.value)),
+                    expression=r.get("expression", "60"),
+                    enabled=bool(r.get("enabled", True)),
+                    max_concurrency=int(r.get("max_concurrency", 1)),
+                    retry_policy=retry_policy or {"retries": 0, "delay": 0},
+                    timeout_seconds=r.get("timeout_seconds"),
+                    next_run_at=self._parse_dt(r.get("next_run_at")),
+                    created_at=self._parse_dt(r.get("created_at"))
+                    or datetime.now(timezone.utc),
+                    updated_at=self._parse_dt(r.get("updated_at"))
+                    or datetime.now(timezone.utc),
+                )
+            )
 
-    def _row_to_schedule(self, row) -> Schedule:
-        """Convertir una fila de la base de datos a un objeto Schedule"""
-        retry_policy = json.loads(row["retry_policy"] or "{}")
-        if not retry_policy:
-            retry_policy = {"retries": 0, "delay": 0}
-
-        return Schedule(
-            id=row["id"],
-            pipeline_id=row["pipeline_id"],
-            kind=ScheduleKind(row["kind"]),
-            expression=row["expression"],
-            enabled=bool(row["enabled"]),
-            max_concurrency=row["max_concurrency"],
-            retry_policy=retry_policy,
-            timeout_seconds=row["timeout_seconds"],
-            next_run_at=self._parse_dt(row["next_run_at"]),
-            created_at=self._parse_dt(row["created_at"]) or datetime.now(timezone.utc),
-            updated_at=self._parse_dt(row["updated_at"]) or datetime.now(timezone.utc),
+        out.sort(
+            key=lambda s: s.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
         )
+        return out
 
-    def update_schedule(
-        self,
-        schedule_id: str,
-        **fields,
-    ) -> None:
+    def update_schedule(self, schedule_id: str, **fields) -> None:
         if not fields:
+            return
+        row = self._read("schedule", schedule_id) or {}
+        if not row:
             return
         allowed = {
             "enabled",
@@ -757,27 +620,47 @@ class OrchestratorStore:
             "timeout_seconds",
             "next_run_at",
         }
-        sets: List[str] = []
-        params: List[Any] = []
         for k, v in fields.items():
             if k not in allowed:
                 continue
-            if k == "retry_policy":
-                v = json.dumps(v)
+            if k == "retry_policy" and not isinstance(v, str):
+                row[k] = json.dumps(v)
+                continue
             if k == "enabled":
-                v = 1 if bool(v) else 0
+                row[k] = bool(v)
+                continue
             if k == "next_run_at" and isinstance(v, datetime):
-                v = v.isoformat()
-            sets.append(f"{k} = ?")
-            params.append(v)
-        if not sets:
-            return
-        sets.append("updated_at = ?")
-        params.append(datetime.now(timezone.utc).isoformat())
-        params.append(schedule_id)
-        sql = "UPDATE schedule SET " + ", ".join(sets) + " WHERE id = ?"
-        with self._conn() as con:
-            con.execute(sql, params)
+                row[k] = v.isoformat()
+                continue
+            row[k] = v
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._write("schedule", schedule_id, row)
+
+    def claim_schedule_next_run(
+        self,
+        schedule_id: str,
+        expected_next_run_at: Optional[datetime],
+        new_next_run_at: datetime,
+    ) -> bool:
+        lock = self._locks["schedule"]
+        with lock:
+            row = self._read("schedule", schedule_id)
+            if not row or not bool(row.get("enabled", True)):
+                return False
+            now = datetime.now(timezone.utc)
+            current_next = self._parse_dt(row.get("next_run_at"))
+            due = current_next is None or current_next <= now
+            matches = (expected_next_run_at is None and current_next is None) or (
+                expected_next_run_at is not None
+                and current_next is not None
+                and current_next == expected_next_run_at
+            )
+            if not (due or matches):
+                return False
+            row["next_run_at"] = new_next_run_at.isoformat()
+            row["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._write("schedule", schedule_id, row)
+            return True
 
     def compute_next_run_for_interval(
         self, interval_seconds: int, now: Optional[datetime] = None
@@ -785,283 +668,213 @@ class OrchestratorStore:
         base = now or datetime.now(timezone.utc)
         return base + timedelta(seconds=interval_seconds)
 
+    # ---------- Dead letter queue ----------
     def add_schedule_failure_to_dlq(
         self, schedule_id: str, pipeline_id: str, error: str
     ) -> None:
-        """Add a schedule failure entry to the dead letter queue."""
-        with self._conn() as con:
-            con.execute(
-                """
-                INSERT INTO schedule_dead_letter (id, schedule_id, pipeline_id, error, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    str(uuid4()),
-                    schedule_id,
-                    pipeline_id,
-                    error,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
+        rec = {
+            "id": str(uuid4()),
+            "schedule_id": schedule_id,
+            "pipeline_id": pipeline_id,
+            "error": error,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write("schedule_dead_letter", rec["id"], rec)
 
     def get_schedule_failures(
         self, schedule_id: Optional[str] = None, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
-        """Return schedule failures from the dead letter queue."""
-        sql = "SELECT * FROM schedule_dead_letter"
-        params = []
-
+        rows = self._list("schedule_dead_letter")
         if schedule_id:
-            sql += " WHERE schedule_id = ?"
-            params.append(schedule_id)
+            rows = [r for r in rows if r.get("schedule_id") == schedule_id]
 
-        sql += ORDER_LIMIT_OFFSET
-        params.extend([limit, offset])
+        def _k(r: Dict[str, Any]):
+            dt = self._parse_dt(r.get("created_at")) or datetime.min.replace(
+                tzinfo=timezone.utc
+            )
+            return dt
 
-        with self._conn() as con:
-            rows = con.execute(sql, params).fetchall()
+        rows.sort(key=_k, reverse=True)
+        return rows[offset : offset + limit]
 
-        return [dict(row) for row in rows]
-
+    # ---------- Monitoring ----------
     def get_stuck_pipeline_runs(
         self, timeout_minutes: int = 60, max_runs: int = 100
     ) -> List[PipelineRun]:
-        """Return stuck executions (RUNNING for too long)."""
-        cutoff_time = (
-            datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
-        ).isoformat()
+        cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
+        rows = self._list("pipeline_run")
+        stuck: List[PipelineRun] = []
+        for r in rows:
+            if r.get("state") != RunState.RUNNING.value:
+                continue
+            st = self._parse_dt(r.get("started_at"))
+            if st and st < cutoff_time:
+                pr = self.get_pipeline_run(r.get("id", ""))
+                if pr:
+                    stuck.append(pr)
+        stuck.sort(
+            key=lambda pr: pr.started_at or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        return stuck[:max_runs]
 
-        with self._conn() as con:
-            rows = con.execute(
-                """
-                SELECT * FROM pipeline_run 
-                WHERE state = ? AND started_at < ?
-                ORDER BY started_at ASC
-                LIMIT ?
-                """,
-                (RunState.RUNNING.value, cutoff_time, max_runs),
-            ).fetchall()
+    # ---------- Maintenance ----------
+    def cleanup_old_data(self, max_days: int = 30) -> Dict[str, int]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_days)
+        result = {"task_runs": 0, "pipeline_runs": 0, "schedule_dead_letter": 0}
 
-        return [self._row_to_pipeline_run(r) for r in rows]
-
-    def cleanup_old_data(
-        self, max_days: int = 30, batch_size: int = 1000
-    ) -> Dict[str, int]:
-        """
-        Cleanup old data in batches compatible with SQLite (avoid DELETE ... LIMIT).
-        Returns counts of deletions per table.
-        """
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_days)).isoformat()
-        result: Dict[str, int] = {
-            "task_runs": 0,
-            "pipeline_runs": 0,
-            "schedule_dead_letter": 0,
-        }
-
-        def _delete_by_select_ids(
-            con: sqlite3.Connection,
-            table_name: str,
-            select_sql: str,
-            params: Iterable[Any],
-        ) -> int:
-            total_deleted = 0
-            while True:
-                rows = con.execute(
-                    select_sql + " LIMIT ?", tuple(params) + (batch_size,)
-                ).fetchall()
-                ids = [r["id"] for r in rows]
-                if not ids:
-                    break
-                placeholders = ",".join("?" for _ in ids)
-                deleted = con.execute(
-                    f"DELETE FROM {table_name} WHERE id IN ({placeholders})", ids
-                ).rowcount
-                total_deleted += int(deleted or 0)
-            return total_deleted
-
-        conn = self.connection_pool.get_connection()
-        try:
-            result["task_runs"] = _delete_by_select_ids(
-                conn,
-                "task_run",
-                "SELECT id FROM task_run WHERE finished_at IS NOT NULL AND finished_at < ?",
-                (cutoff,),
+        with self._conn() as session:
+            # Delete old task runs
+            result["task_runs"] = (
+                session.query(TaskRunDB).filter(TaskRunDB.finished_at < cutoff).delete()
             )
-            result["pipeline_runs"] = _delete_by_select_ids(
-                conn,
-                "pipeline_run",
-                "SELECT id FROM pipeline_run WHERE finished_at IS NOT NULL AND finished_at < ?",
-                (cutoff,),
+
+            # Delete old pipeline runs
+            result["pipeline_runs"] = (
+                session.query(PipelineRunDB)
+                .filter(PipelineRunDB.finished_at < cutoff)
+                .delete()
             )
-            result["schedule_dead_letter"] = _delete_by_select_ids(
-                conn,
-                "schedule_dead_letter",
-                "SELECT id FROM schedule_dead_letter WHERE created_at < ?",
-                (cutoff,),
+
+            # Delete old dead letter entries
+            result["schedule_dead_letter"] = (
+                session.query(ScheduleDeadLetterDB)
+                .filter(ScheduleDeadLetterDB.created_at < cutoff)
+                .delete()
             )
-            conn.commit()
-        finally:
-            self.connection_pool.return_connection(conn)
 
         return result
 
     def vacuum(self) -> None:
-        """
-        Run VACUUM on a new connection to ensure it is NOT inside a transaction/pool.
-        """
-        conn = sqlite3.connect(str(self.db_path), isolation_level=None)
-        try:
-            conn.execute("VACUUM")
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        # For PostgreSQL, vacuum is handled automatically, but we can log
+        logger.debug("Vacuum operation not needed for PostgreSQL")
 
     def close(self) -> None:
-        """Close all connections in the pool."""
-        try:
-            self.connection_pool.close_all()
-        except Exception:
-            pass
+        # Close any open connections if needed
+        pass
 
-    def get_database_stats(self) -> Dict[str, Any]:
-        """
-        Return useful DB statistics (counts by state and size in bytes).
-        """
-        stats: Dict[str, Any] = {}
-        conn = self.connection_pool.get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT state, COUNT(*) as cnt FROM pipeline_run GROUP BY state"
-            ).fetchall()
-            stats["pipeline_runs_by_state"] = {r["state"]: r["cnt"] for r in rows}
+    def create_snapshot(self, snapshot_path: Optional[Path] = None) -> Path:
+        """Create snapshot of database data."""
+        if snapshot_path is None:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            snapshot_path = Path.cwd() / f"snapshot_{timestamp}.json.gz"
 
-            rows = conn.execute(
-                "SELECT state, COUNT(*) as cnt FROM task_run GROUP BY state"
-            ).fetchall()
-            stats["task_runs_by_state"] = {r["state"]: r["cnt"] for r in rows}
+        snapshot_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "scope": self._scope,
+            "data": {
+                "pipeline_runs": self._list("pipeline_run"),
+                "task_runs": self._list("task_run"),
+                "schedules": self._list("schedule"),
+                "pipeline_metrics": self._list("pipeline_metrics"),
+                "schedule_dead_letter": self._list("schedule_dead_letter"),
+                "run_results": self._list("run_result"),
+            },
+        }
 
-            rows = conn.execute(
-                "SELECT enabled, COUNT(*) as cnt FROM schedule GROUP BY enabled"
-            ).fetchall()
-            stats["schedules_by_status"] = {
-                ("enabled" if bool(r["enabled"]) else "disabled"): r["cnt"]
-                for r in rows
-            }
-            # database size
-            try:
-                pc_row = conn.execute("PRAGMA page_count").fetchone()
-                ps_row = conn.execute("PRAGMA page_size").fetchone()
-                page_count = int(pc_row[0]) if pc_row is not None else 0
-                page_size = int(ps_row[0]) if ps_row is not None else 0
-                stats["database_size_bytes"] = page_count * page_size
-            except Exception:
-                stats["database_size_bytes"] = 0
+        with gzip.open(snapshot_path, "wt", encoding="utf-8") as f:
+            json.dump(snapshot_data, f, default=str, ensure_ascii=False)
 
-            # Pool stats
-            stats["connection_pool"] = self.connection_pool.get_stats()
+        logger.info(f"Snapshot created at {snapshot_path}")
+        return snapshot_path
 
-        finally:
-            self.connection_pool.return_connection(conn)
+    def load_snapshot(self, snapshot_path: Path) -> None:
+        """Load snapshot into database."""
+        with gzip.open(snapshot_path, "rt", encoding="utf-8") as f:
+            snapshot_data = json.load(f)
 
-        return stats
+        data = snapshot_data["data"]
+        with self._conn() as session:
+            # Clear existing data
+            session.query(RunResultDB).delete()
+            session.query(ScheduleDeadLetterDB).delete()
+            session.query(PipelineMetricsDB).delete()
+            session.query(ScheduleDB).delete()
+            session.query(TaskRunDB).delete()
+            session.query(PipelineRunDB).delete()
 
+            # Load new data
+            for pr_data in data["pipeline_runs"]:
+                self._db_write(session, "pipeline_run", pr_data["id"], pr_data)
+            for tr_data in data["task_runs"]:
+                self._db_write(session, "task_run", tr_data["id"], tr_data)
+            for s_data in data["schedules"]:
+                self._db_write(session, "schedule", s_data["id"], s_data)
+            for pm_data in data["pipeline_metrics"]:
+                self._db_write(
+                    session, "pipeline_metrics", pm_data["pipeline_id"], pm_data
+                )
+            for dl_data in data["schedule_dead_letter"]:
+                self._db_write(session, "schedule_dead_letter", dl_data["id"], dl_data)
+            for rr_data in data["run_results"]:
+                self._db_write(session, "run_result", rr_data["run_id"], rr_data)
+
+        logger.info(f"Snapshot loaded from {snapshot_path}")
+
+    # ---------- Aggregated metrics ----------
     def _insert_pipeline_metrics_row(
-        self,
-        con: sqlite3.Connection,
-        pipeline_run: PipelineRun,
-        execution_time: Optional[float],
+        self, pipeline_run: PipelineRun, execution_time: Optional[float]
     ) -> None:
-        """Insert a new metrics row for a pipeline."""
-        con.execute(
-            """
-            INSERT INTO pipeline_metrics (
-                pipeline_id, total_runs, successful_runs, failed_runs,
-                avg_execution_time_seconds, last_run_at, 
-                last_success_at, last_failure_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                pipeline_run.pipeline_id,
-                1,
-                1 if pipeline_run.state == RunState.SUCCESS else 0,
-                1 if pipeline_run.state == RunState.FAILED else 0,
-                execution_time or 0,
-                pipeline_run.finished_at.isoformat()
-                if pipeline_run.finished_at
-                else None,
-                pipeline_run.finished_at.isoformat()
-                if pipeline_run.state == RunState.SUCCESS and pipeline_run.finished_at
-                else None,
-                pipeline_run.finished_at.isoformat()
-                if pipeline_run.state == RunState.FAILED and pipeline_run.finished_at
-                else None,
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
+        data = {
+            "pipeline_id": pipeline_run.pipeline_id,
+            "total_runs": 1,
+            "successful_runs": 1 if pipeline_run.state == RunState.SUCCESS else 0,
+            "failed_runs": 1 if pipeline_run.state == RunState.FAILED else 0,
+            "avg_execution_time_seconds": execution_time or 0,
+            "last_run_at": pipeline_run.finished_at.isoformat()
+            if pipeline_run.finished_at
+            else None,
+            "last_success_at": pipeline_run.finished_at.isoformat()
+            if pipeline_run.state == RunState.SUCCESS and pipeline_run.finished_at
+            else None,
+            "last_failure_at": pipeline_run.finished_at.isoformat()
+            if pipeline_run.state == RunState.FAILED and pipeline_run.finished_at
+            else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write("pipeline_metrics", pipeline_run.pipeline_id, data)
 
     def _update_pipeline_metrics_row(
         self,
-        con: sqlite3.Connection,
-        row: sqlite3.Row,
+        row: Dict[str, Any],
         pipeline_run: PipelineRun,
         execution_time: Optional[float],
     ) -> None:
-        """Update an existing metrics row with the pipeline_run values."""
-        total_runs = row["total_runs"] + 1
-        successful_runs = row["successful_runs"] + (
+        total_runs = int(row.get("total_runs", 0)) + 1
+        successful_runs = int(row.get("successful_runs", 0)) + (
             1 if pipeline_run.state == RunState.SUCCESS else 0
         )
-        failed_runs = row["failed_runs"] + (
+        failed_runs = int(row.get("failed_runs", 0)) + (
             1 if pipeline_run.state == RunState.FAILED else 0
         )
 
-        # Calcular nuevo promedio de tiempo de ejecución
         if execution_time:
-            current_avg = row["avg_execution_time_seconds"] or 0
-            new_avg = ((current_avg * row["total_runs"]) + execution_time) / total_runs
+            current_avg = float(row.get("avg_execution_time_seconds", 0) or 0)
+            new_avg = (
+                (current_avg * int(row.get("total_runs", 0))) + execution_time
+            ) / total_runs
         else:
-            new_avg = row["avg_execution_time_seconds"] or 0
+            new_avg = float(row.get("avg_execution_time_seconds", 0) or 0)
 
-        con.execute(
-            """
-            UPDATE pipeline_metrics SET
-                total_runs = ?,
-                successful_runs = ?,
-                failed_runs = ?,
-                avg_execution_time_seconds = ?,
-                last_run_at = ?,
-                last_success_at = COALESCE(?, last_success_at),
-                last_failure_at = COALESCE(?, last_failure_at),
-                updated_at = ?
-            WHERE pipeline_id = ?
-            """,
-            (
-                total_runs,
-                successful_runs,
-                failed_runs,
-                new_avg,
-                pipeline_run.finished_at.isoformat()
-                if pipeline_run.finished_at
-                else None,
-                pipeline_run.finished_at.isoformat()
-                if pipeline_run.state == RunState.SUCCESS and pipeline_run.finished_at
-                else None,
-                pipeline_run.finished_at.isoformat()
-                if pipeline_run.state == RunState.FAILED and pipeline_run.finished_at
-                else None,
-                datetime.now(timezone.utc).isoformat(),
-                pipeline_run.pipeline_id,
-            ),
-        )
+        updated = {
+            **row,
+            "total_runs": total_runs,
+            "successful_runs": successful_runs,
+            "failed_runs": failed_runs,
+            "avg_execution_time_seconds": new_avg,
+            "last_run_at": pipeline_run.finished_at.isoformat()
+            if pipeline_run.finished_at
+            else row.get("last_run_at"),
+            "last_success_at": pipeline_run.finished_at.isoformat()
+            if pipeline_run.state == RunState.SUCCESS and pipeline_run.finished_at
+            else row.get("last_success_at"),
+            "last_failure_at": pipeline_run.finished_at.isoformat()
+            if pipeline_run.state == RunState.FAILED and pipeline_run.finished_at
+            else row.get("last_failure_at"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write("pipeline_metrics", pipeline_run.pipeline_id, updated)
 
     def update_pipeline_metrics(self, pipeline_run: PipelineRun) -> None:
-        """
-        Update aggregated metrics for a pipeline.
-        Should be called when a run finishes.
-        This version delegates logic to smaller helpers to reduce cognitive complexity.
-        """
         if not pipeline_run.state.is_terminal():
             return
 
@@ -1071,39 +884,31 @@ class OrchestratorStore:
                 pipeline_run.finished_at - pipeline_run.started_at
             ).total_seconds()
 
-        with self._conn() as con:
-            row = con.execute(
-                "SELECT * FROM pipeline_metrics WHERE pipeline_id = ?",
-                (pipeline_run.pipeline_id,),
-            ).fetchone()
-
-            if row is None:
-                self._insert_pipeline_metrics_row(con, pipeline_run, execution_time)
-            else:
-                self._update_pipeline_metrics_row(
-                    con, row, pipeline_run, execution_time
-                )
+        row = self._read("pipeline_metrics", pipeline_run.pipeline_id)
+        if row is None:
+            self._insert_pipeline_metrics_row(pipeline_run, execution_time)
+        else:
+            self._update_pipeline_metrics_row(row, pipeline_run, execution_time)
 
     def get_pipeline_metrics(
         self, pipeline_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Return aggregated pipeline metrics.
-        If pipeline_id is provided, returns metrics for that pipeline, otherwise for all pipelines.
-        """
-        with self._conn() as con:
-            if pipeline_id:
-                row = con.execute(
-                    "SELECT * FROM pipeline_metrics WHERE pipeline_id = ?",
-                    (pipeline_id,),
-                ).fetchone()
-                return [dict(row)] if row else []
-            else:
-                rows = con.execute(
-                    "SELECT * FROM pipeline_metrics ORDER BY updated_at DESC"
-                ).fetchall()
-                return [dict(row) for row in rows]
+        if pipeline_id:
+            row = self._read("pipeline_metrics", pipeline_id)
+            return [row] if row else []
+        else:
+            rows = self._list("pipeline_metrics")
 
+            def _k(r: Dict[str, Any]):
+                try:
+                    return float(r.get("avg_execution_time_seconds", 0) or 0)
+                except Exception:
+                    return 0.0
+
+            rows.sort(key=_k, reverse=True)
+            return rows
+
+    # ---------- Pagination ----------
     def get_pipeline_runs_paginated(
         self,
         pipeline_id: Optional[str] = None,
@@ -1113,47 +918,20 @@ class OrchestratorStore:
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
     ) -> Dict[str, Any]:
-        # Construir query de conteo
-        count_sql = "SELECT COUNT(*) as total FROM pipeline_run"
-        params: List[Any] = []
-        clauses: List[str] = []
-
-        if pipeline_id:
-            clauses.append("pipeline_id = ?")
-            params.append(pipeline_id)
-        if state:
-            clauses.append("state = ?")
-            params.append(state.value)
-        if created_after:
-            clauses.append("created_at >= ?")
-            params.append(created_after.isoformat())
-        if created_before:
-            clauses.append("created_at <= ?")
-            params.append(created_before.isoformat())
-
-        if clauses:
-            count_sql += WHERE_PREFIX + AND_JOIN.join(clauses)
-
-        # Calcular offset correctamente
+        rows = self.list_pipeline_runs(
+            pipeline_id=pipeline_id,
+            state=state,
+            limit=10**9,
+            offset=0,
+            created_after=created_after,
+            created_before=created_before,
+        )
+        total = len(rows)
         offset = (page - 1) * page_size if page > 0 else 0
-
-        with self._conn() as con:
-            # Obtener total
-            total = con.execute(count_sql, params).fetchone()["total"]
-
-            # Obtener datos
-            data_sql = "SELECT * FROM pipeline_run"
-            if clauses:
-                data_sql += WHERE_PREFIX + AND_JOIN.join(clauses)
-            data_sql += ORDER_LIMIT_OFFSET
-
-            rows = con.execute(data_sql, params + [page_size, offset]).fetchall()
-            runs = [self._row_to_pipeline_run(r) for r in rows]
-
+        data = rows[offset : offset + page_size]
         total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
-
         return {
-            "data": runs,
+            "data": data,
             "pagination": {
                 "page": page,
                 "page_size": page_size,
@@ -1163,3 +941,34 @@ class OrchestratorStore:
                 "has_prev": page > 1,
             },
         }
+
+    # ---------- Background compatibility ----------
+    def update_run_status(self, run_id: str, status: str) -> None:
+        try:
+            state = RunState(status.upper())
+        except Exception:
+            status_up = str(status).upper()
+            state = RunState.__members__.get(status_up, RunState.PENDING)
+        self.update_pipeline_run_state(run_id, state)
+
+    def update_run_result(
+        self, run_id: str, result: Any, status: str = "success"
+    ) -> None:
+        payload = {
+            "run_id": run_id,
+            "status": status,
+            "result": result,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write("run_result", run_id, payload)
+        if status.lower() == "success":
+            self.update_pipeline_run_state(
+                run_id, RunState.SUCCESS, finished_at=datetime.now(timezone.utc)
+            )
+
+    def update_run_error(self, run_id: str, error: str) -> None:
+        row = self._read("pipeline_run", run_id) or {}
+        if not row:
+            return
+        row["error"] = error
+        self._write("pipeline_run", run_id, row)
