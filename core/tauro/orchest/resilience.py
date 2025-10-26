@@ -1,18 +1,3 @@
-import asyncio
-
-
-def async_protect(func, *args, executor=None, **kwargs):
-    """Helper to run a coroutine `func`(*args, **kwargs) protected by sync
-    resilience primitives using an executor.
-    """
-    loop = asyncio.get_event_loop()
-
-    def _runner():
-        return asyncio.run(func(*args, **kwargs))
-
-    return loop.run_in_executor(executor, _runner)
-
-
 from __future__ import annotations
 from enum import Enum
 from typing import Callable, Optional, Any, Dict, TypeVar

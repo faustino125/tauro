@@ -2,7 +2,7 @@
 Services Layer
 
 Business logic layer that sits between routes and Tauro core components.
-Provides clean abstraction for pipeline execution, scheduling, and streaming operations.
+Provides clean abstraction for pipeline execution, scheduling, and data management operations.
 """
 
 from .base import (
@@ -12,8 +12,6 @@ from .base import (
     ServiceMetrics,
     ServicePriority,
 )
-from .pipeline import PipelineService
-from .streaming import StreamingService
 
 __all__ = [
     # Base service infrastructure
@@ -22,7 +20,4 @@ __all__ = [
     "ServiceConfig",
     "ServiceMetrics",
     "ServicePriority",
-    # Concrete services
-    "PipelineService",
-    "StreamingService",
 ]

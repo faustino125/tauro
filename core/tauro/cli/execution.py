@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger  # type: ignore
 
 from tauro.cli.config import AppConfigManager, ConfigManager
-from tauro.cli.core import ConfigFormat, ConfigurationError, ExecutionError, PathManager
+from tauro.cli.core import ConfigurationError, ExecutionError, PathManager
 from tauro.config.contexts import Context
 from tauro.exec.executor import PipelineExecutor as ExternalPipelineExecutor
 

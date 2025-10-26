@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional, Callable, List
 import asyncio
-import sys
 import time
 
 from loguru import logger

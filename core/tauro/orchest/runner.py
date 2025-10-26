@@ -3,6 +3,7 @@ from typing import Dict, Optional, List
 from datetime import datetime, timezone
 import threading
 import time
+import warnings
 
 from loguru import logger  # type: ignore
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -20,6 +21,14 @@ from tauro.orchest.resilience import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     get_resilience_manager,
+)
+
+# Deprecation warning
+warnings.warn(
+    "OrchestratorRunner is deprecated and will be removed in v3.0. "
+    "Please use tauro.orchest.services.RunService instead.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
 

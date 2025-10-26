@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     config_type: str = Field(default="catalog", env="TAURO_CONFIG_TYPE")
     environment: str = Field(default="dev", env="TAURO_ENV")
 
+    # Config source selection (file vs mongo)
+    config_source: str = Field(default="file", env="CONFIG_SOURCE")
+    mongo_url: Optional[str] = Field(default=None, env="MONGO_URL")
+    mongo_db: Optional[str] = Field(default=None, env="MONGO_DB")
+    mongo_ca_file: Optional[str] = Field(default=None, env="MONGO_CA_FILE")
+
     @validator("base_path", pre=True)
     def parse_base_path(cls, v):
         """Convert string to Path"""
@@ -58,6 +64,25 @@ class Settings(BaseSettings):
     # =========================================================================
     database_url: str = Field(default="sqlite:///./tauro.db", env="DATABASE_URL")
     database_echo: bool = Field(default=False, env="DATABASE_ECHO")
+
+    # =========================================================================
+    # MongoDB Configuration
+    # =========================================================================
+    mongodb_uri: str = Field(
+        default="mongodb://localhost:27017",
+        env="MONGODB_URI",
+        description="MongoDB connection string",
+    )
+    mongodb_db_name: str = Field(
+        default="tauro",
+        env="MONGODB_DB_NAME",
+        description="MongoDB database name",
+    )
+    mongodb_timeout_seconds: int = Field(
+        default=30,
+        env="MONGODB_TIMEOUT_SECONDS",
+        description="MongoDB connection timeout in seconds",
+    )
 
     # =========================================================================
     # Logging Configuration
@@ -77,6 +102,16 @@ class Settings(BaseSettings):
             raise ValueError(f"Log level must be one of: {valid_levels}")
         return v.upper()
 
+    @validator("config_source")
+    def validate_config_source(cls, v):
+        """Ensure config source is supported."""
+        if not isinstance(v, str):
+            raise ValueError("config_source must be a string")
+        value = v.strip().lower()
+        if value not in {"file", "mongo"}:
+            raise ValueError("config_source must be either 'file' or 'mongo'")
+        return value
+
     # =========================================================================
     # Monitoring & Metrics
     # =========================================================================
@@ -89,6 +124,10 @@ class Settings(BaseSettings):
     enable_rate_limit: bool = Field(default=True, env="ENABLE_RATE_LIMIT")
     rate_limit_requests: int = Field(default=100, env="RATE_LIMIT_REQUESTS")
     rate_limit_window: int = Field(default=60, env="RATE_LIMIT_WINDOW")  # seconds
+    rate_limit_exempt_paths: List[str] = Field(
+        default=["/health", "/metrics", "/docs", "/redoc", "/openapi.json"],
+        env="RATE_LIMIT_EXEMPT_PATHS",
+    )
 
     max_request_size: int = Field(
         default=10 * 1024 * 1024, env="MAX_REQUEST_SIZE"
@@ -96,6 +135,8 @@ class Settings(BaseSettings):
 
     # Security headers
     enable_security_headers: bool = Field(default=True, env="ENABLE_SECURITY_HEADERS")
+    csp_enabled: bool = Field(default=True, env="CSP_ENABLED")
+    hsts_enabled: bool = Field(default=True, env="HSTS_ENABLED")
 
     # =========================================================================
     # Scheduler Configuration
@@ -137,6 +178,8 @@ class Settings(BaseSettings):
             "use_case": self.use_case,
             "config_type": self.config_type,
             "environment": self.environment,
+            "config_source": self.config_source,
+            "mongo_db": self.mongo_db,
         }
 
 

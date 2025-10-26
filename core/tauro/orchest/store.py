@@ -1,33 +1,85 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-import gzip
 
 from loguru import logger  # type: ignore
-from sqlalchemy.orm import Session
-from .db import engine, get_session
+from pymongo import ASCENDING, DESCENDING  # type: ignore
+from pymongo.collection import Collection  # type: ignore
+from pymongo.errors import PyMongoError  # type: ignore
 
+from .db import close_client, get_collection, ping_database
 from tauro.orchest.models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
-from tauro.orchest.models_db import (
-    Base,
-    PipelineRunDB,
-    TaskRunDB,
-    ScheduleDB,
-    ScheduleDeadLetterDB,
-    PipelineMetricsDB,
-    RunResultDB,
-)
+
+try:
+    from croniter import croniter
+
+    HAS_CRONITER = True
+except ImportError:
+    HAS_CRONITER = False
+    logger.warning(
+        "croniter not installed, cron schedules will use placeholder behavior"
+    )
 
 
 class OrchestratorStore:
-    """Database-backed persistence for orchestrator metadata using PostgreSQL."""
+    """Database-backed persistence for orchestrator metadata using MongoDB."""
+
+    _COLLECTION_CONFIG: Dict[str, Dict[str, Any]] = {
+        "pipeline_run": {
+            "name": "pipeline_runs",
+            "key": "id",
+            "indexes": [
+                [("pipeline_id", ASCENDING)],
+                [("state", ASCENDING)],
+                [("created_at", DESCENDING)],
+                [("pipeline_id", ASCENDING), ("created_at", DESCENDING)],
+            ],
+        },
+        "task_run": {
+            "name": "task_runs",
+            "key": "id",
+            "indexes": [
+                [("pipeline_run_id", ASCENDING)],
+                [("state", ASCENDING)],
+            ],
+        },
+        "schedule": {
+            "name": "schedules",
+            "key": "id",
+            "indexes": [
+                [("pipeline_id", ASCENDING)],
+                [("enabled", ASCENDING)],
+                [("next_run_at", ASCENDING)],
+            ],
+        },
+        "pipeline_metrics": {
+            "name": "pipeline_metrics",
+            "key": "pipeline_id",
+            "indexes": [[("updated_at", DESCENDING)]],
+        },
+        "schedule_dead_letter": {
+            "name": "schedule_dead_letter",
+            "key": "id",
+            "indexes": [
+                [("schedule_id", ASCENDING)],
+                [("pipeline_id", ASCENDING)],
+                [("created_at", DESCENDING)],
+            ],
+        },
+        "run_result": {
+            "name": "run_results",
+            "key": "run_id",
+            "indexes": [[("created_at", DESCENDING)]],
+        },
+    }
 
     def __init__(
         self,
@@ -48,6 +100,9 @@ class OrchestratorStore:
 
         self._scope = scope
 
+        # Cache for lazily obtained MongoDB collections
+        self._collections: Dict[str, Collection] = {}
+
         # Initialize database tables
         self._init_db()
 
@@ -62,12 +117,71 @@ class OrchestratorStore:
         }
 
         logger.debug(
-            f"OrchestratorStore initialized with PostgreSQL for scope {self._scope}"
+            f"OrchestratorStore initialized with MongoDB for scope {self._scope}"
         )
 
     def _init_db(self) -> None:
-        """Initialize database tables."""
-        Base.metadata.create_all(bind=engine)
+        """Ensure MongoDB collections and indexes are available."""
+        for entity, cfg in self._COLLECTION_CONFIG.items():
+            collection = get_collection(cfg["name"])
+            self._collections[entity] = collection
+            for index_spec in cfg.get("indexes", []):
+                try:
+                    collection.create_index(index_spec, background=True)
+                except (
+                    PyMongoError
+                ):  # pragma: no cover - index creation errors are logged
+                    logger.exception(
+                        "Failed to ensure index %s for collection %s",
+                        index_spec,
+                        cfg["name"],
+                    )
+
+    def _collection_cfg(self, entity: str) -> Dict[str, Any]:
+        try:
+            return self._COLLECTION_CONFIG[entity]
+        except KeyError as exc:  # pragma: no cover - defensive programming
+            raise KeyError(f"Unknown entity '{entity}'") from exc
+
+    def _get_collection(self, entity: str) -> Collection:
+        collection = self._collections.get(entity)
+        if collection is None:
+            cfg = self._collection_cfg(entity)
+            collection = get_collection(cfg["name"])
+            self._collections[entity] = collection
+        return collection
+
+    def _primary_key(self, entity: str) -> str:
+        return self._collection_cfg(entity)["key"]
+
+    def _normalize_key(self, value: Any) -> Any:
+        if value is None:
+            return None
+        # MongoDB stores identifiers as strings for this store
+        return str(value)
+
+    def _normalize_doc(
+        self, entity: str, doc: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if doc is None:
+            return None
+        normalized = dict(doc)
+        key = self._primary_key(entity)
+        identifier = normalized.pop("_id", None)
+        if identifier is not None and key not in normalized:
+            normalized[key] = identifier
+        if key != "id" and "id" not in normalized and normalized.get(key) is not None:
+            normalized["id"] = normalized[key]
+        return normalized
+
+    def _validate_data(self, entity: str, data: Dict[str, Any]) -> None:
+        key = self._primary_key(entity)
+        if key not in data or data[key] in (None, ""):
+            fallback = data.get("id") if key != "id" else None
+            if fallback not in (None, ""):
+                data[key] = fallback
+        if key not in data or data[key] in (None, ""):
+            raise ValueError(f"Missing primary key '{key}' for entity '{entity}'")
 
     def __enter__(self) -> "OrchestratorStore":
         return self
@@ -87,6 +201,20 @@ class OrchestratorStore:
             except Exception:
                 return None
 
+    def _build_document(
+        self, entity: str, entity_id: str, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        doc = dict(data)
+        key = self._primary_key(entity)
+        if key not in doc or doc[key] in (None, ""):
+            doc[key] = entity_id
+        doc_id = self._normalize_key(doc[key])
+        doc[key] = doc_id
+        doc["_id"] = doc_id
+        if key != "id":
+            doc.setdefault("id", doc_id)
+        return doc
+
     def _write(self, entity: str, id: str, data: Dict[str, Any]) -> None:
         # Validar datos antes de guardar
         self._validate_data(entity, data)
@@ -94,243 +222,167 @@ class OrchestratorStore:
         lock = self._locks.get(entity)
         if lock:
             with lock:
-                with self._conn() as session:
-                    self._db_write(session, entity, id, data)
+                self._db_write(entity, id, data)
         else:
-            with self._conn() as session:
-                self._db_write(session, entity, id, data)
+            self._db_write(entity, id, data)
 
-    def _db_write(
-        self, session: Session, entity: str, id: str, data: Dict[str, Any]
-    ) -> None:
-        """Write data to database."""
-        if entity == "pipeline_run":
-            db_obj = PipelineRunDB(
-                id=data["id"],
-                pipeline_id=data["pipeline_id"],
-                state=data["state"],
-                created_at=self._parse_dt(data.get("created_at")),
-                started_at=self._parse_dt(data.get("started_at")),
-                finished_at=self._parse_dt(data.get("finished_at")),
-                params=data.get("params"),
-                error=data.get("error"),
+    def _db_write(self, entity: str, id: str, data: Dict[str, Any]) -> None:
+        """Write data to MongoDB."""
+        document = self._build_document(entity, id, data)
+        collection = self._get_collection(entity)
+        try:
+            collection.replace_one(
+                {"_id": document["_id"]}, document, upsert=True, max_time_ms=5000
             )
-            session.merge(db_obj)
-        elif entity == "task_run":
-            db_obj = TaskRunDB(
-                id=data["id"],
-                pipeline_run_id=data["pipeline_run_id"],
-                task_id=data["task_id"],
-                state=data["state"],
-                try_number=data.get("try_number", 0),
-                started_at=self._parse_dt(data.get("started_at")),
-                finished_at=self._parse_dt(data.get("finished_at")),
-                log_uri=data.get("log_uri"),
-                error=data.get("error"),
-            )
-            session.merge(db_obj)
-        elif entity == "schedule":
-            db_obj = ScheduleDB(
-                id=data["id"],
-                pipeline_id=data["pipeline_id"],
-                kind=data["kind"],
-                expression=data["expression"],
-                enabled=data.get("enabled", True),
-                max_concurrency=data.get("max_concurrency", 1),
-                retry_policy=data.get("retry_policy"),
-                timeout_seconds=data.get("timeout_seconds"),
-                next_run_at=self._parse_dt(data.get("next_run_at")),
-                created_at=self._parse_dt(data.get("created_at")),
-                updated_at=self._parse_dt(data.get("updated_at")),
-            )
-            session.merge(db_obj)
-        elif entity == "pipeline_metrics":
-            db_obj = PipelineMetricsDB(
-                pipeline_id=data["pipeline_id"],
-                total_runs=data.get("total_runs", 0),
-                successful_runs=data.get("successful_runs", 0),
-                failed_runs=data.get("failed_runs", 0),
-                avg_execution_time_seconds=data.get("avg_execution_time_seconds", 0.0),
-                last_run_at=self._parse_dt(data.get("last_run_at")),
-                last_success_at=self._parse_dt(data.get("last_success_at")),
-                last_failure_at=self._parse_dt(data.get("last_failure_at")),
-                updated_at=self._parse_dt(data.get("updated_at")),
-            )
-            session.merge(db_obj)
-        elif entity == "schedule_dead_letter":
-            db_obj = ScheduleDeadLetterDB(
-                id=data["id"],
-                schedule_id=data["schedule_id"],
-                pipeline_id=data["pipeline_id"],
-                error=data["error"],
-                created_at=self._parse_dt(data.get("created_at")),
-            )
-            session.add(db_obj)  # Add instead of merge for dead letter
-        elif entity == "run_result":
-            db_obj = RunResultDB(
-                run_id=data["run_id"],
-                status=data["status"],
-                result=data.get("result"),
-                created_at=self._parse_dt(data.get("created_at")),
-            )
-            session.merge(db_obj)
+        except PyMongoError:
+            logger.exception("Failed to write entity '%s' with id '%s'", entity, id)
+            raise
 
     def _read(self, entity: str, id: str) -> Optional[Dict[str, Any]]:
-        with self._conn() as session:
-            return self._db_read(session, entity, id)
+        return self._db_read(entity, id)
 
-    def _db_read(
-        self, session: Session, entity: str, id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Read data from database."""
-        converters = {
-            "pipeline_run": self._convert_pipeline_run_db,
-            "task_run": self._convert_task_run_db,
-            "schedule": self._convert_schedule_db,
-            "pipeline_metrics": self._convert_pipeline_metrics_db,
-            "run_result": self._convert_run_result_db,
-            "schedule_dead_letter": self._convert_schedule_dead_letter_db,
-        }
-
-        converter = converters.get(entity)
-        if not converter:
-            return None
-
-        db_class = self._get_db_class(entity)
-        obj = session.query(db_class).filter(db_class.id == id).first()
-        return converter(obj) if obj else None
+    def _db_read(self, entity: str, id: str) -> Optional[Dict[str, Any]]:
+        """Read data from MongoDB."""
+        key_value = self._normalize_key(id)
+        collection = self._get_collection(entity)
+        try:
+            doc = collection.find_one(
+                {"_id": key_value}, max_time_ms=5000
+            )  # 5 second timeout
+        except PyMongoError:
+            logger.exception("Failed to read entity '%s' with id '%s'", entity, id)
+            raise
+        return self._normalize_doc(entity, doc)
 
     def _list(self, entity: str) -> List[Dict[str, Any]]:
-        with self._conn() as session:
-            return self._db_list(session, entity)
+        return self._db_list(entity)
 
-    def _db_list(self, session: Session, entity: str) -> List[Dict[str, Any]]:
-        """List all entities from database."""
-        converters = {
-            "pipeline_run": self._convert_pipeline_run_db,
-            "task_run": self._convert_task_run_db,
-            "schedule": self._convert_schedule_db,
-            "pipeline_metrics": self._convert_pipeline_metrics_db,
-            "run_result": self._convert_run_result_db,
-            "schedule_dead_letter": self._convert_schedule_dead_letter_db,
-        }
-
-        converter = converters.get(entity)
-        if not converter:
-            return []
-
-        db_class = self._get_db_class(entity)
-        objs = session.query(db_class).all()
-        return [converter(obj) for obj in objs]
-
-    def _get_db_class(self, entity: str):
-        """Get the database class for an entity."""
-        classes = {
-            "pipeline_run": PipelineRunDB,
-            "task_run": TaskRunDB,
-            "schedule": ScheduleDB,
-            "pipeline_metrics": PipelineMetricsDB,
-            "run_result": RunResultDB,
-            "schedule_dead_letter": ScheduleDeadLetterDB,
-        }
-        return classes.get(entity)
-
-    def _convert_pipeline_run_db(self, obj) -> Dict[str, Any]:
-        """Convert PipelineRunDB to dict."""
-        return {
-            "id": obj.id,
-            "pipeline_id": obj.pipeline_id,
-            "state": obj.state,
-            "created_at": obj.created_at.isoformat() if obj.created_at else None,
-            "started_at": obj.started_at.isoformat() if obj.started_at else None,
-            "finished_at": obj.finished_at.isoformat() if obj.finished_at else None,
-            "params": obj.params,
-            "error": obj.error,
-        }
-
-    def _convert_task_run_db(self, obj) -> Dict[str, Any]:
-        """Convert TaskRunDB to dict."""
-        return {
-            "id": obj.id,
-            "pipeline_run_id": obj.pipeline_run_id,
-            "task_id": obj.task_id,
-            "state": obj.state,
-            "try_number": obj.try_number,
-            "started_at": obj.started_at.isoformat() if obj.started_at else None,
-            "finished_at": obj.finished_at.isoformat() if obj.finished_at else None,
-            "log_uri": obj.log_uri,
-            "error": obj.error,
-        }
-
-    def _convert_schedule_db(self, obj) -> Dict[str, Any]:
-        """Convert ScheduleDB to dict."""
-        return {
-            "id": obj.id,
-            "pipeline_id": obj.pipeline_id,
-            "kind": obj.kind,
-            "expression": obj.expression,
-            "enabled": obj.enabled,
-            "max_concurrency": obj.max_concurrency,
-            "retry_policy": obj.retry_policy,
-            "timeout_seconds": obj.timeout_seconds,
-            "next_run_at": obj.next_run_at.isoformat() if obj.next_run_at else None,
-            "created_at": obj.created_at.isoformat() if obj.created_at else None,
-            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
-        }
-
-    def _convert_pipeline_metrics_db(self, obj) -> Dict[str, Any]:
-        """Convert PipelineMetricsDB to dict."""
-        return {
-            "pipeline_id": obj.pipeline_id,
-            "total_runs": obj.total_runs,
-            "successful_runs": obj.successful_runs,
-            "failed_runs": obj.failed_runs,
-            "avg_execution_time_seconds": obj.avg_execution_time_seconds,
-            "last_run_at": obj.last_run_at.isoformat() if obj.last_run_at else None,
-            "last_success_at": obj.last_success_at.isoformat()
-            if obj.last_success_at
-            else None,
-            "last_failure_at": obj.last_failure_at.isoformat()
-            if obj.last_failure_at
-            else None,
-            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
-        }
-
-    def _convert_run_result_db(self, obj) -> Dict[str, Any]:
-        """Convert RunResultDB to dict."""
-        return {
-            "run_id": obj.run_id,
-            "status": obj.status,
-            "result": obj.result,
-            "created_at": obj.created_at.isoformat() if obj.created_at else None,
-        }
-
-    def _convert_schedule_dead_letter_db(self, obj) -> Dict[str, Any]:
-        """Convert ScheduleDeadLetterDB to dict."""
-        return {
-            "id": obj.id,
-            "schedule_id": obj.schedule_id,
-            "pipeline_id": obj.pipeline_id,
-            "error": obj.error,
-            "created_at": obj.created_at.isoformat() if obj.created_at else None,
-        }
-
-    @contextmanager
-    def _conn(self):
-        """Context manager for database session."""
-        session = get_session()
+    def _db_list(self, entity: str) -> List[Dict[str, Any]]:
+        """List all entities from MongoDB."""
+        collection = self._get_collection(entity)
         try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
+            docs = collection.find(
+                max_time_ms=10000
+            )  # 10 second timeout for list operations
+        except PyMongoError:
+            logger.exception("Failed to list entities for '%s'", entity)
             raise
-        finally:
-            session.close()
+        return [self._normalize_doc(entity, doc) for doc in docs if doc is not None]
 
     def ensure_connection(self, timeout: float = 1.0) -> bool:  # pragma: no cover
         _ = timeout
-        return True
+        return ping_database()
+
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Perform comprehensive health check of the store.
+
+        Returns:
+            Dictionary with health status and details
+        """
+        health_status = {
+            "healthy": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checks": {},
+            "issues": [],
+        }
+
+        # Delegate checks to helper methods to reduce complexity
+        self._check_mongodb_connection(health_status)
+        if not self._check_collections(health_status):
+            health_status["healthy"] = False
+        if not self._check_locks(health_status):
+            health_status["healthy"] = False
+        if not self._check_performance(health_status):
+            health_status["healthy"] = False
+
+        return health_status
+
+    def _check_mongodb_connection(self, health_status: Dict[str, Any]) -> None:
+        try:
+            db_healthy = ping_database()
+            health_status["checks"]["mongodb_connection"] = {
+                "status": "healthy" if db_healthy else "unhealthy",
+                "details": "Connected" if db_healthy else "Connection failed",
+            }
+            if not db_healthy:
+                health_status["healthy"] = False
+                health_status["issues"].append("MongoDB connection failed")
+        except Exception as e:
+            health_status["checks"]["mongodb_connection"] = {
+                "status": "unhealthy",
+                "details": f"Connection check failed: {str(e)}",
+            }
+            health_status["healthy"] = False
+            health_status["issues"].append(f"MongoDB connection error: {str(e)}")
+
+    def _check_collections(self, health_status: Dict[str, Any]) -> bool:
+        collections_healthy = True
+        for entity in self._COLLECTION_CONFIG.keys():
+            try:
+                collection = self._get_collection(entity)
+                # Try a simple count operation with timeout
+                count = collection.count_documents({}, maxTimeMS=2000)
+                health_status["checks"][f"collection_{entity}"] = {
+                    "status": "healthy",
+                    "details": f"Accessible, {count} documents",
+                }
+            except Exception as e:
+                collections_healthy = False
+                health_status["checks"][f"collection_{entity}"] = {
+                    "status": "unhealthy",
+                    "details": f"Access failed: {str(e)}",
+                }
+                health_status["issues"].append(
+                    f"Collection {entity} inaccessible: {str(e)}"
+                )
+        return collections_healthy
+
+    def _check_locks(self, health_status: Dict[str, Any]) -> bool:
+        locks_healthy = True
+        for entity, lock in self._locks.items():
+            try:
+                # Try to acquire and release lock quickly
+                acquired = lock.acquire(timeout=0.1)
+                if acquired:
+                    lock.release()
+                health_status["checks"][f"lock_{entity}"] = {
+                    "status": "healthy",
+                    "details": "Lock operational",
+                }
+            except Exception as e:
+                locks_healthy = False
+                health_status["checks"][f"lock_{entity}"] = {
+                    "status": "unhealthy",
+                    "details": f"Lock error: {str(e)}",
+                }
+                health_status["issues"].append(f"Lock {entity} error: {str(e)}")
+        return locks_healthy
+
+    def _check_performance(self, health_status: Dict[str, Any]) -> bool:
+        try:
+            start_time = time.time()
+            # Try to read from a small collection first
+            test_collection = self._get_collection("schedule")
+            test_collection.find_one(max_time_ms=1000)
+            read_time = time.time() - start_time
+            health_status["checks"]["performance"] = {
+                "status": "healthy" if read_time < 0.5 else "degraded",
+                "details": f"Read time: {read_time:.3f}s",
+            }
+            if read_time >= 1.0:
+                health_status["issues"].append(f"Very slow read time: {read_time:.3f}s")
+                return False
+            if read_time >= 0.5:
+                health_status["issues"].append(f"Slow read time: {read_time:.3f}s")
+            return True
+        except Exception as e:
+            health_status["checks"]["performance"] = {
+                "status": "unhealthy",
+                "details": f"Performance check failed: {str(e)}",
+            }
+            health_status["issues"].append(f"Performance check failed: {str(e)}")
+            return False
 
     # ---------- Pipeline runs ----------
     def create_pipeline_run(
@@ -405,7 +457,11 @@ class OrchestratorStore:
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
     ) -> List[PipelineRun]:
-        rows = self._list("pipeline_run")
+        try:
+            rows = self._list("pipeline_run")
+        except PyMongoError:
+            logger.exception("Failed to list pipeline runs")
+            return []
         result: List[PipelineRun] = []
         for r in rows:
             created = self._parse_dt(r.get("created_at"))
@@ -472,7 +528,11 @@ class OrchestratorStore:
     def list_task_runs(
         self, pipeline_run_id: str, state: Optional[RunState] = None
     ) -> List[TaskRun]:
-        rows = self._list("task_run")
+        try:
+            rows = self._list("task_run")
+        except PyMongoError:
+            logger.exception("Failed to list task runs")
+            return []
         out: List[TaskRun] = []
         for r in rows:
             if r.get("pipeline_run_id") != pipeline_run_id:
@@ -515,6 +575,34 @@ class OrchestratorStore:
         next_run_at: Optional[datetime] = None,
         enabled: bool = True,
     ) -> Schedule:
+        # Validate inputs
+        if not pipeline_id or not isinstance(pipeline_id, str):
+            raise ValueError("pipeline_id must be a non-empty string")
+
+        if not isinstance(kind, ScheduleKind):
+            raise ValueError(
+                f"kind must be a ScheduleKind enum value, got {type(kind)}"
+            )
+
+        if not expression or not isinstance(expression, str):
+            raise ValueError("expression must be a non-empty string")
+
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be >= 1")
+
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be > 0 if specified")
+
+        # Validate expression based on kind
+        if kind == ScheduleKind.INTERVAL:
+            self._validate_interval_expression(expression)
+        elif kind == ScheduleKind.CRON and HAS_CRONITER:
+            self._validate_cron_expression(expression)
+
+        # Validate retry policy
+        if retry_policy:
+            self._validate_retry_policy(retry_policy)
+
         sch = Schedule(
             pipeline_id=pipeline_id,
             kind=kind,
@@ -540,6 +628,55 @@ class OrchestratorStore:
         }
         self._write("schedule", sch.id, data)
         return sch
+
+    def _validate_interval_expression(self, expression: str) -> None:
+        """Validate interval schedule expression."""
+        try:
+            seconds = int(expression.strip())
+            if seconds <= 0:
+                raise ValueError(f"Interval must be > 0 seconds, got {seconds}")
+            if seconds < 10:
+                logger.warning(f"Very short interval: {seconds} seconds")
+        except ValueError as e:
+            raise ValueError(f"Invalid interval expression '{expression}': {e}")
+
+    def _validate_cron_expression(self, expression: str) -> None:
+        """Validate cron schedule expression."""
+        if not HAS_CRONITER:
+            logger.warning(
+                f"Cannot validate cron expression '{expression}': croniter not available"
+            )
+            return
+
+        try:
+            # Try to create a croniter to validate the expression
+            croniter(expression)
+        except Exception as e:
+            raise ValueError(f"Invalid cron expression '{expression}': {e}")
+
+    def _validate_retry_policy(self, retry_policy: Dict[str, Any]) -> None:
+        """Validate retry policy structure."""
+        if not isinstance(retry_policy, dict):
+            raise ValueError("retry_policy must be a dictionary")
+
+        retries = retry_policy.get("retries", 0)
+        delay = retry_policy.get("delay", 0)
+
+        if not isinstance(retries, int) or retries < 0:
+            raise ValueError(
+                f"retry_policy.retries must be a non-negative integer, got {retries}"
+            )
+
+        if not isinstance(delay, (int, float)) or delay < 0:
+            raise ValueError(
+                f"retry_policy.delay must be a non-negative number, got {delay}"
+            )
+
+        if retries > 10:
+            logger.warning(f"High retry count: {retries}")
+
+        if delay > 3600:  # 1 hour
+            logger.warning(f"Very long retry delay: {delay} seconds")
 
     def _schedule_matches_filters(
         self,
@@ -567,44 +704,54 @@ class OrchestratorStore:
         except Exception:
             return {"retries": 0, "delay": 0}
 
+    def _schedule_from_row(self, row: Dict[str, Any]) -> Schedule:
+        retry_policy = self._parse_retry_policy_value(row)
+        return Schedule(
+            id=row.get("id", ""),
+            pipeline_id=row.get("pipeline_id", ""),
+            kind=ScheduleKind(row.get("kind", ScheduleKind.INTERVAL.value)),
+            expression=row.get("expression", "60"),
+            enabled=bool(row.get("enabled", True)),
+            max_concurrency=int(row.get("max_concurrency", 1)),
+            retry_policy=retry_policy or {"retries": 0, "delay": 0},
+            timeout_seconds=row.get("timeout_seconds"),
+            next_run_at=self._parse_dt(row.get("next_run_at")),
+            created_at=self._parse_dt(row.get("created_at"))
+            or datetime.now(timezone.utc),
+            updated_at=self._parse_dt(row.get("updated_at"))
+            or datetime.now(timezone.utc),
+        )
+
     def list_schedules(
         self,
         pipeline_id: Optional[str] = None,
         enabled_only: bool = False,
         kind: Optional[ScheduleKind] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> List[Schedule]:
+        _ = (limit, offset)
         rows = self._list("schedule")
         out: List[Schedule] = []
 
         for r in rows:
             if not self._schedule_matches_filters(r, pipeline_id, enabled_only, kind):
                 continue
-
-            retry_policy = self._parse_retry_policy_value(r)
-
-            out.append(
-                Schedule(
-                    id=r.get("id", ""),
-                    pipeline_id=r.get("pipeline_id", ""),
-                    kind=ScheduleKind(r.get("kind", ScheduleKind.INTERVAL.value)),
-                    expression=r.get("expression", "60"),
-                    enabled=bool(r.get("enabled", True)),
-                    max_concurrency=int(r.get("max_concurrency", 1)),
-                    retry_policy=retry_policy or {"retries": 0, "delay": 0},
-                    timeout_seconds=r.get("timeout_seconds"),
-                    next_run_at=self._parse_dt(r.get("next_run_at")),
-                    created_at=self._parse_dt(r.get("created_at"))
-                    or datetime.now(timezone.utc),
-                    updated_at=self._parse_dt(r.get("updated_at"))
-                    or datetime.now(timezone.utc),
-                )
-            )
+            out.append(self._schedule_from_row(r))
 
         out.sort(
             key=lambda s: s.created_at or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
+        # Los argumentos limit/offset se aceptan por compatibilidad, pero la lista
+        # completa se devuelve para que las capas superiores manejen la paginación.
         return out
+
+    def get_schedule(self, schedule_id: str) -> Optional[Schedule]:
+        row = self._read("schedule", schedule_id)
+        if not row:
+            return None
+        return self._schedule_from_row(row)
 
     def update_schedule(self, schedule_id: str, **fields) -> None:
         if not fields:
@@ -635,6 +782,21 @@ class OrchestratorStore:
             row[k] = v
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._write("schedule", schedule_id, row)
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        key = self._normalize_key(schedule_id)
+        collection = self._get_collection("schedule")
+        lock = self._locks.get("schedule")
+        try:
+            if lock:
+                with lock:
+                    result = collection.delete_one({"_id": key}, max_time_ms=5000)
+            else:
+                result = collection.delete_one({"_id": key}, max_time_ms=5000)
+            return bool(result.deleted_count)
+        except PyMongoError:
+            logger.exception("Failed to delete schedule '%s'", schedule_id)
+            raise
 
     def claim_schedule_next_run(
         self,
@@ -702,7 +864,11 @@ class OrchestratorStore:
         self, timeout_minutes: int = 60, max_runs: int = 100
     ) -> List[PipelineRun]:
         cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
-        rows = self._list("pipeline_run")
+        try:
+            rows = self._list("pipeline_run")
+        except PyMongoError:
+            logger.exception("Failed to list pipeline runs for stuck detection")
+            return []
         stuck: List[PipelineRun] = []
         for r in rows:
             if r.get("state") != RunState.RUNNING.value:
@@ -722,35 +888,56 @@ class OrchestratorStore:
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_days)
         result = {"task_runs": 0, "pipeline_runs": 0, "schedule_dead_letter": 0}
 
-        with self._conn() as session:
-            # Delete old task runs
-            result["task_runs"] = (
-                session.query(TaskRunDB).filter(TaskRunDB.finished_at < cutoff).delete()
-            )
+        cutoff_iso = cutoff.isoformat()
 
-            # Delete old pipeline runs
-            result["pipeline_runs"] = (
-                session.query(PipelineRunDB)
-                .filter(PipelineRunDB.finished_at < cutoff)
-                .delete()
-            )
+        def _older_than_filter(field: str) -> Dict[str, Any]:
+            return {
+                "$or": [
+                    {field: {"$type": "string", "$lt": cutoff_iso}},
+                    {field: {"$type": "date", "$lt": cutoff}},
+                ]
+            }
 
-            # Delete old dead letter entries
-            result["schedule_dead_letter"] = (
-                session.query(ScheduleDeadLetterDB)
-                .filter(ScheduleDeadLetterDB.created_at < cutoff)
-                .delete()
+        try:
+            task_delete = self._get_collection("task_run").delete_many(
+                _older_than_filter("finished_at"),
+                max_time_ms=30000,  # 30 second timeout for cleanup
             )
+            result["task_runs"] = task_delete.deleted_count
+        except PyMongoError:
+            logger.exception("Failed to cleanup task runs older than %s", cutoff_iso)
+            result["task_runs"] = -1  # Indicate error
+
+        try:
+            pipeline_delete = self._get_collection("pipeline_run").delete_many(
+                _older_than_filter("finished_at"), max_time_ms=30000
+            )
+            result["pipeline_runs"] = pipeline_delete.deleted_count
+        except PyMongoError:
+            logger.exception(
+                "Failed to cleanup pipeline runs older than %s", cutoff_iso
+            )
+            result["pipeline_runs"] = -1  # Indicate error
+
+        try:
+            dlq_delete = self._get_collection("schedule_dead_letter").delete_many(
+                _older_than_filter("created_at"), max_time_ms=30000
+            )
+            result["schedule_dead_letter"] = dlq_delete.deleted_count
+        except PyMongoError:
+            logger.exception(
+                "Failed to cleanup schedule dead letter entries older than %s",
+                cutoff_iso,
+            )
+            result["schedule_dead_letter"] = -1  # Indicate error
 
         return result
 
     def vacuum(self) -> None:
-        # For PostgreSQL, vacuum is handled automatically, but we can log
-        logger.debug("Vacuum operation not needed for PostgreSQL")
+        logger.debug("Vacuum operation not required for MongoDB")
 
     def close(self) -> None:
-        # Close any open connections if needed
-        pass
+        close_client()
 
     def create_snapshot(self, snapshot_path: Optional[Path] = None) -> Path:
         """Create snapshot of database data."""
@@ -758,55 +945,80 @@ class OrchestratorStore:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             snapshot_path = Path.cwd() / f"snapshot_{timestamp}.json.gz"
 
-        snapshot_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "scope": self._scope,
-            "data": {
-                "pipeline_runs": self._list("pipeline_run"),
-                "task_runs": self._list("task_run"),
-                "schedules": self._list("schedule"),
-                "pipeline_metrics": self._list("pipeline_metrics"),
-                "schedule_dead_letter": self._list("schedule_dead_letter"),
-                "run_results": self._list("run_result"),
-            },
-        }
+        try:
+            snapshot_data = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": self._scope,
+                "data": {
+                    "pipeline_runs": self._list("pipeline_run"),
+                    "task_runs": self._list("task_run"),
+                    "schedules": self._list("schedule"),
+                    "pipeline_metrics": self._list("pipeline_metrics"),
+                    "schedule_dead_letter": self._list("schedule_dead_letter"),
+                    "run_results": self._list("run_result"),
+                },
+            }
 
-        with gzip.open(snapshot_path, "wt", encoding="utf-8") as f:
-            json.dump(snapshot_data, f, default=str, ensure_ascii=False)
+            with gzip.open(snapshot_path, "wt", encoding="utf-8") as f:
+                json.dump(snapshot_data, f, default=str, ensure_ascii=False)
 
-        logger.info(f"Snapshot created at {snapshot_path}")
-        return snapshot_path
+            logger.info(f"Snapshot created at {snapshot_path}")
+            return snapshot_path
+        except (OSError, IOError) as e:
+            logger.exception(f"Failed to create snapshot at {snapshot_path}: {e}")
+            raise
+        except PyMongoError as e:
+            logger.exception(f"Failed to read data for snapshot: {e}")
+            raise
 
     def load_snapshot(self, snapshot_path: Path) -> None:
         """Load snapshot into database."""
-        with gzip.open(snapshot_path, "rt", encoding="utf-8") as f:
-            snapshot_data = json.load(f)
+        if not snapshot_path.exists():
+            raise FileNotFoundError(f"Snapshot file not found: {snapshot_path}")
 
-        data = snapshot_data["data"]
-        with self._conn() as session:
-            # Clear existing data
-            session.query(RunResultDB).delete()
-            session.query(ScheduleDeadLetterDB).delete()
-            session.query(PipelineMetricsDB).delete()
-            session.query(ScheduleDB).delete()
-            session.query(TaskRunDB).delete()
-            session.query(PipelineRunDB).delete()
+        try:
+            with gzip.open(snapshot_path, "rt", encoding="utf-8") as f:
+                snapshot_data = json.load(f)
+        except (OSError, IOError, json.JSONDecodeError) as e:
+            logger.exception(f"Failed to read snapshot file {snapshot_path}: {e}")
+            raise
 
-            # Load new data
-            for pr_data in data["pipeline_runs"]:
-                self._db_write(session, "pipeline_run", pr_data["id"], pr_data)
-            for tr_data in data["task_runs"]:
-                self._db_write(session, "task_run", tr_data["id"], tr_data)
-            for s_data in data["schedules"]:
-                self._db_write(session, "schedule", s_data["id"], s_data)
-            for pm_data in data["pipeline_metrics"]:
-                self._db_write(
-                    session, "pipeline_metrics", pm_data["pipeline_id"], pm_data
-                )
-            for dl_data in data["schedule_dead_letter"]:
-                self._db_write(session, "schedule_dead_letter", dl_data["id"], dl_data)
-            for rr_data in data["run_results"]:
-                self._db_write(session, "run_result", rr_data["run_id"], rr_data)
+        data = snapshot_data.get("data", {})
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid snapshot data format in {snapshot_path}")
+
+        # Clear existing data in all tracked collections
+        for entity in (
+            "run_result",
+            "schedule_dead_letter",
+            "pipeline_metrics",
+            "schedule",
+            "task_run",
+            "pipeline_run",
+        ):
+            try:
+                self._get_collection(entity).delete_many({})
+            except PyMongoError:
+                logger.exception("Failed to purge collection for entity '%s'", entity)
+                raise
+
+        # Load new data
+        try:
+            for pr_data in data.get("pipeline_runs", []):
+                self._db_write("pipeline_run", pr_data["id"], pr_data)
+            for tr_data in data.get("task_runs", []):
+                self._db_write("task_run", tr_data["id"], tr_data)
+            for s_data in data.get("schedules", []):
+                self._db_write("schedule", s_data["id"], s_data)
+            for pm_data in data.get("pipeline_metrics", []):
+                self._db_write("pipeline_metrics", pm_data["pipeline_id"], pm_data)
+            for dl_data in data.get("schedule_dead_letter", []):
+                self._db_write("schedule_dead_letter", dl_data["id"], dl_data)
+            for rr_data in data.get("run_results", []):
+                self._db_write("run_result", rr_data["run_id"], rr_data)
+        except (KeyError, TypeError) as e:
+            logger.exception(f"Invalid data format in snapshot {snapshot_path}: {e}")
+            raise
 
         logger.info(f"Snapshot loaded from {snapshot_path}")
 

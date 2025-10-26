@@ -2,41 +2,93 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session, Session
+from pymongo import MongoClient  # type: ignore
+from pymongo.collection import Collection  # type: ignore
+from pymongo.database import Database  # type: ignore
 
-# Default DB URL (local file) but allow override via env var
-DATABASE_URL = os.environ.get("ORCHESTRATOR_DATABASE_URL", "sqlite:///orchest.db")
+try:  # Optional fallback for tests when MongoDB is not available
+    import mongomock  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    mongomock = None  # type: ignore
 
-# SQLite requires a special connect arg to allow cross-thread use
-connect_args = {}
-if DATABASE_URL.startswith("sqlite:"):
-    connect_args = {"check_same_thread": False}
 
-# Create the engine and a scoped session factory
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
-_SessionFactory = scoped_session(
-    sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+DEFAULT_DATABASE_URL = "mongomock://localhost/tauro_orchest"
+DATABASE_URL = os.environ.get("ORCHESTRATOR_DATABASE_URL", DEFAULT_DATABASE_URL)
+
+parsed = urlparse(DATABASE_URL)
+
+_DEFAULT_DB_FROM_URI: Optional[str] = None
+if parsed.path and parsed.path not in {"", "/"}:
+    _DEFAULT_DB_FROM_URI = parsed.path.lstrip("/")
+
+DATABASE_NAME = os.environ.get(
+    "ORCHESTRATOR_DATABASE_NAME", _DEFAULT_DB_FROM_URI or "tauro_orchest"
 )
 
-
-def get_session() -> Session:
-    """Return a new SQLAlchemy Session from the scoped factory.
-
-    The caller is responsible for closing the session (the usual pattern
-    is using a contextmanager in higher-level code).
-    """
-    return _SessionFactory()
+_client: Optional[MongoClient] = None
 
 
-def close_session(session: Optional[Session]) -> None:
+def _should_use_mongomock(url: str) -> bool:
+    return url.startswith("mongomock://")
+
+
+def _create_client() -> MongoClient:
+    if _should_use_mongomock(DATABASE_URL):
+        if mongomock is None:
+            raise RuntimeError(
+                "mongomock is required to use the 'mongomock://' URL scheme but is not installed."
+            )
+        return mongomock.MongoClient(tz_aware=True)  # type: ignore[return-value]
+
+    return MongoClient(
+        DATABASE_URL,
+        tz_aware=True,
+        serverSelectionTimeoutMS=int(
+            os.environ.get("ORCHESTRATOR_MONGO_TIMEOUT_MS", "5000")
+        ),
+    )
+
+
+def get_client() -> MongoClient:
+    global _client
+    if _client is None:
+        _client = _create_client()
+    return _client
+
+
+def get_database() -> Database:
+    return get_client()[DATABASE_NAME]
+
+
+def get_collection(name: str) -> Collection:
+    return get_database()[name]
+
+
+def close_client() -> None:
+    global _client
+    if _client is not None:
+        try:
+            _client.close()
+        finally:
+            _client = None
+
+
+def ping_database() -> bool:
     try:
-        if session is not None:
-            session.close()
+        get_client().admin.command("ping")
+        return True
     except Exception:
-        # Best-effort close; don't propagate
-        pass
+        return False
 
 
-__all__ = ["engine", "get_session", "close_session", "DATABASE_URL"]
+__all__ = [
+    "DATABASE_URL",
+    "DATABASE_NAME",
+    "get_client",
+    "get_database",
+    "get_collection",
+    "close_client",
+    "ping_database",
+]

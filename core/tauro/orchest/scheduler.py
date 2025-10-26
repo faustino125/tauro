@@ -6,12 +6,13 @@ import signal
 import threading
 import time
 import logging
+import warnings
 
 from loguru import logger  # type: ignore
 
 from tauro.orchest.models import ScheduleKind, Schedule, RunState
 from tauro.orchest.store import OrchestratorStore
-from tauro.orchest.runner import OrchestratorRunner
+from tauro.orchest.services.run_service import RunService
 from tauro.orchest.resilience import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -19,6 +20,14 @@ from tauro.orchest.resilience import (
     get_resilience_manager,
 )
 from tauro.config.contexts import Context
+
+# Deprecation warning
+warnings.warn(
+    "SchedulerService is deprecated and will be removed in v3.0. "
+    "Please use tauro.orchest.services.ScheduleService instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 try:
     from croniter import croniter  # type: ignore
@@ -89,7 +98,7 @@ class SchedulerService:
     ):
         self.context = context
         self.store = store or OrchestratorStore()
-        self.runner = OrchestratorRunner(context, self.store)
+        self.runner = RunService(context, self.store)
         self._stop = Event()
         self._thread: Optional[Thread] = None
         self._monitor_thread: Optional[Thread] = None

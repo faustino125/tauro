@@ -25,10 +25,6 @@ from tauro.cli.core import (
 )
 from tauro.cli.execution import ContextInitializer, PipelineExecutor
 from tauro.cli.template import handle_template_command
-from tauro.orchest.store import OrchestratorStore
-from tauro.orchest.runner import OrchestratorRunner
-from tauro.orchest.scheduler import SchedulerService
-from tauro.orchest.models import ScheduleKind, RunState
 
 
 # Constants for help text to avoid duplication
@@ -40,260 +36,6 @@ HELP_PIPELINE_NAME = "Pipeline name"
 HELP_PIPELINE_NAME_TO_EXECUTE = "Pipeline name to execute"
 HELP_TIMEOUT_SECONDS = "Timeout in seconds"
 HELP_CONFIG_FILE = "Path to configuration file"
-
-
-# Orchestration CLI constants and functions
-RUN_ID_REQUIRED = "--run-id is required"
-
-# Detect if croniter is available for cron expression validation
-try:
-    from croniter import croniter  # type: ignore
-
-    HAS_CRONITER = True
-except ImportError:
-    HAS_CRONITER = False
-
-
-def _init_context_and_store(args: argparse.Namespace):
-    """Initialize context and store for orchestrate commands."""
-    cm = ConfigManager(
-        base_path=Path(args.base_path) if args.base_path else None,
-        layer_name=getattr(args, "layer_name", None),
-        use_case=getattr(args, "use_case", None),
-        config_type=getattr(args, "config_type", None),
-        interactive=getattr(args, "interactive", False),
-    )
-    cm.change_to_config_directory()
-    ctx = ContextInitializer(cm).initialize(args.env)
-    store = OrchestratorStore()
-    return cm, ctx, store
-
-
-def _handle_run_create(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle run-create command."""
-    if not args.pipeline:
-        ap.error("--pipeline is required")
-    runner = OrchestratorRunner(ctx, store)
-    pr = runner.create_run(args.pipeline, params={})
-    logger.info(f"Run created: {pr.id} (pipeline={pr.pipeline_id})")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_run_start(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle run-start command."""
-    if not args.run_id:
-        ap.error(RUN_ID_REQUIRED)
-    runner = OrchestratorRunner(ctx, store)
-    try:
-        state = runner.start_run(
-            args.run_id,
-            retries=args.retries,
-            retry_delay_sec=args.retry_delay_sec,
-            concurrency=args.max_concurrency,
-            timeout_seconds=args.timeout_seconds,
-        )
-    except Exception as e:
-        logger.exception(f"Error starting run {args.run_id}: {e}")
-        return ExitCode.EXECUTION_ERROR.value
-
-    logger.info(f"Run {args.run_id} finished with state: {state}")
-    if state == RunState.SUCCESS:
-        return ExitCode.SUCCESS.value
-    return ExitCode.EXECUTION_ERROR.value
-
-
-def _handle_run_status(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle run-status command."""
-    if not args.run_id:
-        ap.error(RUN_ID_REQUIRED)
-    runner = OrchestratorRunner(ctx, store)
-    pr = runner.get_run(args.run_id)
-    if not pr:
-        logger.error("Run not found")
-        return ExitCode.CONFIGURATION_ERROR.value
-    logger.info(
-        f"Run: {pr.id} state={pr.state} created_at={pr.created_at} "
-        f"started_at={pr.started_at} finished_at={pr.finished_at} error={pr.error}"
-    )
-    tasks = runner.list_task_runs(pr.id)
-    if tasks:
-        logger.info("Tasks:")
-        for t in tasks:
-            logger.info(f" - {t.task_id}: {t.state} tries={t.try_number} err={t.error}")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_run_list(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle run-list command."""
-    runner = OrchestratorRunner(ctx, store)
-    runs = runner.list_runs(pipeline_id=args.pipeline)
-    if not runs:
-        logger.info("No runs")
-        return ExitCode.SUCCESS.value
-    for r in runs:
-        logger.info(
-            f"- {r.id} {r.pipeline_id} {r.state} created_at={r.created_at} "
-            f"finished_at={r.finished_at} error={r.error}"
-        )
-    return ExitCode.SUCCESS.value
-
-
-def _handle_run_tasks(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle run-tasks command."""
-    if not args.run_id:
-        ap.error(RUN_ID_REQUIRED)
-    runner = OrchestratorRunner(ctx, store)
-    tasks = runner.list_task_runs(args.run_id)
-    if not tasks:
-        logger.info("No task runs")
-        return ExitCode.SUCCESS.value
-    for t in tasks:
-        logger.info(
-            f"- {t.task_id} {t.state} tries={t.try_number} started={t.started_at} "
-            f"finished={t.finished_at} error={t.error}"
-        )
-    return ExitCode.SUCCESS.value
-
-
-def _handle_run_cancel(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle run-cancel command."""
-    if not args.run_id:
-        ap.error(RUN_ID_REQUIRED)
-    runner = OrchestratorRunner(ctx, store)
-    success = runner.cancel_run(args.run_id)
-    if not success:
-        return ExitCode.EXECUTION_ERROR.value
-    return ExitCode.SUCCESS.value
-
-
-def _handle_schedule_add(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle schedule-add command."""
-    if not args.pipeline:
-        ap.error("--pipeline is required")
-
-    # Validar expresión cron si es necesario
-    if args.schedule_kind == "CRON" and HAS_CRONITER:
-        try:
-            croniter(args.expression)
-        except Exception as e:
-            logger.error(f"Invalid cron expression: {e}")
-            return ExitCode.CONFIGURATION_ERROR.value
-
-    sched = store.create_schedule(
-        pipeline_id=args.pipeline,
-        kind=ScheduleKind(args.schedule_kind),
-        expression=args.expression,
-        max_concurrency=args.max_concurrency,
-        retry_policy={"retries": args.retries, "delay": args.retry_delay_sec},
-        timeout_seconds=args.timeout_seconds,
-    )
-    logger.info(f"Schedule created: {sched.id} ({sched.kind} '{sched.expression}')")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_schedule_list(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle schedule-list command."""
-    scheds = store.list_schedules(pipeline_id=args.pipeline)
-    if not scheds:
-        logger.info("No schedules")
-        return ExitCode.SUCCESS.value
-    for s in scheds:
-        logger.info(
-            f"- {s.id} pipeline={s.pipeline_id} {s.kind} expr='{s.expression}' "
-            f"enabled={s.enabled} next={s.next_run_at} max_conc={s.max_concurrency}"
-        )
-    return ExitCode.SUCCESS.value
-
-
-def _handle_schedule_start(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle schedule-start command."""
-    service = SchedulerService(ctx, store)
-    service.start()
-    logger.info("Press Ctrl+C to stop scheduler...")
-    try:
-        while True:
-            import time as _t
-
-            _t.sleep(10)
-            metrics = service.get_metrics()
-            logger.info(
-                f"Scheduler metrics: cycles={metrics['cycles']}, "
-                f"runs_created={metrics['runs_created']}, "
-                f"errors={metrics['errors']}, "
-                f"avg_cycle_time={metrics['avg_cycle_time']:.3f}s"
-            )
-    except KeyboardInterrupt:
-        service.stop()
-    return ExitCode.SUCCESS.value
-
-
-def _handle_schedule_stop(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle schedule-stop command."""
-    logger.info("Use Ctrl+C to stop a foreground scheduler instance")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_backfill(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle backfill command."""
-    if not args.pipeline or not args.count:
-        ap.error("--pipeline and --count are required")
-    service = SchedulerService(ctx, store)
-    service.backfill(args.pipeline, args.count)
-    logger.info(f"Backfill enqueued: {args.count} runs")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_db_stats(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle db-stats command."""
-    stats = store.get_database_stats()
-    logger.info("Database statistics:")
-    logger.info(f"Pipeline runs by state: {stats['pipeline_runs_by_state']}")
-    logger.info(f"Task runs by state: {stats['task_runs_by_state']}")
-    logger.info(f"Schedules by status: {stats['schedules_by_status']}")
-    logger.info(f"Database size: {stats['database_size_bytes'] / (1024*1024):.2f} MB")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_db_cleanup(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle db-cleanup command."""
-    result = store.cleanup_old_data(max_days=args.days, batch_size=1000)
-    logger.info(f"Cleanup completed: {result}")
-    return ExitCode.SUCCESS.value
-
-
-def _handle_db_vacuum(
-    args: argparse.Namespace, ap: argparse.ArgumentParser, ctx, store
-) -> int:
-    """Handle db-vacuum command."""
-    store.vacuum()
-    logger.info("Database vacuum completed")
-    return ExitCode.SUCCESS.value
 
 
 # Streaming CLI functions
@@ -692,10 +434,6 @@ class UnifiedArgumentParser:
             # Direct pipeline execution
             tauro run --env dev --pipeline data_processing
 
-            # Orchestration management
-            tauro orchestrate run-create --pipeline mi_pipeline
-            tauro orchestrate schedule-add --pipeline mi_pipeline --expression "3600"
-
             # Streaming pipelines
             tauro stream run --config config/streaming.py --pipeline real_time_processing
             tauro stream status --config config/streaming.py
@@ -705,6 +443,10 @@ class UnifiedArgumentParser:
 
             # Configuration management
             tauro config list-pipelines --env dev
+
+            Note: Orchestration management (schedules, runs) is now exclusively available
+            through the API REST interface. Use the API endpoints to manage pipeline
+            orchestration, scheduling, and run management.
             """,
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
@@ -719,7 +461,6 @@ class UnifiedArgumentParser:
 
         # Add subcommands
         UnifiedArgumentParser._add_run_subcommand(subparsers)
-        UnifiedArgumentParser._add_orchestrate_subcommand(subparsers)
         UnifiedArgumentParser._add_stream_subcommand(subparsers)
         UnifiedArgumentParser._add_template_subcommand(subparsers)
         UnifiedArgumentParser._add_config_subcommand(subparsers)
@@ -786,165 +527,6 @@ class UnifiedArgumentParser:
             action="store_true",
             help="Log actions without executing the pipeline",
         )
-
-    @staticmethod
-    def _add_orchestrate_subcommand(subparsers):
-        """Add orchestrate subcommand for orchestration management."""
-        orchestrate_parser = subparsers.add_parser(
-            "orchestrate",
-            help="Manage pipeline orchestration",
-            description="Manage scheduled pipeline runs and orchestration",
-        )
-
-        # Create orchestrate sub-subcommands
-        orchestrate_subparsers = orchestrate_parser.add_subparsers(
-            dest="orchestrate_command", help="Orchestration commands", required=True
-        )
-
-        # Run management commands
-        UnifiedArgumentParser._add_orchestrate_run_commands(orchestrate_subparsers)
-
-        # Schedule management commands
-        UnifiedArgumentParser._add_orchestrate_schedule_commands(orchestrate_subparsers)
-
-        # Database management commands
-        UnifiedArgumentParser._add_orchestrate_db_commands(orchestrate_subparsers)
-
-        # Global orchestrate options
-        orchestrate_parser.add_argument(
-            "--env",
-            required=True,
-            help="Execution environment (base, dev, sandbox, prod, or sandbox_<developer>)",
-        )
-        orchestrate_parser.add_argument("--base-path", help=HELP_BASE_PATH)
-        orchestrate_parser.add_argument("--layer-name", help=HELP_LAYER_NAME)
-        orchestrate_parser.add_argument(
-            "--use-case", dest="use_case_name", help=HELP_USE_CASE
-        )
-        orchestrate_parser.add_argument(
-            "--config-type",
-            choices=["yaml", "json", "dsl"],
-            help=HELP_CONFIG_TYPE,
-        )
-
-    @staticmethod
-    def _add_orchestrate_run_commands(subparsers):
-        """Add run management commands."""
-        # run-create
-        create_parser = subparsers.add_parser(
-            "run-create", help="Create a new pipeline run"
-        )
-        create_parser.add_argument("--pipeline", required=True, help=HELP_PIPELINE_NAME)
-
-        # run-start
-        start_parser = subparsers.add_parser("run-start", help="Start a pipeline run")
-        start_parser.add_argument("--run-id", required=True, help="Run ID to start")
-        start_parser.add_argument(
-            "--retries", type=int, default=0, help="Number of retries"
-        )
-        start_parser.add_argument(
-            "--retry-delay-sec", type=int, default=0, help="Retry delay in seconds"
-        )
-        start_parser.add_argument(
-            "--max-concurrency", type=int, default=1, help="Maximum concurrency"
-        )
-        start_parser.add_argument(
-            "--timeout-seconds", type=int, help=HELP_TIMEOUT_SECONDS
-        )
-
-        # run-status
-        status_parser = subparsers.add_parser("run-status", help="Get run status")
-        status_parser.add_argument("--run-id", required=True, help="Run ID to check")
-
-        # run-list
-        list_parser = subparsers.add_parser("run-list", help="List pipeline runs")
-        list_parser.add_argument("--pipeline", help=HELP_PIPELINE_NAME)
-        list_parser.add_argument("--state", help="Filter by run state")
-        list_parser.add_argument(
-            "--limit", type=int, default=50, help="Maximum number of results"
-        )
-
-        # run-tasks
-        tasks_parser = subparsers.add_parser("run-tasks", help="List tasks for a run")
-        tasks_parser.add_argument("--run-id", required=True, help="Run ID")
-
-        # run-cancel
-        cancel_parser = subparsers.add_parser(
-            "run-cancel", help="Cancel a running pipeline"
-        )
-        cancel_parser.add_argument("--run-id", required=True, help="Run ID to cancel")
-
-    @staticmethod
-    def _add_orchestrate_schedule_commands(subparsers):
-        """Add schedule management commands."""
-        # schedule-add
-        add_parser = subparsers.add_parser("schedule-add", help="Add a new schedule")
-        add_parser.add_argument("--pipeline", required=True, help=HELP_PIPELINE_NAME)
-        add_parser.add_argument(
-            "--schedule-kind",
-            choices=["INTERVAL", "CRON"],
-            default="INTERVAL",
-            help="Schedule type",
-        )
-        add_parser.add_argument(
-            "--expression", required=True, help="Interval seconds or cron expression"
-        )
-        add_parser.add_argument(
-            "--max-concurrency", type=int, default=1, help="Maximum concurrency"
-        )
-        add_parser.add_argument(
-            "--retries", type=int, default=0, help="Number of retries"
-        )
-        add_parser.add_argument(
-            "--retry-delay-sec", type=int, default=0, help="Retry delay"
-        )
-        add_parser.add_argument(
-            "--timeout-seconds", type=int, help=HELP_TIMEOUT_SECONDS
-        )
-
-        # schedule-list
-        list_sched_parser = subparsers.add_parser(
-            "schedule-list", help="List schedules"
-        )
-        list_sched_parser.add_argument("--pipeline", help=HELP_PIPELINE_NAME)
-
-        # schedule-start
-        start_sched_parser = subparsers.add_parser(
-            "schedule-start", help="Start scheduler"
-        )
-        start_sched_parser.add_argument(
-            "--poll-interval",
-            type=float,
-            default=1.0,
-            help="Scheduler poll interval in seconds",
-        )
-
-        # schedule-stop
-        subparsers.add_parser("schedule-stop", help="Stop scheduler")
-
-        # backfill
-        backfill_parser = subparsers.add_parser(
-            "backfill", help="Backfill historical runs"
-        )
-        backfill_parser.add_argument(
-            "--pipeline", required=True, help=HELP_PIPELINE_NAME
-        )
-        backfill_parser.add_argument(
-            "--count", type=int, required=True, help="Number of runs to create"
-        )
-
-    @staticmethod
-    def _add_orchestrate_db_commands(subparsers):
-        """Add database management commands."""
-        # db-stats
-        subparsers.add_parser("db-stats", help="Show database statistics")
-
-        # db-cleanup
-        cleanup_parser = subparsers.add_parser("db-cleanup", help="Clean up old data")
-        cleanup_parser.add_argument("--days", type=int, default=30, help="Days to keep")
-
-        # db-vacuum
-        subparsers.add_parser("db-vacuum", help="Optimize database")
 
     @staticmethod
     def _add_stream_subcommand(subparsers):
@@ -1230,8 +812,6 @@ class UnifiedCLI:
 
         if subcommand == "run":
             return self._handle_run_command(parsed_args)
-        elif subcommand == "orchestrate":
-            return self._handle_orchestrate_command(parsed_args)
         elif subcommand == "stream":
             return self._handle_stream_command(parsed_args)
         elif subcommand == "template":
@@ -1274,40 +854,6 @@ class UnifiedCLI:
         if self.config.validate_only:
             return self._handle_validate_only(context_init)
         return self._execute_pipeline(context_init)
-
-    def _handle_orchestrate_command(self, parsed_args: argparse.Namespace) -> int:
-        """Handle orchestration management commands."""
-        orchestrate_cmd = parsed_args.orchestrate_command
-
-        # Initialize config manager for orchestrate commands
-        self._init_orchestrate_config_manager(parsed_args)
-
-        # Dispatch to appropriate handler
-        handlers = {
-            "run-create": _handle_run_create,
-            "run-start": _handle_run_start,
-            "run-status": _handle_run_status,
-            "run-list": _handle_run_list,
-            "run-tasks": _handle_run_tasks,
-            "run-cancel": _handle_run_cancel,
-            "schedule-add": _handle_schedule_add,
-            "schedule-list": _handle_schedule_list,
-            "schedule-start": _handle_schedule_start,
-            "schedule-stop": _handle_schedule_stop,
-            "backfill": _handle_backfill,
-            "db-stats": _handle_db_stats,
-            "db-cleanup": _handle_db_cleanup,
-            "db-vacuum": _handle_db_vacuum,
-        }
-
-        handler = handlers.get(orchestrate_cmd)
-        if not handler:
-            logger.error(f"Unknown orchestrate command: {orchestrate_cmd}")
-            return ExitCode.GENERAL_ERROR.value
-
-        # Create a mock parser for compatibility
-        parser = argparse.ArgumentParser()
-        return handler(parsed_args, parser, self.context, self.store)
 
     def _handle_stream_command(self, parsed_args: argparse.Namespace) -> int:
         """Handle streaming pipeline commands."""
@@ -1379,26 +925,6 @@ class UnifiedCLI:
                 interactive=self.config.interactive,
             )
             self.config_manager.change_to_config_directory()
-
-    def _init_orchestrate_config_manager(self, parsed_args: argparse.Namespace):
-        """Initialize config manager for orchestrate commands."""
-        if not hasattr(self, "context") or not hasattr(self, "store"):
-            self.config_manager = ConfigManager(
-                base_path=getattr(parsed_args, "base_path", None),
-                layer_name=getattr(parsed_args, "layer_name", None),
-                use_case=getattr(parsed_args, "use_case_name", None),
-                config_type=getattr(parsed_args, "config_type", None),
-                interactive=False,
-            )
-            self.config_manager.change_to_config_directory()
-
-            # Initialize context and store for orchestrate
-            context_init = ContextInitializer(self.config_manager)
-            self.context = context_init.initialize(parsed_args.env)
-
-            from tauro.orchest import OrchestratorStore
-
-            self.store = OrchestratorStore()
 
     def _init_config_manager_for_config(self, parsed_args: argparse.Namespace):
         """Initialize config manager for config commands."""

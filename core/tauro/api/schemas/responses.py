@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -60,12 +60,30 @@ class PipelineRunResponse(BaseModel):
     error: Optional[str] = None
     tags: Optional[Dict[str, str]] = None
 
+    @validator("started_at", pre=True, always=False)
+    def validate_started_at(cls, v, values):
+        """Validate that started_at >= created_at"""
+        if v is not None and "created_at" in values and v < values["created_at"]:
+            raise ValueError("started_at cannot be before created_at")
+        return v
+
+    @validator("finished_at", pre=True, always=False)
+    def validate_finished_at(cls, v, values):
+        """Validate that finished_at >= started_at and >= created_at"""
+        if v is not None:
+            if "created_at" in values and v < values["created_at"]:
+                raise ValueError("finished_at cannot be before created_at")
+            if "started_at" in values and values["started_at"] is not None:
+                if v < values["started_at"]:
+                    raise ValueError("finished_at cannot be before started_at")
+        return v
+
     class Config:
         schema_extra = {
             "example": {
                 "run_id": "run_20241013_123456_abc123",
                 "pipeline_id": "etl_daily",
-                "state": "RUNNING",
+                "state": "SUCCESS",
                 "created_at": "2024-10-13T12:34:56Z",
                 "started_at": "2024-10-13T12:34:57Z",
                 "params": {"start_date": "2024-01-01"},
@@ -81,6 +99,34 @@ class RunListResponse(BaseModel):
 
 
 # =============================================================================
+# Configuration Responses
+# =============================================================================
+
+
+class ConfigContextResponse(BaseModel):
+    """Representación del contexto de configuración activo."""
+
+    project_id: str
+    environment: str
+    version: str
+    global_settings: Dict[str, Any]
+    pipelines_config: Dict[str, Any]
+    nodes_config: Dict[str, Any]
+    input_config: Dict[str, Any]
+    output_config: Dict[str, Any]
+
+
+class ConfigVersionMetadataResponse(BaseModel):
+    """Metadatos de la versión activa."""
+
+    project_id: str
+    environment: str
+    version: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    release: Dict[str, Any] = Field(default_factory=dict)
+
+
+# =============================================================================
 # Schedule Responses
 # =============================================================================
 
@@ -92,13 +138,12 @@ class ScheduleResponse(BaseModel):
     pipeline_id: str
     kind: ScheduleKind
     expression: str
-    params: Optional[Dict[str, Any]] = None
     enabled: bool
     max_concurrency: int
+    retry_policy: Dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
 
     class Config:
@@ -110,6 +155,7 @@ class ScheduleResponse(BaseModel):
                 "expression": "0 2 * * *",
                 "enabled": True,
                 "max_concurrency": 1,
+                "retry_policy": {"retries": 1, "delay": 300},
                 "timeout_seconds": 3600,
                 "created_at": "2024-10-13T12:00:00Z",
                 "next_run_at": "2024-10-14T02:00:00Z",
@@ -196,6 +242,8 @@ __all__ = [
     "PipelineListResponse",
     "PipelineRunResponse",
     "RunListResponse",
+    "ConfigContextResponse",
+    "ConfigVersionMetadataResponse",
     # Schedules
     "ScheduleResponse",
     "ScheduleListResponse",

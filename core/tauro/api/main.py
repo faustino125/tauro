@@ -6,7 +6,15 @@ import sys
 
 from tauro.api.core.config import settings
 from tauro.api.core.middleware import setup_middleware
-from tauro.api.routes import pipelines_router, scheduling_router, monitoring_router
+from tauro.api.routes import (
+    pipelines_router,
+    scheduling_router,
+    monitoring_router,
+    projects_router,
+    runs_router,
+    configs_router,
+    config_versions_router,
+)
 
 
 # =============================================================================
@@ -52,13 +60,50 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Tauro config: {settings.get_tauro_config()}")
 
+    # Initialize MongoDB
+    try:
+        from tauro.api.core.deps import initialize_mongodb
+
+        db = await initialize_mongodb(settings)
+        app.state.db = db
+        logger.info("✓ MongoDB initialized and connected")
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB: {e}")
+        raise
+
+    # Run migrations
+    try:
+        from tauro.api.db.migrations import MigrationRunner
+
+        logger.info("Running database migrations...")
+        runner = MigrationRunner(db)
+        await runner.run_migrations()
+        logger.info("✓ Database migrations completed")
+    except Exception as e:
+        logger.error(f"Failed to run migrations: {e}")
+        raise
+
     # Store settings in app state
     app.state.settings = settings
+
+    # Attempt to initialize OrchestratorRunner (if available) during startup
+    try:
+        from tauro.api.core.deps import resolve_orchestrator_runner
+
+        orchestrator = resolve_orchestrator_runner()
+        if orchestrator:
+            app.state.orchestrator_runner = orchestrator
+            logger.info("OrchestratorRunner initialized for centralized execution")
+        else:
+            logger.warning("OrchestratorRunner not available; local execution only")
+    except Exception as e:
+        logger.debug(f"OrchestratorRunner not available: {e}")
+
     # Attempt to start scheduler service (if available) during startup
     try:
-        from tauro.api.core.deps import get_scheduler_service
+        from tauro.api.core.deps import resolve_scheduler_service
 
-        scheduler = get_scheduler_service()
+        scheduler = resolve_scheduler_service()
         if scheduler and settings.scheduler_enabled:
             try:
                 scheduler.start()
@@ -76,14 +121,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down API")
 
-    # Stop scheduler if running (use instance stored in app.state if present)
+    # Stop scheduler if running (use instance stored in app.state)
     try:
         scheduler = getattr(app.state, "scheduler", None)
-        if not scheduler:
-            from tauro.api.core.deps import get_scheduler_service
-
-            scheduler = get_scheduler_service()
-
         if scheduler:
             try:
                 scheduler.stop()
@@ -92,6 +132,14 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Error stopping scheduler: {e}")
     except Exception as e:
         logger.error(f"Error during scheduler shutdown: {e}")
+
+    # Close MongoDB connection
+    try:
+        from tauro.api.core.deps import close_mongodb
+
+        close_mongodb()
+    except Exception as e:
+        logger.error(f"Error closing MongoDB: {e}")
 
 
 # =============================================================================
@@ -121,6 +169,10 @@ def create_app() -> FastAPI:
 
     # Register routers
     app.include_router(pipelines_router, prefix=settings.api_prefix)
+    app.include_router(config_versions_router, prefix=settings.api_prefix)
+    app.include_router(configs_router, prefix=settings.api_prefix)
+    app.include_router(projects_router, prefix=settings.api_prefix)
+    app.include_router(runs_router, prefix=settings.api_prefix)
     app.include_router(scheduling_router, prefix=settings.api_prefix)
     app.include_router(monitoring_router)  # No prefix for health/metrics
 

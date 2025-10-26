@@ -1,35 +1,21 @@
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from enum import Enum
 
 from tauro.api.schemas.validators import (
     validate_pipeline_id,
     validate_cron_expression,
     validate_json_params,
 )
+from tauro.orchest.models import (
+    RunState as CoreRunState,
+    ScheduleKind as CoreScheduleKind,
+)
 
 
-# =============================================================================
-# Enums
-# =============================================================================
-
-
-class ScheduleKind(str, Enum):
-    """Tipos de schedule"""
-
-    INTERVAL = "INTERVAL"
-    CRON = "CRON"
-
-
-class RunState(str, Enum):
-    """Estados de ejecución"""
-
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
+# Re-export core enums so API schemas stay aligned with orchestrator states
+RunState = CoreRunState
+ScheduleKind = CoreScheduleKind
 
 
 # =============================================================================
@@ -76,9 +62,6 @@ class ScheduleCreateRequest(BaseModel):
         ...,
         description="Expresión del schedule (intervalo en segundos o expresión cron)",
     )
-    params: Optional[Dict[str, Any]] = Field(
-        default=None, description="Parámetros por defecto para las ejecuciones"
-    )
     enabled: bool = Field(default=True, description="Si el schedule está habilitado")
     max_concurrency: Optional[int] = Field(
         default=1, gt=0, le=100, description="Máximo número de ejecuciones concurrentes"
@@ -89,11 +72,20 @@ class ScheduleCreateRequest(BaseModel):
         le=86400,
         description="Timeout en segundos para cada ejecución",
     )
+    retry_policy: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Política de reintentos (por ejemplo {'retries': 1, 'delay': 60})",
+    )
+    next_run_at: Optional[datetime] = Field(
+        default=None, description="Fecha/hora del próximo run (opcional)"
+    )
 
     _validate_pipeline_id = validator("pipeline_id", allow_reuse=True)(
         validate_pipeline_id
     )
-    _validate_params = validator("params", allow_reuse=True)(validate_json_params)
+    _validate_retry_policy = validator("retry_policy", allow_reuse=True)(
+        validate_json_params
+    )
 
     @validator("expression")
     def validate_expression(cls, v, values):
@@ -123,10 +115,10 @@ class ScheduleCreateRequest(BaseModel):
                 "pipeline_id": "etl_daily",
                 "kind": "CRON",
                 "expression": "0 2 * * *",
-                "params": {"mode": "incremental"},
                 "enabled": True,
                 "max_concurrency": 1,
                 "timeout_seconds": 3600,
+                "retry_policy": {"retries": 1, "delay": 300},
             }
         }
 
@@ -135,15 +127,24 @@ class ScheduleUpdateRequest(BaseModel):
     """Request para actualizar un schedule"""
 
     expression: Optional[str] = None
-    params: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
     max_concurrency: Optional[int] = Field(default=None, gt=0, le=100)
     timeout_seconds: Optional[int] = Field(default=None, gt=0, le=86400)
+    retry_policy: Optional[Dict[str, Any]] = Field(default=None)
+    next_run_at: Optional[datetime] = None
 
-    _validate_params = validator("params", allow_reuse=True)(validate_json_params)
+    _validate_retry_policy = validator("retry_policy", allow_reuse=True)(
+        validate_json_params
+    )
 
     class Config:
-        schema_extra = {"example": {"enabled": False, "max_concurrency": 2}}
+        schema_extra = {
+            "example": {
+                "enabled": False,
+                "max_concurrency": 2,
+                "retry_policy": {"retries": 0, "delay": 0},
+            }
+        }
 
 
 # =============================================================================

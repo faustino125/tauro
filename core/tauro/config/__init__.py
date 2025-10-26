@@ -26,6 +26,10 @@ def __getattr__(name: str) -> Any:
         from .validators import FormatPolicy
 
         return FormatPolicy
+    if name == "ActiveConfigRecord" or name == "IConfigRepository":
+        from . import providers
+
+        return getattr(providers, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -37,4 +41,6 @@ __all__ = [
     "ContextFactory",
     "SparkSessionFactory",
     "FormatPolicy",
+    "ActiveConfigRecord",
+    "IConfigRepository",
 ]
