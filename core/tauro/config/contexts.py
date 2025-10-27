@@ -90,45 +90,19 @@ class Context:
         self._config_loader = ConfigLoaderFactory()
         self._validator = ConfigValidator()
         self._interpolator = VariableInterpolator()
-        # Migrar rutas a Path si son string
-        global_settings = (
-            Path(global_settings)
-            if isinstance(global_settings, str)
-            and not global_settings.strip().startswith("{")
-            else global_settings
-        )
-        pipelines_config = (
-            Path(pipelines_config)
-            if isinstance(pipelines_config, str)
-            and not pipelines_config.strip().startswith("{")
-            else pipelines_config
-        )
-        nodes_config = (
-            Path(nodes_config)
-            if isinstance(nodes_config, str)
-            and not nodes_config.strip().startswith("{")
-            else nodes_config
-        )
-        input_config = (
-            Path(input_config)
-            if isinstance(input_config, str)
-            and not input_config.strip().startswith("{")
-            else input_config
-        )
-        output_config = (
-            Path(output_config)
-            if isinstance(output_config, str)
-            and not output_config.strip().startswith("{")
-            else output_config
+
+        # Normalize all configuration sources
+        logger.debug("Normalizing configuration sources")
+        prepared_sources = self._prepare_sources(
+            global_settings=global_settings,
+            pipelines_config=pipelines_config,
+            nodes_config=nodes_config,
+            input_config=input_config,
+            output_config=output_config,
         )
 
-        self._load_configurations(
-            global_settings,
-            pipelines_config,
-            nodes_config,
-            input_config,
-            output_config,
-        )
+        self._load_configurations(**prepared_sources)
+        logger.debug("Configurations loaded successfully")
 
         # Load ML info from explicit source or global_settings (dict or path)
         self._load_ml_info(ml_info)
@@ -144,6 +118,44 @@ class Context:
         self._pipeline_manager = PipelineManager(
             self.pipelines_config, self.nodes_config
         )
+
+    @staticmethod
+    def _prepare_sources(
+        global_settings: Union[str, Dict, Path],
+        pipelines_config: Union[str, Dict, Path],
+        nodes_config: Union[str, Dict, Path],
+        input_config: Union[str, Dict, Path],
+        output_config: Union[str, Dict, Path],
+    ) -> Dict[str, Union[str, Dict, Path]]:
+        """Normalize all configuration sources to Path or dict.
+
+        Converts string file paths to Path objects, preserving inline JSON/YAML dicts.
+        This centralizes the source preparation logic.
+
+        Args:
+            global_settings: File path (str/Path) or inline config dict
+            pipelines_config: File path (str/Path) or inline config dict
+            nodes_config: File path (str/Path) or inline config dict
+            input_config: File path (str/Path) or inline config dict
+            output_config: File path (str/Path) or inline config dict
+
+        Returns:
+            Dictionary with normalized sources ready for loading
+        """
+
+        def _normalize_source(source: Union[str, Dict, Path]) -> Union[str, Dict, Path]:
+            """Convert string file path to Path, preserve inline dicts."""
+            if isinstance(source, str) and not source.strip().startswith("{"):
+                return Path(source)
+            return source
+
+        return {
+            "global_settings": _normalize_source(global_settings),
+            "pipelines_config": _normalize_source(pipelines_config),
+            "nodes_config": _normalize_source(nodes_config),
+            "input_config": _normalize_source(input_config),
+            "output_config": _normalize_source(output_config),
+        }
 
     def _load_configurations(
         self,
@@ -177,56 +189,97 @@ class Context:
     def _load_ml_info(
         self, ml_info_source: Optional[Union[str, Dict[str, Any], Path]]
     ) -> None:
-        """Load ML info from file/dict or from global_settings['ml_info']."""
+        """Load and apply ML info configuration with interpolation and defaults.
+
+        Consolidates the ML info loading pipeline:
+        1. Resolve source (explicit param or from global_settings)
+        2. Load data from file/dict
+        3. Interpolate variables
+        4. Apply defaults and merge configs
+        """
+        logger.debug("Loading ML info configuration")
+
+        # Determine ML info source
         source = ml_info_source
         if source is None and isinstance(self.global_settings, dict):
             source = self.global_settings.get("ml_info")
+            if source:
+                logger.debug("ML info source found in global_settings")
 
-        ml_info_data = self._get_ml_info_data(source)
-        self._interpolate_ml_info(ml_info_data)
-        self._apply_ml_info_defaults(ml_info_data)
+        # Load ML info data
+        ml_info_data = self._load_ml_info_data(source)
+        logger.debug(f"Loaded ML info data with keys: {list(ml_info_data.keys())}")
+
+        # Interpolate and apply defaults in one pass
+        self._process_ml_info(ml_info_data)
         self.ml_info: Dict[str, Any] = ml_info_data
+        logger.debug("ML info loaded and processed successfully")
 
-    def _get_ml_info_data(
+    def _load_ml_info_data(
         self, source: Optional[Union[str, Dict[str, Any], Path]]
     ) -> Dict[str, Any]:
-        """Helper to load ml_info_data from source."""
+        """Load ML info data from source (file or inline dict).
+
+        Args:
+            source: File path (str/Path), inline dict, or None
+
+        Returns:
+            ML info configuration as dictionary
+
+        Raises:
+            ConfigValidationError: If source is invalid or not a dict
+            ConfigLoadError: If file loading fails
+        """
         if isinstance(source, dict):
             ml_info_data = source
+            logger.debug("Using inline ML info dict")
         elif isinstance(source, (str, Path)):
             try:
                 ml_info_data = self._config_loader.load_config(str(source))
+                logger.debug(f"Loaded ML info from file: {source}")
             except Exception as e:
                 logger.error(f"Failed to load ml_info from {source}: {e}")
                 raise
         else:
             ml_info_data = {}
+            logger.debug("No ML info source provided, using empty config")
+
         if not isinstance(ml_info_data, dict):
             raise ConfigValidationError(
                 f"ml_info must be a dict (or path to a dict), got {type(ml_info_data).__name__}"
             )
         return ml_info_data
 
-    def _interpolate_ml_info(self, ml_info_data: Dict[str, Any]) -> None:
-        """Helper to interpolate ml_info_data."""
+    def _process_ml_info(self, ml_info_data: Dict[str, Any]) -> None:
+        """Interpolate variables and apply defaults to ML info data.
+
+        This consolidates interpolation and default application logic.
+
+        Args:
+            ml_info_data: ML info dict to process in-place
+        """
+        # Interpolate variables from global settings
         try:
+            logger.debug("Interpolating ML info variables")
             VariableInterpolator.interpolate_structure(
                 ml_info_data, self.global_settings
             )
-        except Exception:
-            logger.debug("ML info interpolation skipped due to error", exc_info=True)
+            logger.debug("ML info interpolation completed")
+        except Exception as e:
+            logger.debug(f"ML info interpolation skipped: {e}")
 
-    def _apply_ml_info_defaults(self, ml_info_data: Dict[str, Any]) -> None:
-        """Helper to apply defaults to ml_info_data."""
+        # Apply default hyperparameters
         base_hyperparams = dict(self.default_hyperparams)
         provided_hyperparams = dict(ml_info_data.get("hyperparams", {}) or {})
         base_hyperparams.update(provided_hyperparams)
         ml_info_data["hyperparams"] = base_hyperparams
 
-        if "model_version" not in ml_info_data or not ml_info_data.get("model_version"):
+        # Apply default model version if not provided
+        if not ml_info_data.get("model_version"):
             mv = self.default_model_version
             if mv is not None:
                 ml_info_data["model_version"] = mv
+                logger.debug(f"Applied default model_version: {mv}")
 
     def _load_and_validate_config(
         self, source: Union[str, Dict], config_name: str
@@ -246,24 +299,48 @@ class Context:
             raise ConfigLoadError(f"Unexpected error: {str(e)}") from e
 
     def _process_configurations(self) -> None:
-        """Process and prepare configurations after loading."""
+        """Process and prepare configurations after loading.
+
+        Performs variable interpolation on input/output configurations
+        to resolve placeholders and environment variables.
+        """
+        logger.info("Processing configurations: starting interpolation pipeline")
         self.layer = self.global_settings.get("layer", "").lower()
+
         try:
+            logger.debug(f"Detected layer: {self.layer or 'not specified'}")
+
+            # Interpolate input/output config file paths
+            logger.debug("Step 1: Interpolating config file paths")
             self._interpolator.interpolate_config_paths(
                 self.input_config, self.global_settings
             )
             self._interpolator.interpolate_config_paths(
                 self.output_config, self.global_settings
             )
+            logger.debug("  ✓ Config file paths interpolated")
+
+            # Interpolate all string values in input/output configs
+            logger.debug("Step 2: Interpolating string values in input/output configs")
             VariableInterpolator.interpolate_structure(
                 self.input_config, self.global_settings
             )
             VariableInterpolator.interpolate_structure(
                 self.output_config, self.global_settings
             )
+            logger.debug("  ✓ String values interpolated")
+
+            # Interpolate input/output data paths
+            logger.debug("Step 3: Interpolating input/output data paths")
             self._interpolate_input_paths()
-        except Exception:
-            logger.debug("Path interpolation skipped due to error", exc_info=True)
+            logger.debug("  ✓ Data paths interpolated")
+
+            logger.info("Configuration processing completed successfully")
+        except Exception as e:
+            logger.warning(
+                f"Configuration processing encountered an error (non-fatal): {e}",
+                exc_info=True,
+            )
 
     def _get_spark_ml_config(self) -> Dict[str, Any]:
         """Extract Spark ML configuration from global settings."""
@@ -377,7 +454,7 @@ class Context:
             loader = DSLConfigLoader()
             config_data = loader.load(p)
 
-        # Esperamos un dict monolítico con las secciones requeridas
+        # We expect a monolithic dictionary with the required sections
         required_keys = [
             "global_settings",
             "pipelines_config",
@@ -610,7 +687,7 @@ class StreamingContext(BaseSpecializedContext):
         }
 
     def _create_validator(self):
-        # Inyectar la política de formatos del contexto
+        # Inject the context's format policy
         return StreamingValidator(self.format_policy)
 
     def _get_specialized_nodes(self) -> Dict[str, Dict[str, Any]]:

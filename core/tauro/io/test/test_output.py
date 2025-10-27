@@ -49,13 +49,13 @@ class TestDataFrameConverter:
     def test_convert_to_spark_with_pandas(self, converter, monkeypatch):
         """Test converting pandas DataFrame to Spark DataFrame."""
 
-        # Crear una clase real para representar un pandas.DataFrame
+        # Create a real class to represent a pandas.DataFrame
         class MockPandasDataFrame:
             pass
 
         mock_pd = MagicMock()
         mock_pd.DataFrame = MockPandasDataFrame
-        # Inyectar el "módulo" pandas en tauro.io.output
+        # Inject the "pandas" module into tauro.io.output
         monkeypatch.setattr("tauro.io.output.pd", mock_pd, raising=False)
 
         mock_pandas_df = MockPandasDataFrame()
@@ -64,7 +64,7 @@ class TestDataFrameConverter:
         # Setup mocks
         converter._is_spark_dataframe = MagicMock(return_value=False)
         converter._spark_available = MagicMock(return_value=True)
-        # Simular que _ctx_spark() devuelve un objeto spark con createDataFrame
+        # Simulate that _ctx_spark() returns a spark object with createDataFrame
         fake_spark = MagicMock()
         fake_spark.createDataFrame.return_value = mock_spark_df
         converter._ctx_spark = MagicMock(return_value=fake_spark)
@@ -79,7 +79,7 @@ class TestDataFrameConverter:
     def test_convert_to_spark_with_polars(self, converter, monkeypatch):
         """Test converting Polars DataFrame to Spark DataFrame."""
 
-        # Crear clases para polars.DataFrame y pandas.DataFrame para la conversión
+        # Create classes for polars.DataFrame and pandas.DataFrame for conversion
         class MockPandasDataFrame:
             pass
 
@@ -115,7 +115,7 @@ class TestDataFrameConverter:
 
         # Verify results
         assert result is mock_spark_df
-        # Verificamos que createDataFrame fue llamado con el DataFrame resultante de to_pandas()
+        # Verify that createDataFrame was called with the DataFrame from to_pandas()
         fake_spark.createDataFrame.assert_called_once_with(pandas_df_instance)
 
     def test_convert_to_spark_already_spark_df(self, converter):
@@ -123,14 +123,14 @@ class TestDataFrameConverter:
         mock_spark_df = MagicMock()
         converter._is_spark_dataframe = MagicMock(return_value=True)
         converter._spark_available = MagicMock(return_value=True)
-        # Simular que _ctx_spark() devuelve algo (se espera que se llame)
+        # Simulate that _ctx_spark() returns something (expected to be called)
         fake_spark = MagicMock()
         converter._ctx_spark = MagicMock(return_value=fake_spark)
 
         result = converter.convert_to_spark(mock_spark_df)
 
         assert result is mock_spark_df
-        # _ctx_spark fue llamado para comprobar disponibilidad de Spark
+        # _ctx_spark was called to check Spark availability
         converter._ctx_spark.assert_called_once()
 
     def test_convert_to_spark_no_spark_session(self, converter):
@@ -145,7 +145,7 @@ class TestDataFrameConverter:
         converter._spark_available = MagicMock(return_value=True)
         converter._is_spark_dataframe = MagicMock(return_value=False)
 
-        # Simular que pandas y polars no están disponibles
+        # Simulate that pandas and polars are not available
         monkeypatch.setattr("tauro.io.output.pd", None, raising=False)
         monkeypatch.setattr("tauro.io.output.pl", None, raising=False)
 
@@ -157,7 +157,7 @@ class TestDataFrameConverter:
         converter._spark_available = MagicMock(return_value=True)
         converter._is_spark_dataframe = MagicMock(return_value=False)
 
-        # Crear una clase que representará pandas.DataFrame y un mock de instancia
+        # Create a class to represent pandas.DataFrame and a mock instance
         class MockPandasDataFrame:
             pass
 

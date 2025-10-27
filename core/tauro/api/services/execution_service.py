@@ -11,43 +11,43 @@ logger = logging.getLogger(__name__)
 
 
 class ExecutionNotFoundError(Exception):
-    """Ejecución no encontrada"""
+    """Execution not found"""
 
     pass
 
 
 class ExecutionAlreadyRunningError(Exception):
-    """Ya hay una ejecución en progreso"""
+    """An execution is already in progress"""
 
     pass
 
 
 class InvalidExecutionError(Exception):
-    """Parámetros de ejecución inválidos"""
+    """Invalid execution parameters"""
 
     pass
 
 
 class ExecutionService:
     """
-    Servicio de orquestación centralizada.
+    Centralized orchestration service.
 
-    Responsabilidades:
-    - Recibir solicitudes de ejecución
-    - Validar precondiciones
-    - Delegar a OrchestratorRunner
-    - Rastrar estado de ejecuciones
-    - Manejar cancelaciones
-    - Limpieza de recursos
-    - Ejecutar en background de forma asíncrona
+    Responsibilities:
+    - Receive execution requests
+    - Validate preconditions
+    - Delegate to OrchestratorRunner
+    - Track execution state
+    - Handle cancellations
+    - Resource cleanup
+    - Execute asynchronously in background
     """
 
     def __init__(self, db: AsyncDatabase):
         """
-        Inicializa el servicio con una instancia de MongoDB.
+        Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance de Motor
+            db: AsyncDatabase instance from Motor
         """
         self.db = db
         self.runs_collection = db["pipeline_runs"]
@@ -55,21 +55,21 @@ class ExecutionService:
         self.projects_collection = db["projects"]
         self.schedules_collection = db["schedules"]
 
-        # Nota: OrchestratorRunner se inyectará en tiempo de deployment
+        # Note: OrchestratorRunner will be injected at deployment time
         self.orchestrator_runner = None
 
-        # Diccionario para rastrar tasks asincronas activas
+        # Dictionary to track active async tasks
         self._active_tasks: Dict[str, asyncio.Task] = {}
 
     def set_orchestrator_runner(self, orchestrator_runner):
         """
-        Inyecta la instancia de OrchestratorRunner.
+        Inject the OrchestratorRunner instance.
 
         Args:
-            orchestrator_runner: Instancia del executor centralizado
+            orchestrator_runner: Instance of the centralized executor
         """
         self.orchestrator_runner = orchestrator_runner
-        logger.info("OrchestratorRunner inyectado en ExecutionService")
+        logger.info("OrchestratorRunner injected into ExecutionService")
 
     async def submit_execution(
         self,
@@ -77,21 +77,21 @@ class ExecutionService:
         timeout_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        Somete un run para ejecución centralizada.
+        Submit a run for centralized execution.
 
-        IMPORTANTE: Este método retorna 202 ACCEPTED inmediatamente.
-        La ejecución ocurre en background en una task asíncrona separada.
+        IMPORTANT: This method returns 202 ACCEPTED immediately.
+        Execution occurs in background in a separate async task.
 
-        Cambios de estado:
-        1. PENDING → RUNNING (inmediatamente en este método)
-        2. RUNNING → SUCCESS/FAILED (en background en _execute_run_async)
+        State transitions:
+        1. PENDING → RUNNING (immediately in this method)
+        2. RUNNING → SUCCESS/FAILED (in background in _execute_run_async)
 
         Args:
-            run_id: ID del run a ejecutar
-            timeout_seconds: Timeout para la ejecución
+            run_id: ID of the run to execute
+            timeout_seconds: Timeout for execution
 
         Returns:
-            Diccionario con status de aceptación (202):
+            Dictionary with acceptance status (202):
             {
                 "status": "accepted",
                 "run_id": run_id,
@@ -101,30 +101,30 @@ class ExecutionService:
             }
 
         Raises:
-            ExecutionNotFoundError: Si el run no existe
-            ExecutionAlreadyRunningError: Si ya está en ejecución
-            InvalidExecutionError: Si hay errores de validación
+            ExecutionNotFoundError: If the run does not exist
+            ExecutionAlreadyRunningError: If already executing
+            InvalidExecutionError: If validation errors occur
         """
-        logger.info(f"Somete ejecución para run {run_id}")
+        logger.info(f"Submit execution for run {run_id}")
 
         try:
-            # 1. VALIDAR: Run existe
+            # 1. VALIDATE: Run exists
             run = await self.runs_collection.find_one({"id": run_id})
             if not run:
-                raise ExecutionNotFoundError(f"Run {run_id} no encontrado")
+                raise ExecutionNotFoundError(f"Run {run_id} not found")
 
-            # 2. VALIDAR: No está ya ejecutándose
+            # 2. VALIDATE: Not already executing
             if run.get("state") == RunState.RUNNING.value:
-                raise ExecutionAlreadyRunningError(f"Run {run_id} ya está en ejecución")
+                raise ExecutionAlreadyRunningError(f"Run {run_id} already executing")
 
-            # 3. VALIDAR: Está en PENDING
+            # 3. VALIDATE: In PENDING state
             if run.get("state") != RunState.PENDING.value:
                 raise InvalidExecutionError(
-                    f"No se puede ejecutar un run en estado {run.get('state')}. "
-                    f"Solo se pueden ejecutar runs en PENDING."
+                    f"Cannot execute a run in state {run.get('state')}. "
+                    f"Only runs in PENDING can be executed."
                 )
 
-            # 4. CAMBIAR ESTADO: PENDING → RUNNING
+            # 4. CHANGE STATE: PENDING → RUNNING
             now = datetime.now(timezone.utc)
             await self.runs_collection.update_one(
                 {"id": run_id},
@@ -141,14 +141,14 @@ class ExecutionService:
                     }
                 },
             )
-            logger.info(f"Run {run_id} cambiado a RUNNING")
+            logger.info(f"Run {run_id} changed to RUNNING")
 
-            # 5. INICIAR TASK ASÍNCRONA (no bloquea respuesta HTTP)
+            # 5. START ASYNC TASK (non-blocking HTTP response)
             task = asyncio.create_task(self._execute_run_async(run_id, timeout_seconds))
             self._active_tasks[run_id] = task
-            logger.info(f"Task asíncrona creada para run {run_id}")
+            logger.info(f"Async task created for run {run_id}")
 
-            # 6. RETORNAR 202 ACCEPTED inmediatamente
+            # 6. RETURN 202 ACCEPTED immediately
             return {
                 "status": "accepted",
                 "run_id": run_id,
@@ -165,9 +165,9 @@ class ExecutionService:
             raise
         except Exception as e:
             logger.error(
-                f"Error al someter ejecución para run {run_id}: {e}", exc_info=True
+                f"Error submitting execution for run {run_id}: {e}", exc_info=True
             )
-            raise InvalidExecutionError(f"Error al someter ejecución: {str(e)}")
+            raise InvalidExecutionError(f"Error submitting execution: {str(e)}")
 
     # =========================================================================
     # ASYNC EXECUTION (BACKGROUND)
@@ -177,12 +177,12 @@ class ExecutionService:
         self, run_id: str, timeout_seconds: Optional[int] = None
     ) -> None:
         """
-        Ejecuta el run de forma asíncrona en background.
+        Execute the run asynchronously in background.
 
-        IMPORTANTE: Este método se ejecuta en una task asíncrona separada
-        NO bloquea la respuesta HTTP del endpoint.
+        IMPORTANT: This method runs in a separate async task
+        and does NOT block the HTTP endpoint response.
         """
-        logger.info(f"Iniciando ejecución asíncrona de run {run_id}")
+        logger.info(f"Starting async execution of run {run_id}")
 
         try:
             # Cargar y validar
@@ -194,17 +194,17 @@ class ExecutionService:
             params = run.get("params", {})
 
             logger.info(
-                f"Contexto construido para pipeline {pipeline_id}, "
+                f"Context built for pipeline {pipeline_id}, "
                 f"params={params}, timeout={timeout_seconds}s"
             )
 
-            # Ejecutar pipeline (interno maneja timeout y simulación)
+            # Execute pipeline (internal handles timeout and simulation)
             result = await self._invoke_orchestrator(
                 context, pipeline_id, params, run_id, timeout_seconds
             )
 
-            # Marcar éxito
-            logger.info(f"Pipeline {pipeline_id} completado exitosamente")
+            # Mark success
+            logger.info(f"Pipeline {pipeline_id} completed successfully")
             completion_time = datetime.now(timezone.utc)
             await self.runs_collection.update_one(
                 {"id": run_id},
@@ -217,37 +217,37 @@ class ExecutionService:
                     }
                 },
             )
-            logger.info(f"Run {run_id} finalizado con SUCCESS")
+            logger.info(f"Run {run_id} completed with SUCCESS")
 
         except asyncio.TimeoutError:
-            logger.error(f"Run {run_id} timeout después de {timeout_seconds}s")
+            logger.error(f"Run {run_id} timeout after {timeout_seconds}s")
             await self._handle_timeout(run_id, timeout_seconds)
 
         except ExecutionNotFoundError as e:
-            logger.error(f"Error de validación en run {run_id}: {e}")
+            logger.error(f"Validation error in run {run_id}: {e}")
             await self._mark_run_failed(run_id, str(e))
 
         except Exception as e:
-            logger.error(f"Error ejecutando run {run_id}: {e}", exc_info=True)
+            logger.error(f"Error executing run {run_id}: {e}", exc_info=True)
             await self._mark_run_failed(run_id, str(e))
 
         finally:
-            # Limpiar task de lista activa
+            # Clean up task from active list
             if run_id in self._active_tasks:
                 del self._active_tasks[run_id]
-            logger.info(f"Task limpiada para run {run_id}")
+            logger.info(f"Task cleaned up for run {run_id}")
 
     async def _load_run_and_project(self, rid: str):
         run_doc = await self.runs_collection.find_one({"id": rid})
         if not run_doc:
-            raise ExecutionNotFoundError(f"Run {rid} desapareció")
+            raise ExecutionNotFoundError(f"Run {rid} disappeared")
 
         project_doc = await self.projects_collection.find_one(
             {"id": run_doc.get("project_id")}
         )
         if not project_doc:
             raise InvalidExecutionError(
-                f"Proyecto {run_doc.get('project_id')} no encontrado"
+                f"Project {run_doc.get('project_id')} not found"
             )
         return run_doc, project_doc
 
@@ -256,7 +256,7 @@ class ExecutionService:
     ):
         if not self.orchestrator_runner:
             logger.warning(
-                f"OrchestratorRunner no disponible, simulando ejecución para {rid}"
+                f"OrchestratorRunner not available, simulating execution for {rid}"
             )
             await asyncio.sleep(1)
             return {
@@ -267,7 +267,7 @@ class ExecutionService:
                 }
             }
 
-        # Ejecutar en OrchestratorRunner con/ sin timeout
+        # Execute in OrchestratorRunner with/without timeout
         if timeout_seconds:
             return await asyncio.wait_for(
                 self.orchestrator_runner.execute_async(
@@ -280,16 +280,16 @@ class ExecutionService:
         )
 
     async def _handle_timeout(self, run_id: str, timeout_seconds: Optional[int]):
-        # Intentar cancelar operaciones en OrchestratorRunner
+        # Try to cancel operations in OrchestratorRunner
         if self.orchestrator_runner and hasattr(
             self.orchestrator_runner, "cancel_execution"
         ):
             try:
                 await self.orchestrator_runner.cancel_execution(run_id)
-                logger.info(f"Cancelado en OrchestratorRunner por timeout: {run_id}")
+                logger.info(f"Cancelled in OrchestratorRunner due to timeout: {run_id}")
             except Exception as e:
                 logger.warning(
-                    f"Error cancelando en OrchestratorRunner por timeout: {e}"
+                    f"Error cancelling in OrchestratorRunner due to timeout: {e}"
                 )
 
         await self._mark_run_failed(
@@ -305,30 +305,30 @@ class ExecutionService:
         run_id: str,
     ) -> Dict[str, Any]:
         """
-        Obtiene el status actual de una ejecución.
+        Get the current status of an execution.
 
-        Usado para polling de la API:
+        Used for polling the API:
         GET /api/v1/runs/{run_id}
 
-        Retorna:
+        Returns:
         - state: PENDING, RUNNING, SUCCESS, FAILED, CANCELLED
         - progress: total, completed, failed tasks
         - timestamps: started_at, completed_at
-        - error: mensaje de error si falló
+        - error: error message if failed
 
         Args:
-            run_id: ID del run
+            run_id: ID of the run
 
         Returns:
-            Dict con status actual
+            Dict with current status
 
         Raises:
-            ExecutionNotFoundError: Si run no existe
+            ExecutionNotFoundError: If run does not exist
         """
         run = await self.runs_collection.find_one({"id": run_id})
 
         if not run:
-            raise ExecutionNotFoundError(f"Run {run_id} no encontrado")
+            raise ExecutionNotFoundError(f"Run {run_id} not found")
 
         # Remover _id de MongoDB
         run.pop("_id", None)
@@ -351,41 +351,41 @@ class ExecutionService:
         self, run_id: str, reason: str = "User cancelled"
     ) -> bool:
         """
-        Cancela una ejecución en progreso.
+        Cancel an execution in progress.
 
-        Flujo:
-        1. Validar que run existe
-        2. Si está en estado RUNNING/PENDING, cambiar a CANCELLED
-        3. Signal a OrchestratorRunner si es posible
-        4. Cancelar la task asíncrona asociada (si existe)
+        Flow:
+        1. Validate that run exists
+        2. If in RUNNING/PENDING state, change to CANCELLED
+        3. Signal OrchestratorRunner if possible
+        4. Cancel the associated async task (if exists)
 
         Args:
-            run_id: ID del run a cancelar
-            reason: Razón de la cancelación
+            run_id: ID of the run to cancel
+            reason: Reason for cancellation
 
         Returns:
-            True si fue cancelado, False si no estaba ejecutándose
+            True if cancelled, False if not executing
 
         Raises:
-            ExecutionNotFoundError: Si run no existe
+            ExecutionNotFoundError: If run does not exist
         """
-        logger.info(f"Cancelando ejecución run {run_id}: {reason}")
+        logger.info(f"Cancelling execution run {run_id}: {reason}")
 
         run = await self.runs_collection.find_one({"id": run_id})
         if not run:
-            raise ExecutionNotFoundError(f"Run {run_id} no encontrado")
+            raise ExecutionNotFoundError(f"Run {run_id} not found")
 
         current_state = run.get("state")
 
-        # Solo cancelar si está en RUNNING o PENDING
+        # Only cancel if in RUNNING or PENDING
         if current_state not in [RunState.RUNNING.value, RunState.PENDING.value]:
             logger.warning(
-                f"No se puede cancelar run {run_id}: "
-                f"estado es {current_state}, no RUNNING/PENDING"
+                f"Cannot cancel run {run_id}: "
+                f"state is {current_state}, not RUNNING/PENDING"
             )
             return False
 
-        # Cambiar estado a CANCELLED
+        # Change state to CANCELLED
         now = datetime.now(timezone.utc)
         await self.runs_collection.update_one(
             {"id": run_id},
@@ -398,17 +398,17 @@ class ExecutionService:
             },
         )
 
-        # Delegar señales y cancelación de task a helpers simplificados
+        # Delegate signals and task cancellation to simplified helpers
         await self._signal_orchestrator_cancel(run_id)
         await self._cancel_active_task(run_id)
 
-        logger.info(f"Run {run_id} marcado como CANCELLED")
+        logger.info(f"Run {run_id} marked as CANCELLED")
         return True
 
     async def _signal_orchestrator_cancel(self, run_id: str) -> None:
         """
-        Intenta notificar al OrchestratorRunner que cancele la ejecución.
-        Silencia errores y registra warnings si falla.
+        Try to notify the OrchestratorRunner to cancel execution.
+        Silences errors and logs warnings if fails.
         """
         if not self.orchestrator_runner or not hasattr(
             self.orchestrator_runner, "cancel_execution"
@@ -423,27 +423,27 @@ class ExecutionService:
 
     async def _cancel_active_task(self, run_id: str) -> None:
         """
-        Cancela la asyncio.Task asociada al run (si existe) y espera un breve timeout.
+        Cancel the asyncio.Task associated with the run (if exists) and wait for brief timeout.
         """
         task = self._active_tasks.get(run_id)
         if not task:
             return
 
         if task.done():
-            logger.debug(f"Task ya finalizada para run {run_id}")
+            logger.debug(f"Task already completed for run {run_id}")
             return
 
         task.cancel()
         try:
             await asyncio.wait_for(task, timeout=5.0)
-            logger.info(f"Task asíncrona cancelada exitosamente: {run_id}")
+            logger.info(f"Async task successfully cancelled: {run_id}")
         except asyncio.TimeoutError:
-            logger.warning(f"Task cancelada pero no terminó en timeout: {run_id}")
+            logger.warning(f"Task cancelled but did not finish in timeout: {run_id}")
         except asyncio.CancelledError:
-            logger.info(f"Task ya estaba cancelada: {run_id}")
+            logger.info(f"Task was already cancelled: {run_id}")
             raise
         except Exception as e:
-            logger.warning(f"Error esperando cancelación de task: {e}")
+            logger.warning(f"Error waiting for task cancellation: {e}")
 
     # =========================================================================
     # HELPER METHODS
@@ -451,27 +451,27 @@ class ExecutionService:
 
     def _build_execution_context(self, project: Dict[str, Any]) -> Any:
         """
-        Construye un contexto Tauro para ejecución.
+        Build a Tauro context for execution.
 
-        El contexto necesita:
+        The context needs:
         - Input paths
         - Output paths
         - Global settings
         - Environment variables
 
         Args:
-            project: Documento de proyecto de MongoDB
+            project: Project document from MongoDB
 
         Returns:
-            Context object de Tauro (puede ser simulado o real)
+            Context object from Tauro (can be simulated or real)
         """
-        logger.debug(f"Construyendo contexto para proyecto {project.get('id')}")
+        logger.debug(f"Building context for project {project.get('id')}")
 
         try:
-            # Si hay tauro.config.contexts disponible
+            # If tauro.config.contexts available
             from tauro.config.contexts import Context
 
-            # Crear context desde settings del proyecto
+            # Create context from project settings
             settings = project.get("global_settings", {})
 
             context = Context(
@@ -483,8 +483,8 @@ class ExecutionService:
             return context
 
         except ImportError as e:
-            logger.warning(f"Tauro Context no disponible: {e}, usando simulado")
-            # Retornar un dict simulado si Tauro no está disponible
+            logger.warning(f"Tauro Context not available: {e}, using simulated")
+            # Return simulated dict if Tauro not available
             return {
                 "input_path": project.get("global_settings", {}).get("input_path"),
                 "output_path": project.get("global_settings", {}).get("output_path"),
@@ -492,11 +492,11 @@ class ExecutionService:
 
     async def _mark_run_failed(self, run_id: str, error_message: str) -> None:
         """
-        Marca un run como FAILED con mensaje de error.
+        Mark a run as FAILED with error message.
 
         Args:
-            run_id: ID del run
-            error_message: Mensaje de error
+            run_id: ID of the run
+            error_message: Error message
         """
         await self.runs_collection.update_one(
             {"id": run_id},
@@ -508,14 +508,14 @@ class ExecutionService:
                 }
             },
         )
-        logger.info(f"Run {run_id} marcado como FAILED: {error_message}")
+        logger.info(f"Run {run_id} marked as FAILED: {error_message}")
 
     async def check_execution_health(self) -> Dict[str, Any]:
         """
-        Verifica la salud del servicio de ejecución.
+        Check the health of the execution service.
 
         Returns:
-            Diccionario con información de salud
+            Dictionary with health information
         """
         try:
             # Contar runs por estado
@@ -546,7 +546,7 @@ class ExecutionService:
             }
 
         except Exception as e:
-            logger.error(f"Error al verificar salud: {e}", exc_info=True)
+            logger.error(f"Error checking health: {e}", exc_info=True)
             return {
                 "status": "unhealthy",
                 "error": str(e),

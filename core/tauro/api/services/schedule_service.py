@@ -1,8 +1,8 @@
 """
-ScheduleService: Gestión de schedules (ejecuciones programadas)
+ScheduleService: Schedule management (periodic pipeline executions)
 
-Este servicio implementa la lógica de negocio para crear, actualizar y gestionar
-schedules que disparan ejecuciones periódicas de pipelines.
+This service implements business logic for creating, updating and managing
+schedules that trigger periodic pipeline executions.
 """
 
 import logging
@@ -24,41 +24,41 @@ logger = logging.getLogger(__name__)
 
 
 class ScheduleNotFoundError(Exception):
-    """Schedule no encontrado"""
+    """Schedule not found"""
 
     pass
 
 
 class ScheduleAlreadyExistsError(Exception):
-    """Schedule con esa configuración ya existe"""
+    """Schedule with that configuration already exists"""
 
     pass
 
 
 class InvalidScheduleError(Exception):
-    """Datos de schedule inválidos"""
+    """Invalid schedule data"""
 
     pass
 
 
 class ScheduleService:
     """
-    Servicio de gestión de schedules.
+    Schedule management service.
 
-    Responsabilidades:
-    - CRUD de schedules (Create, Read, Update, Delete)
-    - Validación de expresiones CRON e INTERVAL
-    - Cálculo de próximas ejecuciones
-    - Enable/disable de schedules
-    - Backfill (crear runs históricos)
+    Responsibilities:
+    - CRUD of schedules (Create, Read, Update, Delete)
+    - Validation of CRON and INTERVAL expressions
+    - Calculation of next executions
+    - Enable/disable schedules
+    - Backfill (create historical runs)
     """
 
     def __init__(self, db: AsyncDatabase):
         """
-        Inicializa el servicio con una instancia de MongoDB.
+        Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance de Motor
+            db: AsyncDatabase instance from Motor
         """
         self.db = db
         self.schedules_collection = db["schedules"]
@@ -71,43 +71,43 @@ class ScheduleService:
         created_by: str,
     ) -> ScheduleResponse:
         """
-        Crea un nuevo schedule.
+        Create a new schedule.
 
         Args:
-            schedule_data: Datos del schedule a crear
-            created_by: Usuario que crea el schedule (email o ID)
+            schedule_data: Schedule data to create
+            created_by: User creating the schedule (email or ID)
 
         Returns:
-            ScheduleResponse con el schedule creado
+            ScheduleResponse with the created schedule
 
         Raises:
-            InvalidScheduleError: Si los datos no son válidos
-            ScheduleAlreadyExistsError: Si ya existe un schedule similar
+            InvalidScheduleError: If data is invalid
+            ScheduleAlreadyExistsError: If a similar schedule already exists
         """
         try:
-            # Validar datos
+            # Validate data
             self.validator.validate_schedule(schedule_data)
 
-            # Verificar que el proyecto existe
+            # Verify project exists
             project = await self.projects_collection.find_one(
                 {"id": str(schedule_data.project_id)}
             )
             if not project:
                 raise InvalidScheduleError(
-                    f"Proyecto {schedule_data.project_id} no encontrado"
+                    f"Project {schedule_data.project_id} not found"
                 )
 
-            # Verificar que el pipeline existe
+            # Verify pipeline exists
             pipelines = project.get("pipelines", [])
             pipeline_found = any(
                 str(p.get("id")) == str(schedule_data.pipeline_id) for p in pipelines
             )
             if not pipeline_found:
                 raise InvalidScheduleError(
-                    f"Pipeline {schedule_data.pipeline_id} no encontrado"
+                    f"Pipeline {schedule_data.pipeline_id} not found"
                 )
 
-            # Verificar que no existe un schedule similar
+            # Verify schedule doesn't already exist
             existing = await self.schedules_collection.find_one(
                 {
                     "project_id": str(schedule_data.project_id),
@@ -119,16 +119,16 @@ class ScheduleService:
 
             if existing:
                 raise ScheduleAlreadyExistsError(
-                    "Ya existe un schedule con esta configuración"
+                    "Schedule with this configuration already exists"
                 )
 
-            # Calcular próxima ejecución
+            # Calculate next execution
             next_run_at = self._calculate_next_run(
                 schedule_data.kind.value,
                 schedule_data.expression,
             )
 
-            # Crear documento
+            # Create document
             schedule_id = str(uuid4())
             now = datetime.now(timezone.utc)
 
@@ -154,10 +154,10 @@ class ScheduleService:
                 "created_by": created_by,
             }
 
-            # Insertar en MongoDB
+            # Insert into MongoDB
             await self.schedules_collection.insert_one(schedule_doc)
             logger.info(
-                f"Schedule creado: {schedule_id} para pipeline "
+                f"Schedule created: {schedule_id} for pipeline "
                 f"{schedule_data.pipeline_id}"
             )
 
@@ -167,8 +167,8 @@ class ScheduleService:
         except (InvalidScheduleError, ScheduleAlreadyExistsError):
             raise
         except Exception as e:
-            logger.error(f"Error al crear schedule: {str(e)}")
-            raise InvalidScheduleError(f"Error al crear schedule: {str(e)}")
+            logger.error(f"Error creating schedule: {str(e)}")
+            raise InvalidScheduleError(f"Error creating schedule: {str(e)}")
 
     async def get_schedule(self, schedule_id: str) -> ScheduleResponse:
         """
@@ -200,19 +200,19 @@ class ScheduleService:
         offset: int = 0,
     ) -> tuple[List[ScheduleResponse], int]:
         """
-        Lista schedules con filtros opcionales.
+        List schedules with optional filters.
 
         Args:
-            project_id: Filtrar por proyecto
-            pipeline_id: Filtrar por pipeline
-            enabled: Filtrar por estado (habilitado/deshabilitado)
-            limit: Número máximo de resultados
-            offset: Número de resultados a saltar
+            project_id: Filter by project
+            pipeline_id: Filter by pipeline
+            enabled: Filter by state (enabled/disabled)
+            limit: Maximum number of results
+            offset: Number of results to skip
 
         Returns:
-            Tupla de (lista de schedules, total de registros)
+            Tuple of (list of schedules, total records)
         """
-        # Construir filtro
+        # Build filter
         query = {}
 
         if project_id:
@@ -224,10 +224,10 @@ class ScheduleService:
         if enabled is not None:
             query["enabled"] = enabled
 
-        # Contar total
+        # Count total
         total = await self.schedules_collection.count_documents(query)
 
-        # Obtener página
+        # Get page
         cursor = (
             self.schedules_collection.find(query)
             .sort("created_at", -1)
@@ -241,7 +241,7 @@ class ScheduleService:
             schedules.append(ScheduleResponse(**doc))
 
         logger.debug(
-            f"Listados {len(schedules)} schedules con filtros: "
+            f"Listed {len(schedules)} schedules with filters: "
             f"project_id={project_id}, pipeline_id={pipeline_id}, enabled={enabled}"
         )
 
@@ -254,25 +254,25 @@ class ScheduleService:
         updated_by: str,
     ) -> ScheduleResponse:
         """
-        Actualiza un schedule existente.
+        Update an existing schedule.
 
         Args:
-            schedule_id: ID del schedule
-            update_data: Diccionario con campos a actualizar
-            updated_by: Usuario que actualiza
+            schedule_id: ID of the schedule
+            update_data: Dictionary with fields to update
+            updated_by: User updating the schedule
 
         Returns:
-            ScheduleResponse actualizado
+            Updated ScheduleResponse
 
         Raises:
-            ScheduleNotFoundError: Si el schedule no existe
-            InvalidScheduleError: Si los datos no son válidos
+            ScheduleNotFoundError: If schedule does not exist
+            InvalidScheduleError: If data is invalid
         """
         try:
-            # Obtener schedule actual
+            # Get current schedule
             schedule = await self.get_schedule(schedule_id)
 
-            # Si se actualiza la expresión, recalcular próxima ejecución
+            # If expression is updated, recalculate next execution
             if "expression" in update_data:
                 kind = update_data.get("kind", schedule.kind)
                 expression = update_data["expression"]
@@ -280,21 +280,21 @@ class ScheduleService:
                 next_run_at = self._calculate_next_run(kind, expression)
                 update_data["next_run_at"] = next_run_at
 
-            # Agregar timestamp de actualización
+            # Add update timestamp
             update_data["updated_at"] = datetime.now(timezone.utc)
 
-            # Actualizar en MongoDB
+            # Update in MongoDB
             result = await self.schedules_collection.update_one(
                 {"id": schedule_id},
                 {"$set": update_data},
             )
 
             if result.matched_count == 0:
-                raise ScheduleNotFoundError(f"Schedule {schedule_id} no encontrado")
+                raise ScheduleNotFoundError(f"Schedule {schedule_id} not found")
 
             logger.info(
-                f"Schedule {schedule_id} actualizado por {updated_by}. "
-                f"Campos: {', '.join(update_data.keys())}"
+                f"Schedule {schedule_id} updated by {updated_by}. "
+                f"Fields: {', '.join(update_data.keys())}"
             )
 
             return await self.get_schedule(schedule_id)
@@ -302,43 +302,43 @@ class ScheduleService:
         except (ScheduleNotFoundError, InvalidScheduleError):
             raise
         except Exception as e:
-            logger.error(f"Error al actualizar schedule {schedule_id}: {str(e)}")
-            raise InvalidScheduleError(f"Error al actualizar schedule: {str(e)}")
+            logger.error(f"Error updating schedule {schedule_id}: {str(e)}")
+            raise InvalidScheduleError(f"Error updating schedule: {str(e)}")
 
     async def delete_schedule(self, schedule_id: str) -> bool:
         """
-        Elimina un schedule.
+        Delete a schedule.
 
         Args:
-            schedule_id: ID del schedule a eliminar
+            schedule_id: ID of the schedule to delete
 
         Returns:
-            True si se eliminó exitosamente
+            True if successfully deleted
 
         Raises:
-            ScheduleNotFoundError: Si el schedule no existe
+            ScheduleNotFoundError: If schedule does not exist
         """
-        # Verificar que existe
+        # Verify it exists
         await self.get_schedule(schedule_id)
 
-        # Eliminar
+        # Delete
         result = await self.schedules_collection.delete_one({"id": schedule_id})
 
-        logger.info(f"Schedule {schedule_id} eliminado")
+        logger.info(f"Schedule {schedule_id} deleted")
         return result.deleted_count > 0
 
     async def enable_schedule(self, schedule_id: str) -> ScheduleResponse:
         """
-        Habilita un schedule.
+        Enable a schedule.
 
         Args:
-            schedule_id: ID del schedule
+            schedule_id: ID of the schedule
 
         Returns:
-            ScheduleResponse actualizado
+            Updated ScheduleResponse
 
         Raises:
-            ScheduleNotFoundError: Si el schedule no existe
+            ScheduleNotFoundError: If schedule does not exist
         """
         return await self.update_schedule(
             schedule_id,
@@ -348,16 +348,16 @@ class ScheduleService:
 
     async def disable_schedule(self, schedule_id: str) -> ScheduleResponse:
         """
-        Deshabilita un schedule.
+        Disable a schedule.
 
         Args:
-            schedule_id: ID del schedule
+            schedule_id: ID of the schedule
 
         Returns:
-            ScheduleResponse actualizado
+            Updated ScheduleResponse
 
         Raises:
-            ScheduleNotFoundError: Si el schedule no existe
+            ScheduleNotFoundError: If schedule does not exist
         """
         return await self.update_schedule(
             schedule_id,
@@ -371,29 +371,29 @@ class ScheduleService:
         count: int = 1,
     ) -> Dict[str, Any]:
         """
-        Crea runs históricos (backfill) para un schedule.
+        Create historical runs (backfill) for a schedule.
 
-        Este método simula ejecuciones pasadas del schedule.
-        Útil para llenar histórico o recuperar de fallos.
+        This method simulates past executions of the schedule.
+        Useful for filling history or recovering from failures.
 
         Args:
-            schedule_id: ID del schedule
-            count: Número de runs a crear hacia el pasado
+            schedule_id: ID of the schedule
+            count: Number of runs to create toward the past
 
         Returns:
-            Diccionario con información de backfill (runs_created, start_date, end_date)
+            Dictionary with backfill information (runs_created, start_date, end_date)
 
         Raises:
-            ScheduleNotFoundError: Si el schedule no existe
-            InvalidScheduleError: Si count es inválido
+            ScheduleNotFoundError: If schedule does not exist
+            InvalidScheduleError: If count is invalid
         """
         if count <= 0 or count > 100:
-            raise InvalidScheduleError("El conteo de backfill debe estar entre 1 y 100")
+            raise InvalidScheduleError("Backfill count must be between 1 and 100")
 
-        # Obtener schedule
+        # Get schedule
         schedule = await self.get_schedule(schedule_id)
 
-        # Calcular fechas para runs históricos
+        # Calculate dates for historical runs
         now = datetime.now(timezone.utc)
         run_dates = self._calculate_historical_runs(
             schedule.kind,
@@ -403,15 +403,14 @@ class ScheduleService:
         )
 
         logger.info(
-            f"Backfill para schedule {schedule_id}: "
-            f"{len(run_dates)} runs históricos"
+            f"Backfill for schedule {schedule_id}: " f"{len(run_dates)} historical runs"
         )
 
         return {
             "schedule_id": schedule_id,
             "runs_created": len(run_dates),
             "run_dates": run_dates,
-            "note": "Runs creados en estado PENDING y listos para ejecución",
+            "note": "Runs created in PENDING state and ready for execution",
         }
 
     def _calculate_next_run(
@@ -420,14 +419,14 @@ class ScheduleService:
         expression: str,
     ) -> datetime:
         """
-        Calcula la próxima ejecución según el kind y expression.
+        Calculate next execution based on kind and expression.
 
         Args:
-            kind: "CRON" o "INTERVAL"
-            expression: Expresión CRON o INTERVAL
+            kind: "CRON" or "INTERVAL"
+            expression: CRON or INTERVAL expression
 
         Returns:
-            Próximo datetime de ejecución
+            Next datetime for execution
         """
         now = datetime.now(timezone.utc)
 
@@ -437,11 +436,11 @@ class ScheduleService:
                 next_run = cron.get_next(datetime)
                 return next_run.replace(tzinfo=timezone.utc)
             except Exception as e:
-                logger.error(f"Error al calcular CRON: {str(e)}")
-                raise InvalidScheduleError(f"Expresión CRON inválida: {expression}")
+                logger.error(f"Error calculating CRON: {str(e)}")
+                raise InvalidScheduleError(f"Invalid CRON expression: {expression}")
 
         elif kind == ScheduleKind.INTERVAL.value:
-            # Formato: "1d", "2h", "30m", "15s"
+            # Format: "1d", "2h", "30m", "15s"
             try:
                 value = int(expression[:-1])
                 unit = expression[-1]
@@ -457,17 +456,17 @@ class ScheduleService:
                 elif unit == "w":
                     delta = timedelta(weeks=value)
                 else:
-                    raise ValueError(f"Unidad no reconocida: {unit}")
+                    raise ValueError(f"Unrecognized unit: {unit}")
 
                 next_run = now + delta
                 return next_run
 
             except Exception as e:
-                logger.error(f"Error al calcular INTERVAL: {str(e)}")
-                raise InvalidScheduleError(f"Expresión INTERVAL inválida: {expression}")
+                logger.error(f"Error calculating INTERVAL: {str(e)}")
+                raise InvalidScheduleError(f"Invalid INTERVAL expression: {expression}")
 
         else:
-            raise InvalidScheduleError(f"Kind no reconocido: {kind}")
+            raise InvalidScheduleError(f"Unrecognized kind: {kind}")
 
     def _calculate_historical_runs(
         self,
@@ -477,23 +476,23 @@ class ScheduleService:
         now: datetime,
     ) -> List[datetime]:
         """
-        Calcula fechas de runs históricos para backfill.
+        Calculate dates for historical runs for backfill.
 
         Args:
-            kind: "CRON" o "INTERVAL"
-            expression: Expresión CRON o INTERVAL
-            count: Número de runs históricos
-            now: Fecha actual de referencia
+            kind: "CRON" or "INTERVAL"
+            expression: CRON or INTERVAL expression
+            count: Number of historical runs
+            now: Current reference date
 
         Returns:
-            Lista de datetimes históricos
+            List of historical datetimes
         """
         if kind == ScheduleKind.CRON.value:
             return self._calculate_historical_cron(expression, count, now)
         elif kind == ScheduleKind.INTERVAL.value:
             return self._calculate_historical_interval(expression, count, now)
         else:
-            raise InvalidScheduleError(f"Kind no reconocido: {kind}")
+            raise InvalidScheduleError(f"Unrecognized kind: {kind}")
 
     def _calculate_historical_cron(
         self,
@@ -501,7 +500,7 @@ class ScheduleService:
         count: int,
         now: datetime,
     ) -> List[datetime]:
-        """Calcula histórico para CRON expression"""
+        """Calculate history for CRON expression"""
         try:
             run_dates = []
             cron = croniter(expression, now)
@@ -510,8 +509,8 @@ class ScheduleService:
                 run_dates.insert(0, prev_run.replace(tzinfo=timezone.utc))
             return run_dates
         except Exception as e:
-            logger.error(f"Error al calcular histórico CRON: {str(e)}")
-            raise InvalidScheduleError(f"Expresión CRON inválida: {expression}")
+            logger.error(f"Error calculating CRON history: {str(e)}")
+            raise InvalidScheduleError(f"Invalid CRON expression: {expression}")
 
     def _calculate_historical_interval(
         self,
@@ -519,7 +518,7 @@ class ScheduleService:
         count: int,
         now: datetime,
     ) -> List[datetime]:
-        """Calcula histórico para INTERVAL expression"""
+        """Calculate history for INTERVAL expression"""
         try:
             delta = self._parse_interval_to_timedelta(expression)
             run_dates = []
@@ -529,11 +528,11 @@ class ScheduleService:
                 run_dates.insert(0, current)
             return run_dates
         except Exception as e:
-            logger.error(f"Error al calcular histórico INTERVAL: {str(e)}")
-            raise InvalidScheduleError(f"Expresión INTERVAL inválida: {expression}")
+            logger.error(f"Error calculating INTERVAL history: {str(e)}")
+            raise InvalidScheduleError(f"Invalid INTERVAL expression: {expression}")
 
     def _parse_interval_to_timedelta(self, expression: str) -> timedelta:
-        """Convierte una expresión INTERVAL a timedelta"""
+        """Convert an INTERVAL expression to timedelta"""
         value = int(expression[:-1])
         unit = expression[-1]
 
@@ -546,6 +545,6 @@ class ScheduleService:
         }
 
         if unit not in unit_mapping:
-            raise ValueError(f"Unidad no reconocida: {unit}")
+            raise ValueError(f"Unrecognized unit: {unit}")
 
         return unit_mapping[unit](value)

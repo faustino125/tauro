@@ -18,7 +18,7 @@ class TestCSVReader:
 
         result = csv_reader.read("test.csv", {})
         assert result == mock_df
-        # El CSVReader agrega opciones por defecto, debemos esperar esta configuración
+        # CSVReader adds default options, we should expect this configuration
         expected_config = {"options": DEFAULT_CSV_OPTIONS}
         csv_reader._spark_read.assert_called_once_with(
             "csv", "test.csv", expected_config
@@ -39,7 +39,7 @@ class TestCSVReader:
         result = csv_reader.read("test.csv", config)
 
         assert result == mock_df
-        # Las opciones personalizadas deben fusionarse con las opciones por defecto
+        # Custom options should be merged with default options
         expected_options = {**DEFAULT_CSV_OPTIONS, **config["options"]}
         expected_config = {"options": expected_options}
         csv_reader._spark_read.assert_called_once_with(
@@ -56,7 +56,7 @@ class TestQueryReader:
 
     def test_read_valid_query(self, query_reader):
         mock_df = MagicMock()
-        # Mock de _ctx_spark en lugar de un método inexistente
+        # Mock _ctx_spark instead of a non-existent method
         query_reader._ctx_spark = MagicMock(return_value=MagicMock())
         query_reader._ctx_spark().sql.return_value = mock_df
 

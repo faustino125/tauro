@@ -15,6 +15,7 @@ from loguru import logger  # type: ignore
 from tauro.exec.commands import Command, MLNodeCommand, NodeCommand
 from tauro.exec.dependency_resolver import DependencyResolver
 from tauro.exec.pipeline_validator import PipelineValidator
+from tauro.exec.resource_pool import ResourcePool, get_default_resource_pool
 
 
 @lru_cache(maxsize=64)
@@ -34,6 +35,7 @@ class NodeExecutor:
         self.output_manager = output_manager
         self.max_workers = max_workers
         self.is_ml_layer = getattr(context, "is_ml_layer", False)
+        self.resource_pool = get_default_resource_pool()
 
     def execute_single_node(
         self,
@@ -51,6 +53,16 @@ class NodeExecutor:
             function = self._load_node_function(node_config)
             input_dfs = self.input_loader.load_inputs(node_config)
 
+            # Register input resources for cleanup
+            for idx, df in enumerate(input_dfs):
+                if df is not None:
+                    resource_type = self._detect_resource_type(df)
+                    self.resource_pool.register_resource(
+                        node_id=node_name,
+                        resource=df,
+                        resource_type=resource_type,
+                    )
+
             command = self._create_enhanced_command(
                 function,
                 input_dfs,
@@ -62,6 +74,15 @@ class NodeExecutor:
             )
 
             result_df = command.execute()
+
+            # Register result resource for cleanup
+            if result_df is not None:
+                resource_type = self._detect_resource_type(result_df)
+                self.resource_pool.register_resource(
+                    node_id=node_name,
+                    resource=result_df,
+                    resource_type=resource_type,
+                )
 
             self._validate_and_save_enhanced_output(
                 result_df,
@@ -76,30 +97,74 @@ class NodeExecutor:
             logger.error(f"Failed to execute node '{node_name}': {str(e)}")
             raise
         finally:
-            self._release_resources(input_dfs, result_df)
+            # Release all node resources from pool
+            self.resource_pool.release_node_resources(node_name)
             duration = time.perf_counter() - start_time
             logger.debug(f"Node '{node_name}' executed in {duration:.2f}s")
 
-    def _release_resources(self, *dataframes):
-        """Explicitly release resources for memory management"""
-        for df in dataframes:
+    def _release_resources(self, node_name: str, *dataframes: Any) -> None:
+        """Register and mark resources for cleanup via resource pool.
+
+        Args:
+            node_name: Node identifier for resource grouping
+            *dataframes: DataFrames and other resources to track
+        """
+        for idx, df in enumerate(dataframes):
             if df is None:
                 continue
 
-            try:
-                if hasattr(df, "unpersist"):
-                    df.unpersist()  # Spark DataFrame
-                elif hasattr(df, "close"):
-                    df.close()  # Conexiones
-                elif hasattr(df, "clear"):
-                    df.clear()  # Colecciones
-            except Exception as e:
-                logger.debug(f"Resource release warning: {str(e)}")
+            # Detect resource type
+            resource_type = self._detect_resource_type(df)
 
+            # Register with pool for cleanup
             try:
-                del df
-            except Exception:
-                pass
+                self.resource_pool.register_resource(
+                    node_id=node_name,
+                    resource=df,
+                    resource_type=resource_type,
+                )
+                logger.debug(
+                    f"Registered {resource_type} resource #{idx} for node '{node_name}'"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to register resource for node '{node_name}': {str(e)}"
+                )
+
+    def _detect_resource_type(self, resource: Any) -> str:
+        """Detect the type of resource for proper cleanup.
+
+        Args:
+            resource: The resource object to analyze
+
+        Returns:
+            Resource type string (spark, pandas, gpu, connection, temp_file, generic)
+        """
+        # Check for Spark DataFrame/RDD
+        if hasattr(resource, "unpersist") and hasattr(resource, "rdd"):
+            return "spark"
+
+        # Check for Pandas DataFrame
+        if hasattr(resource, "columns") and hasattr(resource, "empty"):
+            return "pandas"
+
+        # Check for GPU resources
+        if hasattr(resource, "device") and hasattr(resource, "reset"):
+            return "gpu"
+
+        # Check for database connections
+        if hasattr(resource, "cursor") or hasattr(resource, "execute"):
+            return "connection"
+
+        # Check for file paths
+        if isinstance(resource, str):
+            import os
+
+            if os.path.exists(resource):
+                return "temp_file"
+
+        # Generic resource
+        return "generic"
 
     def execute_nodes_parallel(
         self,
@@ -110,62 +175,137 @@ class NodeExecutor:
         end_date: str,
         ml_info: Dict[str, Any],
     ) -> None:
-        """Execute nodes in parallel while respecting dependencies with ML enhancements."""
-        completed = set()
-        running = {}
-        ready_queue = deque()
-        failed = False
-        execution_results = {}
+        """Execute nodes in parallel while respecting dependencies with ML enhancements.
 
+        Orchestrates parallel execution by delegating to specialized phases.
+        """
+        # Phase 1: Initialize execution state
+        execution_state = self._initialize_execution_state(
+            execution_order, node_configs
+        )
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            try:
+                # Phase 2: Coordinate parallel execution
+                self._coordinate_parallel_execution(
+                    executor=executor,
+                    execution_state=execution_state,
+                    dag=dag,
+                    node_configs=node_configs,
+                    start_date=start_date,
+                    end_date=end_date,
+                    ml_info=ml_info,
+                )
+            except Exception as e:
+                logger.error(f"Pipeline execution failed: {str(e)}")
+                self._cancel_all_futures(execution_state["running"])
+                raise
+            finally:
+                # Phase 3: Cleanup resources
+                self._cleanup_execution(
+                    execution_state=execution_state,
+                    ml_info=ml_info,
+                )
+
+    def _initialize_execution_state(
+        self,
+        execution_order: List[str],
+        node_configs: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Initialize execution state with queues and tracking structures.
+
+        Returns:
+            State dictionary containing ready_queue, running, completed, failed flag, and results.
+        """
+        ready_queue = deque()
+
+        # Identify nodes with no dependencies (ready for immediate execution)
         for node in execution_order:
             node_config = node_configs[node]
             dependencies = DependencyResolver.get_node_dependencies(node_config)
             if not dependencies:
                 ready_queue.append(node)
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            try:
-                while (ready_queue or running) and not failed:
-                    self._submit_ready_nodes(
-                        ready_queue,
-                        running,
-                        executor,
-                        start_date,
-                        end_date,
-                        ml_info,
-                        node_configs,
-                    )
+        logger.debug(f"Initial ready nodes: {list(ready_queue)}")
 
-                    if running:
-                        failed = self._process_completed_nodes(
-                            running,
-                            completed,
-                            dag,
-                            ready_queue,
-                            node_configs,
-                            execution_results,
-                        )
+        return {
+            "ready_queue": ready_queue,
+            "running": {},
+            "completed": set(),
+            "failed": False,
+            "execution_results": {},
+        }
 
-                if running:
-                    logger.warning(
-                        f"Pipeline ended with {len(running)} unfinished futures"
-                    )
-                    self._handle_unfinished_futures(running)
+    def _coordinate_parallel_execution(
+        self,
+        executor: ThreadPoolExecutor,
+        execution_state: Dict[str, Any],
+        dag: Dict[str, Set[str]],
+        node_configs: Dict[str, Dict[str, Any]],
+        start_date: str,
+        end_date: str,
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """Coordinate the main execution loop until all nodes complete or failure occurs."""
+        while (
+            execution_state["ready_queue"] or execution_state["running"]
+        ) and not execution_state["failed"]:
+            # Submit newly ready nodes to executor
+            self._submit_ready_nodes(
+                ready_queue=execution_state["ready_queue"],
+                running=execution_state["running"],
+                executor=executor,
+                start_date=start_date,
+                end_date=end_date,
+                ml_info=ml_info,
+                node_configs=node_configs,
+            )
 
-            except Exception as e:
-                logger.error(f"Pipeline execution failed: {str(e)}")
-                self._cancel_all_futures(running)
-                raise
-            finally:
-                self._cleanup_futures(running)
+            # Process completed nodes and check for failures
+            if execution_state["running"]:
+                execution_state["failed"] = self._process_completed_nodes(
+                    running=execution_state["running"],
+                    completed=execution_state["completed"],
+                    dag=dag,
+                    ready_queue=execution_state["ready_queue"],
+                    node_configs=node_configs,
+                    execution_results=execution_state["execution_results"],
+                )
 
-        if failed:
+        # Handle any remaining unfinished futures
+        if execution_state["running"]:
+            logger.warning(
+                f"Pipeline ended with {len(execution_state['running'])} unfinished futures"
+            )
+            self._handle_unfinished_futures(execution_state["running"])
+
+    def _cleanup_execution(
+        self,
+        execution_state: Dict[str, Any],
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """Cleanup resources and handle final state after execution completes.
+
+        Raises:
+            RuntimeError: If execution failed due to node failures.
+        """
+        # Ensure all futures are cleaned up
+        self._cleanup_futures(execution_state["running"])
+
+        # Check if execution failed
+        if execution_state["failed"]:
             raise RuntimeError("Pipeline execution failed due to node failures")
 
+        # Log summary for ML pipelines
         if self.is_ml_layer:
-            self._log_ml_pipeline_summary(execution_results, ml_info)
+            self._log_ml_pipeline_summary(
+                execution_state["execution_results"],
+                ml_info,
+            )
 
-        logger.info(f"Pipeline execution completed. Processed {len(completed)} nodes.")
+        logger.info(
+            f"Pipeline execution completed. Processed {len(execution_state['completed'])} nodes."
+        )
 
     def _create_enhanced_command(
         self,

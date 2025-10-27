@@ -271,9 +271,9 @@ async def run_pipeline(
     store=Depends(get_orchestrator_store),
 ):
     """
-    Ejecutar un pipeline.
+    Execute a pipeline.
 
-    Crea una nueva ejecución del pipeline especificado con los parámetros dados.
+    Create a new execution of the specified pipeline with the given parameters.
     """
     project_id = validate_identifier(project_id, "project_id")
     pipeline_id = validate_identifier(pipeline_id, "pipeline_id")

@@ -36,25 +36,25 @@ class TestBaseIO:
         assert base_io._ctx_get("nonexistent") is None
 
     def test_sanitize_sql_query_valid(self):
-        # Verificar que el método existe antes de usarlo
+        # Check if the method exists before using it
         if hasattr(BaseIO, "sanitize_sql_query"):
             valid_queries = [
                 "SELECT * FROM table WHERE condition = 1",
-                # Queries con comentarios benignos deben ser aceptadas por el sanitizer mejorado
-                "SELECT id FROM users -- comentario inofensivo",
-                "WITH cte AS (SELECT * FROM t) SELECT * FROM cte /* nota */",
-                "SELECT 'text; not a statement' AS col FROM tbl",  # ; dentro de literales aceptable
+                # Queries with benign comments should be accepted by the improved sanitizer
+                "SELECT id FROM users -- harmless comment",
+                "WITH cte AS (SELECT * FROM t) SELECT * FROM cte /* note */",
+                "SELECT 'text; not a statement' AS col FROM tbl",  # ; within literals acceptable
             ]
             for q in valid_queries:
                 result = BaseIO.sanitize_sql_query(q)
                 assert result == q
         else:
-            pytest.skip("Método sanitize_sql_query no disponible")
+            pytest.skip("sanitize_sql_query method not available")
 
     def test_sanitize_sql_query_dangerous(self):
-        # Verificar que el método existe antes de usarlo
+        # Check if the method exists before using it
         if not hasattr(BaseIO, "sanitize_sql_query"):
-            pytest.skip("Método sanitize_sql_query no disponible")
+            pytest.skip("sanitize_sql_query method not available")
 
         # Casos claramente peligrosos que deben ser rechazados
         dangerous_queries = [

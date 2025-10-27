@@ -544,7 +544,7 @@ class TemplateGenerator:
                     f.write(f"{top_key} = {self._fmt_dsl_value(top_val)}\n")
 
     def _write_dsl_sections(self, f, path: List[str], obj: Dict[str, Any]) -> None:
-        """Escribe una sección [a.b.c] y sus claves escalares, luego recurre por sub-dicts."""
+        """Write a section [a.b.c] and its scalar keys, then recurse for sub-dicts."""
         section_name = ".".join(path)
         f.write(f"[{section_name}]\n")
         nested_items: List[tuple[str, Any]] = []
@@ -558,7 +558,7 @@ class TemplateGenerator:
             self._write_dsl_sections(f, path + [k], v)
 
     def _fmt_dsl_value(self, v: Any) -> str:
-        """Formatea valores para DSL (strings con comillas, bool en minúsculas, listas con elementos formateados)."""
+        """Format values for DSL (strings with quotes, bool lowercase, lists with formatted elements)."""
         if isinstance(v, bool):
             return "true" if v else "false"
         if isinstance(v, (int, float)):

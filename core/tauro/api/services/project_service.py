@@ -1,8 +1,8 @@
 """
-ProjectService: Gestión de proyectos (CRUD + estadísticas)
+ProjectService: Project management (CRUD + statistics)
 
-Este servicio implementa la lógica de negocio para la gestión completa de proyectos.
-Interactúa con MongoDB a través de la capa de persistencia.
+This service implements business logic for complete project management.
+It interacts with MongoDB through the persistence layer.
 """
 
 import logging
@@ -27,40 +27,40 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectNotFoundError(Exception):
-    """Proyecto no encontrado en la base de datos"""
+    """Project not found in database"""
 
     pass
 
 
 class ProjectAlreadyExistsError(Exception):
-    """Proyecto con ese nombre ya existe"""
+    """Project with that name already exists"""
 
     pass
 
 
 class InvalidProjectError(Exception):
-    """Datos de proyecto inválidos"""
+    """Invalid project data"""
 
     pass
 
 
 class ProjectService:
     """
-    Servicio de gestión de proyectos.
+    Project management service.
 
-    Responsabilidades:
-    - CRUD de proyectos (Create, Read, Update, Delete)
-    - Validaciones de negocio
-    - Manejo de pipelines dentro de proyectos
-    - Estadísticas y reporting
+    Responsibilities:
+    - CRUD for projects (Create, Read, Update, Delete)
+    - Business logic validations
+    - Pipeline management within projects
+    - Statistics and reporting
     """
 
     def __init__(self, db: AsyncDatabase):
         """
-        Inicializa el servicio con una instancia de MongoDB.
+        Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance de Motor
+            db: AsyncDatabase instance from Motor
         """
         self.db = db
         self.projects_collection = db["projects"]
@@ -75,33 +75,33 @@ class ProjectService:
         created_by: str,
     ) -> ProjectResponse:
         """
-        Crea un nuevo proyecto.
+        Create a new project.
 
         Args:
-            project_data: Datos del proyecto a crear
-            created_by: Usuario que crea el proyecto (email o ID)
+            project_data: Project data to create
+            created_by: User creating the project (email or ID)
 
         Returns:
-            ProjectResponse con el proyecto creado
+            ProjectResponse with created project
 
         Raises:
-            ProjectAlreadyExistsError: Si ya existe un proyecto con ese nombre
-            InvalidProjectError: Si los datos no son válidos
+            ProjectAlreadyExistsError: If project with name already exists
+            InvalidProjectError: If data is invalid
         """
         try:
-            # Validar datos de entrada
+            # Validate input data
             self.validator.validate_project_creation(project_data)
 
-            # Verificar que el nombre sea único
+            # Verify that the name is unique
             existing = await self.projects_collection.find_one(
                 {"name": project_data.name}
             )
             if existing:
                 raise ProjectAlreadyExistsError(
-                    f"Ya existe un proyecto con el nombre '{project_data.name}'"
+                    f"Project with name '{project_data.name}' already exists"
                 )
 
-            # Serializar a documento de MongoDB
+            # Serialize to MongoDB document
             project_id = uuid4()
             project_doc: ProjectDocument = {
                 "id": str(project_id),
@@ -116,38 +116,38 @@ class ProjectService:
                 "tags": project_data.tags or {},
             }
 
-            # Insertar en MongoDB
+            # Insert into MongoDB
             await self.projects_collection.insert_one(project_doc)
-            logger.info(f"Proyecto creado: {project_id} por {created_by}")
+            logger.info(f"Project created: {project_id} by {created_by}")
 
-            # Retornar como response
+            # Return as response
             return ProjectResponse(**project_doc)
 
         except ProjectAlreadyExistsError:
             raise
         except Exception as e:
-            logger.error(f"Error al crear proyecto: {str(e)}")
-            raise InvalidProjectError(f"Error al crear proyecto: {str(e)}")
+            logger.error(f"Error creating project: {str(e)}")
+            raise InvalidProjectError(f"Error creating project: {str(e)}")
 
     async def read_project(self, project_id: str) -> ProjectResponse:
         """
-        Lee un proyecto por ID.
+        Read a project by ID.
 
         Args:
-            project_id: ID del proyecto
+            project_id: Project ID
 
         Returns:
-            ProjectResponse con los datos del proyecto
+            ProjectResponse with project data
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
+            ProjectNotFoundError: If project does not exist
         """
         project_doc = await self.projects_collection.find_one({"id": project_id})
 
         if not project_doc:
-            raise ProjectNotFoundError(f"Proyecto {project_id} no encontrado")
+            raise ProjectNotFoundError(f"Project {project_id} not found")
 
-        # Remover el _id de MongoDB antes de convertir a Pydantic
+        # Remove MongoDB _id before converting to Pydantic
         project_doc.pop("_id", None)
         return ProjectResponse(**project_doc)
 
@@ -158,81 +158,81 @@ class ProjectService:
         updated_by: str,
     ) -> ProjectResponse:
         """
-        Actualiza un proyecto existente.
+        Update an existing project.
 
         Args:
-            project_id: ID del proyecto a actualizar
-            update_data: Diccionario con campos a actualizar
-            updated_by: Usuario que realiza la actualización
+            project_id: ID of the project to update
+            update_data: Dictionary with fields to update
+            updated_by: User performing the update
 
         Returns:
-            ProjectResponse con los datos actualizados
+            ProjectResponse with updated data
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
-            InvalidProjectError: Si los datos no son válidos
+            ProjectNotFoundError: If project does not exist
+            InvalidProjectError: If data is invalid
         """
         try:
-            # Verificar que el proyecto existe
+            # Verify that the project exists
             project_doc = await self.projects_collection.find_one({"id": project_id})
             if not project_doc:
-                raise ProjectNotFoundError(f"Proyecto {project_id} no encontrado")
+                raise ProjectNotFoundError(f"Project {project_id} not found")
 
-            # Validar cambios de nombre (debe ser único)
+            # Validate name changes (must be unique)
             if "name" in update_data and update_data["name"] != project_doc["name"]:
                 existing = await self.projects_collection.find_one(
                     {"name": update_data["name"]}
                 )
                 if existing:
                     raise InvalidProjectError(
-                        f"Ya existe un proyecto con el nombre '{update_data['name']}'"
+                        f"Project with name '{update_data['name']}' already exists"
                     )
 
-            # Preparar actualización
+            # Prepare update
             update_dict = {
                 **update_data,
                 "updated_at": datetime.now(timezone.utc),
             }
 
-            # Actualizar en MongoDB
+            # Update in MongoDB
             await self.projects_collection.update_one(
                 {"id": project_id},
                 {"$set": update_dict},
             )
 
             logger.info(
-                f"Proyecto {project_id} actualizado por {updated_by}. "
-                f"Campos: {', '.join(update_dict.keys())}"
+                f"Project {project_id} updated by {updated_by}. "
+                f"Fields: {', '.join(update_dict.keys())}"
             )
 
-            # Retornar proyecto actualizado
+            # Return updated project
             return await self.read_project(project_id)
 
         except (ProjectNotFoundError, InvalidProjectError):
             raise
         except Exception as e:
-            logger.error(f"Error al actualizar proyecto {project_id}: {str(e)}")
-            raise InvalidProjectError(f"Error al actualizar proyecto: {str(e)}")
+            logger.error(f"Error updating project {project_id}: {str(e)}")
+            raise InvalidProjectError(f"Error updating project: {str(e)}")
 
     async def delete_project(self, project_id: str) -> bool:
         """
-        Elimina un proyecto (soft delete: marca como deleted).
+        Delete a project (soft delete: mark as deleted).
 
         Args:
-            project_id: ID del proyecto a eliminar
+            project_id: ID of the project to delete
 
         Returns:
-            True si se eliminó exitosamente
+            True if successfully deleted
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
+            ProjectNotFoundError: If project does not exist
         """
-        # Verificar que existe
+        # Verify it exists
         project_doc = await self.projects_collection.find_one({"id": project_id})
         if not project_doc:
-            raise ProjectNotFoundError(f"Proyecto {project_id} no encontrado")
+            raise ProjectNotFoundError(f"Project {project_id} not found")
 
-        # Soft delete: marcar como archived
+        # Soft delete: mark as archived
         result = await self.projects_collection.update_one(
             {"id": project_id},
             {
@@ -243,7 +243,7 @@ class ProjectService:
             },
         )
 
-        logger.info(f"Proyecto {project_id} eliminado (archived)")
+        logger.info(f"Project {project_id} deleted (archived)")
         return result.modified_count > 0
 
     async def list_projects(
@@ -255,19 +255,19 @@ class ProjectService:
         created_by: Optional[str] = None,
     ) -> tuple[List[ProjectResponse], int]:
         """
-        Lista proyectos con filtros opcionales.
+        List projects with optional filters.
 
         Args:
-            status: Filtrar por estado (active, archived, draft)
-            tags: Filtrar por tags (key:value pairs)
-            limit: Número máximo de resultados
-            offset: Número de resultados a saltar
-            created_by: Filtrar por usuario creador
+            status: Filter by status (active, archived, draft)
+            tags: Filter by tags (key:value pairs)
+            limit: Maximum number of results
+            offset: Number of results to skip
+            created_by: Filter by creator user
 
         Returns:
-            Tupla de (lista de proyectos, total de registros)
+            Tuple of (list of projects, total records)
         """
-        # Construir filtro
+        # Build filter
         query = {}
 
         if status:
@@ -280,10 +280,10 @@ class ProjectService:
             for key, value in tags.items():
                 query[f"tags.{key}"] = value
 
-        # Contar total
+        # Count total
         total = await self.projects_collection.count_documents(query)
 
-        # Obtener página
+        # Get page
         cursor = (
             self.projects_collection.find(query)
             .sort("created_at", -1)
@@ -297,7 +297,7 @@ class ProjectService:
             projects.append(ProjectResponse(**doc))
 
         logger.debug(
-            f"Listados {len(projects)} proyectos con filtros: "
+            f"Listed {len(projects)} projects with filters: "
             f"status={status}, tags={tags}, offset={offset}"
         )
 
@@ -305,26 +305,26 @@ class ProjectService:
 
     async def get_project_stats(self, project_id: str) -> Dict[str, Any]:
         """
-        Obtiene estadísticas del proyecto.
+        Get project statistics.
 
         Args:
-            project_id: ID del proyecto
+            project_id: Project ID
 
         Returns:
-            Diccionario con estadísticas
+            Dictionary with statistics
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
+            ProjectNotFoundError: If project does not exist
         """
-        # Verificar que existe
+        # Verify it exists
         project = await self.read_project(project_id)
 
-        # Contar runs
+        # Count runs
         total_runs = await self.pipeline_runs_collection.count_documents(
             {"project_id": project_id}
         )
 
-        # Runs por estado
+        # Runs by state
         run_states = await self.pipeline_runs_collection.aggregate(
             [
                 {"$match": {"project_id": project_id}},
@@ -334,7 +334,7 @@ class ProjectService:
 
         runs_by_state = {item["_id"]: item["count"] for item in run_states}
 
-        # Contar schedules habilitados
+        # Count active schedules
         active_schedules = await self.schedules_collection.count_documents(
             {"project_id": project_id, "enabled": True}
         )
@@ -342,7 +342,7 @@ class ProjectService:
         # Pipelines
         num_pipelines = len(project.pipelines or [])
 
-        logger.info(f"Stats recuperadas para proyecto {project_id}")
+        logger.info(f"Stats retrieved for project {project_id}")
 
         return {
             "project_id": project_id,
@@ -361,43 +361,43 @@ class ProjectService:
         pipeline_config: PipelineConfig,
     ) -> ProjectResponse:
         """
-        Agrega un nuevo pipeline a un proyecto.
+        Add a new pipeline to a project.
 
         Args:
-            project_id: ID del proyecto
-            pipeline_config: Configuración del pipeline
+            project_id: Project ID
+            pipeline_config: Pipeline configuration
 
         Returns:
-            ProjectResponse actualizado
+            Updated ProjectResponse
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
-            InvalidProjectError: Si la configuración es inválida
+            ProjectNotFoundError: If project does not exist
+            InvalidProjectError: If configuration is invalid
         """
-        # Verificar que existe
+        # Verify it exists
         project = await self.read_project(project_id)
 
-        # Validar configuración
+        # Validate configuration
         try:
             from tauro.api.schemas.project_validators import PipelineValidator
 
             validator = PipelineValidator()
             validator.validate_pipeline(pipeline_config)
         except Exception as e:
-            raise InvalidProjectError(f"Pipeline inválido: {str(e)}")
+            raise InvalidProjectError(f"Invalid pipeline: {str(e)}")
 
-        # Verificar que no existe un pipeline con el mismo nombre
+        # Verify that no pipeline exists with the same name
         existing_pipelines = project.pipelines or []
         if any(p.name == pipeline_config.name for p in existing_pipelines):
             raise InvalidProjectError(
-                f"Ya existe un pipeline con el nombre '{pipeline_config.name}'"
+                f"Pipeline with name '{pipeline_config.name}' already exists"
             )
 
-        # Agregar pipeline
+        # Add pipeline
         pipelines_updated = [p.dict() for p in existing_pipelines]
         pipelines_updated.append(pipeline_config.dict())
 
-        # Actualizar
+        # Update
         return await self.update_project(
             project_id,
             {"pipelines": pipelines_updated},
@@ -410,23 +410,23 @@ class ProjectService:
         pipeline_id: str,
     ) -> ProjectResponse:
         """
-        Elimina un pipeline de un proyecto.
+        Remove a pipeline from a project.
 
         Args:
-            project_id: ID del proyecto
-            pipeline_id: ID del pipeline a eliminar
+            project_id: Project ID
+            pipeline_id: ID of the pipeline to remove
 
         Returns:
-            ProjectResponse actualizado
+            Updated ProjectResponse
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
-            InvalidProjectError: Si el pipeline no existe
+            ProjectNotFoundError: If project does not exist
+            InvalidProjectError: If pipeline does not exist
         """
-        # Verificar que existe
+        # Verify it exists
         project = await self.read_project(project_id)
 
-        # Buscar y eliminar pipeline
+        # Find and remove pipeline
         pipelines = project.pipelines or []
         pipeline_found = False
 
@@ -437,11 +437,9 @@ class ProjectService:
                 break
 
         if not pipeline_found:
-            raise InvalidProjectError(
-                f"Pipeline {pipeline_id} no encontrado en proyecto"
-            )
+            raise InvalidProjectError(f"Pipeline {pipeline_id} not found in project")
 
-        # Actualizar
+        # Update
         return await self.update_project(
             project_id,
             {"pipelines": [p.dict() for p in pipelines]},
@@ -455,31 +453,31 @@ class ProjectService:
         created_by: str,
     ) -> ProjectResponse:
         """
-        Duplica un proyecto existente.
+        Duplicate an existing project.
 
         Args:
-            project_id: ID del proyecto a duplicar
-            new_name: Nombre del nuevo proyecto
-            created_by: Usuario que crea el proyecto
+            project_id: ID of the project to duplicate
+            new_name: Name of the new project
+            created_by: User creating the project
 
         Returns:
-            ProjectResponse con el nuevo proyecto
+            ProjectResponse with the new project
 
         Raises:
-            ProjectNotFoundError: Si el proyecto no existe
-            ProjectAlreadyExistsError: Si el nuevo nombre ya existe
+            ProjectNotFoundError: If project does not exist
+            ProjectAlreadyExistsError: If new name already exists
         """
-        # Obtener proyecto original
+        # Get original project
         original = await self.read_project(project_id)
 
-        # Crear datos para nuevo proyecto
+        # Create data for new project
         project_data = ProjectCreate(
             name=new_name,
-            description=f"Copia de {original.name}",
+            description=f"Copy of {original.name}",
             global_settings=original.global_settings,
             pipelines=original.pipelines,
             tags=original.tags,
         )
 
-        # Crear nuevo proyecto
+        # Create new project
         return await self.create_project(project_data, created_by)

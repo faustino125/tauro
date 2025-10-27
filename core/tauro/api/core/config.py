@@ -5,10 +5,10 @@ from pathlib import Path
 
 class Settings(BaseSettings):
     """
-    Configuración global de la aplicación.
+    Global application configuration.
 
-    Las variables de entorno tienen precedencia sobre los valores por defecto.
-    Prefijo: TAURO_ (ejemplo: TAURO_API_HOST)
+    Environment variables have precedence over default values.
+    Prefix: TAURO_ (example: TAURO_API_HOST)
     """
 
     # =========================================================================
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # =========================================================================
     api_title: str = "Tauro Pipeline API"
     api_version: str = "2.0.0"
-    api_description: str = "API REST para gestión de pipelines de datos"
+    api_description: str = "REST API for data pipeline management"
 
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
     api_port: int = Field(default=8000, env="API_PORT")

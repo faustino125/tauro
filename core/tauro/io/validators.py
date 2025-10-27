@@ -90,11 +90,11 @@ class ConfigValidator(BaseValidator):
 
 class DataValidator:
     def validate(self, df: Any, allow_empty: bool = False) -> None:
-        """Alias de validate_dataframe para compatibilidad."""
+        """Alias for validate_dataframe for backward compatibility."""
         self.validate_dataframe(df, allow_empty=allow_empty)
 
     def validate_dataframe(self, df: Any, allow_empty: bool = False) -> None:
-        """Valida que el DataFrame no sea None y, si aplica, que no esté vacío."""
+        """Validate that the DataFrame is not None and, if applicable, is not empty."""
         if df is None:
             raise DataValidationError("DataFrame cannot be None")
 

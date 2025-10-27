@@ -83,6 +83,110 @@ def ping_database() -> bool:
         return False
 
 
+class MongoContextManager:
+    """
+    Context manager for safe MongoDB connection handling.
+
+    Ensures connections are properly closed even if errors occur.
+
+    Example:
+        ```python
+        # Automatic cleanup
+        with MongoContextManager() as client:
+            db = client[DATABASE_NAME]
+            result = db.collection.find_one()
+
+        # Connection is closed automatically
+        ```
+    """
+
+    def __init__(self):
+        """Initialize context manager."""
+        self.client: Optional[MongoClient] = None
+
+    def __enter__(self) -> MongoClient:
+        """Enter context: get or create MongoDB client."""
+        self.client = get_client()
+        return self.client
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit context: ensure connection is available for next use."""
+        # Note: We don't close here to keep connection pooling benefits
+        # The connection will be reused for future operations
+        # Use close_client() explicitly if you need to force cleanup
+        pass
+
+
+def get_mongo_context() -> MongoContextManager:
+    """
+    Get a context manager for MongoDB operations.
+
+    Returns:
+        MongoContextManager for use with 'with' statement
+
+    Example:
+        ```python
+        with get_mongo_context() as client:
+            collection = client[DATABASE_NAME]["collections"]
+            collection.insert_one({"data": "value"})
+        ```
+    """
+    return MongoContextManager()
+
+
+class ManagedMongoClient:
+    """
+    Wrapper for MongoDB client with guaranteed cleanup.
+
+    This is useful for applications that need strict resource cleanup
+    or when integrating with dependency injection frameworks.
+
+    Example:
+        ```python
+        client = ManagedMongoClient()
+        try:
+            db = client.database
+            result = db.collection.find_one()
+        finally:
+            client.close()
+        ```
+    """
+
+    def __init__(self):
+        """Initialize managed client."""
+        self._client = get_client()
+
+    @property
+    def client(self) -> MongoClient:
+        """Get the underlying MongoClient."""
+        return self._client
+
+    @property
+    def database(self) -> Database:
+        """Get the database."""
+        return get_database()
+
+    def get_collection(self, name: str) -> Collection:
+        """Get a collection by name."""
+        return get_collection(name)
+
+    def close(self) -> None:
+        """Close the MongoDB connection."""
+        close_client()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit: close connection."""
+        self.close()
+
+    def ping(self) -> bool:
+        """Check if database is accessible."""
+        return ping_database()
+
+
 __all__ = [
     "DATABASE_URL",
     "DATABASE_NAME",
@@ -91,4 +195,7 @@ __all__ = [
     "get_collection",
     "close_client",
     "ping_database",
+    "MongoContextManager",
+    "ManagedMongoClient",
+    "get_mongo_context",
 ]

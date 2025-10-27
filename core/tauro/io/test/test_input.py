@@ -14,7 +14,7 @@ from tauro.io.exceptions import ConfigurationError, ReadOperationError
 
 @pytest.fixture
 def basic_context(tmp_path) -> Dict[str, Any]:
-    """Contexto base con execution_mode local y input_config vacío por defecto."""
+    """Base context with local execution_mode and empty input_config by default."""
     return {"execution_mode": "local", "input_config": {}}
 
 

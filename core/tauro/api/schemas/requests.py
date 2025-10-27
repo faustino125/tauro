@@ -24,16 +24,16 @@ ScheduleKind = CoreScheduleKind
 
 
 class PipelineRunRequest(BaseModel):
-    """Request para ejecutar un pipeline"""
+    """Request to execute a pipeline"""
 
     params: Optional[Dict[str, Any]] = Field(
-        default=None, description="Parámetros opcionales para la ejecución"
+        default=None, description="Optional parameters for execution"
     )
     timeout: Optional[int] = Field(
-        default=None, gt=0, description="Timeout en segundos (opcional)"
+        default=None, gt=0, description="Timeout in seconds (optional)"
     )
     tags: Optional[Dict[str, str]] = Field(
-        default=None, description="Tags opcionales para la ejecución"
+        default=None, description="Optional tags for execution"
     )
 
     _validate_params = validator("params", allow_reuse=True)(validate_json_params)
@@ -54,30 +54,30 @@ class PipelineRunRequest(BaseModel):
 
 
 class ScheduleCreateRequest(BaseModel):
-    """Request para crear un schedule"""
+    """Request to create a schedule"""
 
-    pipeline_id: str = Field(..., description="ID del pipeline a programar")
-    kind: ScheduleKind = Field(..., description="Tipo de schedule (INTERVAL o CRON)")
+    pipeline_id: str = Field(..., description="ID of the pipeline to schedule")
+    kind: ScheduleKind = Field(..., description="Schedule type (INTERVAL or CRON)")
     expression: str = Field(
         ...,
-        description="Expresión del schedule (intervalo en segundos o expresión cron)",
+        description="Schedule expression (interval in seconds or CRON expression)",
     )
-    enabled: bool = Field(default=True, description="Si el schedule está habilitado")
+    enabled: bool = Field(default=True, description="If the schedule is enabled")
     max_concurrency: Optional[int] = Field(
-        default=1, gt=0, le=100, description="Máximo número de ejecuciones concurrentes"
+        default=1, gt=0, le=100, description="Maximum number of concurrent executions"
     )
     timeout_seconds: Optional[int] = Field(
         default=None,
         gt=0,
         le=86400,
-        description="Timeout en segundos para cada ejecución",
+        description="Timeout in seconds for each execution",
     )
     retry_policy: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Política de reintentos (por ejemplo {'retries': 1, 'delay': 60})",
+        description="Retry policy (e.g. {'retries': 1, 'delay': 60})",
     )
     next_run_at: Optional[datetime] = Field(
-        default=None, description="Fecha/hora del próximo run (opcional)"
+        default=None, description="Date/time of next run (optional)"
     )
 
     _validate_pipeline_id = validator("pipeline_id", allow_reuse=True)(
@@ -89,7 +89,7 @@ class ScheduleCreateRequest(BaseModel):
 
     @validator("expression")
     def validate_expression(cls, v, values):
-        """Validar expresión según el tipo"""
+        """Validate expression based on type"""
         kind = values.get("kind")
 
         if kind == ScheduleKind.INTERVAL:
@@ -124,7 +124,7 @@ class ScheduleCreateRequest(BaseModel):
 
 
 class ScheduleUpdateRequest(BaseModel):
-    """Request para actualizar un schedule"""
+    """Request to update a schedule"""
 
     expression: Optional[str] = None
     enabled: Optional[bool] = None
@@ -153,14 +153,14 @@ class ScheduleUpdateRequest(BaseModel):
 
 
 class RunCancelRequest(BaseModel):
-    """Request para cancelar una ejecución"""
+    """Request to cancel an execution"""
 
     reason: Optional[str] = Field(
-        default=None, max_length=500, description="Razón de la cancelación"
+        default=None, max_length=500, description="Reason for cancellation"
     )
 
     class Config:
-        schema_extra = {"example": {"reason": "Cancelado por el usuario"}}
+        schema_extra = {"example": {"reason": "Cancelled by user"}}
 
 
 # =============================================================================

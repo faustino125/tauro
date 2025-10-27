@@ -55,8 +55,8 @@ class PipelineValidator:
 
 class FormatPolicy:
     """
-    Centraliza formatos soportados y compatibilidades entre batch y streaming,
-    permitiendo overrides desde configuración.
+    Centralizes supported formats and compatibility rules between batch and streaming pipelines,
+    enabling overrides from configuration.
     """
 
     DEFAULT_SUPPORTED_INPUTS = [
@@ -79,18 +79,18 @@ class FormatPolicy:
         "csv",
     ]
 
-    # Compatibilidad batch_output_format -> streaming_input_format permitido
+    # Compatibility: batch_output_format -> allowed streaming_input_format
     DEFAULT_COMPATIBILITY_MAP = {
         "parquet": ["file_stream"],
         "delta": [
             "delta_stream"
-        ],  # o "file_stream" si se prefiere lectura por archivos
+        ],  # or "file_stream" if file-based reading is preferred
         "json": ["file_stream"],
         "csv": ["file_stream"],
         "kafka": ["kafka"],
     }
 
-    # Formatos de entrada streaming que requieren checkpoint
+    # Streaming input formats that require checkpoint configuration
     DEFAULT_CHECKPOINT_REQUIRED_INPUTS = ["kafka", "kinesis", "delta_stream"]
 
     def __init__(self, overrides: Optional[Dict[str, Any]] = None):
@@ -397,7 +397,7 @@ class HybridValidator:
         except ConfigValidationError as e:
             errors.append(str(e))
 
-        # Estructura de pipelines híbridos: deben tener ambos tipos
+        # Structure of hybrid pipelines: they must have both types
         hybrid_pipelines = {
             name: p
             for name, p in context.pipelines_config.items()

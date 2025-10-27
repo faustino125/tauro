@@ -28,8 +28,8 @@ class StreamingValidator:
 
     def __init__(self, format_policy: Optional[Any] = None) -> None:
         """
-        format_policy es opcional. Si se provee, se usará para validar formatos de entrada/salida
-        (e.g., Context.format_policy). Si no, se usan los enums/constantes por defecto.
+        format_policy is optional. If provided, it will be used to validate input/output formats
+        (e.g., Context.format_policy). Otherwise, default enums/constants are used.
         """
         self.policy = format_policy
 
@@ -119,7 +119,10 @@ class StreamingValidator:
 
     @handle_streaming_error
     def validate_streaming_node_config(self, node_config: Dict[str, Any]) -> None:
-        """Validate streaming node configuration with detailed validation."""
+        """Validate streaming node configuration with modular validation approach.
+
+        Delegates to specialized validators to keep method complexity low.
+        """
         try:
             if not isinstance(node_config, dict):
                 raise StreamingValidationError(
@@ -129,8 +132,38 @@ class StreamingValidator:
                 )
 
             node_name = node_config.get("name", "unknown")
+            logger.debug(f"Validating streaming node: '{node_name}'")
 
-            # Validate required fields
+            # Phase 1: Validate node structure
+            self._validate_node_structure(node_config, node_name)
+            logger.debug(f"  ✓ Node structure valid for '{node_name}'")
+
+            # Phase 2: Validate input/output configuration
+            self._validate_node_io_config(node_config, node_name)
+            logger.debug(f"  ✓ Node I/O config valid for '{node_name}'")
+
+            # Phase 3: Validate streaming-specific configuration
+            self._validate_node_streaming_config(node_config, node_name)
+            logger.debug(f"  ✓ Node streaming config valid for '{node_name}'")
+
+            # Phase 4: Validate function configuration (if present)
+            self._validate_node_function_config(node_config, node_name)
+            logger.debug(f"  ✓ Node function config valid for '{node_name}'")
+
+            logger.debug(f"Streaming node '{node_name}' validation successful")
+
+        except StreamingValidationError:
+            raise
+        except Exception as e:
+            raise StreamingValidationError(
+                f"Unexpected error during node validation: {str(e)}", cause=e
+            )
+
+    def _validate_node_structure(
+        self, node_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """Validate basic node structure (Phase 1)."""
+        try:
             required_fields = ["input", "output"]
             missing_fields = [
                 field for field in required_fields if field not in node_config
@@ -142,43 +175,50 @@ class StreamingValidator:
                     expected=str(required_fields),
                     actual=str(list(node_config.keys())),
                 )
-
-            # Validate input configuration
-            try:
-                self._validate_streaming_input_config(node_config["input"], node_name)
-            except StreamingValidationError as e:
-                e.add_context("validation_section", "input")
-                raise
-
-            # Validate output configuration
-            try:
-                self._validate_streaming_output_config(node_config["output"], node_name)
-            except StreamingValidationError as e:
-                e.add_context("validation_section", "output")
-                raise
-
-            # Validate streaming-specific configuration
-            streaming_config = node_config.get("streaming", {})
-            if streaming_config:
-                try:
-                    self._validate_streaming_config(streaming_config, node_name)
-                except StreamingValidationError as e:
-                    e.add_context("validation_section", "streaming")
-                    raise
-
-            # Validate function configuration if present
-            function_config = node_config.get("function")
-            if function_config:
-                self._validate_function_config(function_config, node_name)
-
-            logger.debug(f"Streaming node '{node_name}' configuration validated")
-
         except StreamingValidationError:
             raise
         except Exception as e:
             raise StreamingValidationError(
-                f"Unexpected error during node validation: {str(e)}", cause=e
+                f"Error validating node structure for '{node_name}': {str(e)}", cause=e
             )
+
+    def _validate_node_io_config(
+        self, node_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """Validate input/output configuration (Phase 2)."""
+        try:
+            # Validate input configuration
+            self._validate_streaming_input_config(node_config["input"], node_name)
+
+            # Validate output configuration
+            self._validate_streaming_output_config(node_config["output"], node_name)
+        except StreamingValidationError as e:
+            e.add_context("validation_phase", "I/O")
+            raise
+
+    def _validate_node_streaming_config(
+        self, node_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """Validate streaming-specific configuration (Phase 3)."""
+        try:
+            streaming_config = node_config.get("streaming", {})
+            if streaming_config:
+                self._validate_streaming_config(streaming_config, node_name)
+        except StreamingValidationError as e:
+            e.add_context("validation_phase", "streaming")
+            raise
+
+    def _validate_node_function_config(
+        self, node_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """Validate function configuration if present (Phase 4)."""
+        try:
+            function_config = node_config.get("function")
+            if function_config:
+                self._validate_function_config(function_config, node_name)
+        except StreamingValidationError as e:
+            e.add_context("validation_phase", "function")
+            raise
 
     def _validate_streaming_input_config(
         self, input_config: Dict[str, Any], node_name: str
@@ -201,7 +241,7 @@ class StreamingValidator:
                     field="input.format",
                 )
 
-            # Usar policy si está disponible, si no usar enums por defecto
+            # Use policy if available, otherwise use default enums
             valid_formats = (
                 self.policy.get_supported_input_formats()
                 if self.policy
@@ -807,13 +847,38 @@ class StreamingValidator:
             )
 
     def _validate_time_interval(self, interval: str) -> bool:
-        """Validate time interval format with enhanced pattern matching."""
+        """Validate time interval format and value constraints.
+
+        Valid formats: '10 seconds', '5 minutes', '1 hour', etc.
+        Only POSITIVE integers are allowed (rejects 0 and negative values).
+
+        Returns:
+            True if interval is valid, False otherwise
+        """
         if not isinstance(interval, str):
             return False
 
-        # Enhanced pattern to support more time units
-        pattern = r"^\d+\s+(second|seconds|minute|minutes|hour|hours|day|days|millisecond|milliseconds|microsecond|microseconds)$"
-        return bool(re.match(pattern, interval.strip(), re.IGNORECASE))
+        # Pattern that ONLY matches positive integers (1-9) followed by digits
+        # This rejects 0 and negative values
+        pattern = r"^([1-9]\d*)\s+(second|seconds|minute|minutes|hour|hours|day|days|millisecond|milliseconds|microsecond|microseconds)$"
+        match = re.match(pattern, interval.strip(), re.IGNORECASE)
+
+        if not match:
+            return False
+
+        # Additional validation: ensure the interval is within reasonable bounds
+        try:
+            # Validate numeric portion without storing it in an unused variable
+            int(match.group(1))
+            # Reject intervals longer than 1 year (365 days in seconds)
+            seconds = self._parse_time_to_seconds(interval)
+            if seconds > 86400 * 365:  # 1 year in seconds
+                logger.warning(f"Time interval {interval} exceeds 1 year maximum")
+                return False
+        except (ValueError, TypeError):
+            return False
+
+        return True
 
     def _parse_time_to_seconds(self, interval: str) -> float:
         """Parse time interval to seconds with support for more units."""

@@ -11,15 +11,15 @@ from tauro.config.exceptions import ConfigValidationError
 from tauro.config.session import SparkSessionFactory
 
 
-# Evitar crear sesiones reales de Spark durante los tests: devolver un objeto falso
+# Avoid creating real Spark sessions during tests: return a fake object instead
 @pytest.fixture(autouse=True)
 def fake_spark_session(monkeypatch):
     """
-    Reemplaza SparkSessionFactory.get_session por una versión que devuelve
-    un objeto simple para que las pruebas no intenten lanzar la JVM de Spark.
-    Aplica también reset_session para evitar efectos colaterales.
+    Replaces SparkSessionFactory.get_session with a version that returns
+    a simple namespace object so tests don't attempt to launch the Spark JVM.
+    Also patches reset_session to prevent side effects.
     """
-    # Asegurarnos de que no haya sesión previa
+    # Ensure no previous session exists
     SparkSessionFactory.reset_session()
 
     monkeypatch.setattr(
@@ -28,7 +28,7 @@ def fake_spark_session(monkeypatch):
         lambda *args, **kwargs: SimpleNamespace(name="fake-spark-session"),
     )
 
-    # También parcheamos reset_session para limpiar _session sin intentar parar una sesión real
+    # Also patch reset_session to clean _session without attempting to stop a real session
     monkeypatch.setattr(
         SparkSessionFactory,
         "reset_session",
@@ -37,12 +37,12 @@ def fake_spark_session(monkeypatch):
 
     yield
 
-    # limpieza final
+    # final cleanup
     SparkSessionFactory.reset_session()
 
 
 def make_minimal_configs():
-    # Añadimos validators para desactivar strict en streaming y ml dentro de los tests
+    # Add validators to disable strict mode in streaming and ml within tests
     global_settings = {
         "input_path": "/in",
         "output_path": "/out",

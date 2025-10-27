@@ -14,7 +14,7 @@ from tauro.io.sql import SQLSanitizer
 
 
 class SparkReaderBase(BaseIO):
-    """Base para lectores Spark con acceso unificado al contexto y utilidades comunes."""
+    """Base class for Spark readers providing unified context access and common utilities."""
 
     def __init__(self, context: Any):
         super().__init__(context)
@@ -31,7 +31,7 @@ class SparkReaderBase(BaseIO):
             partition_filter = config.get("partition_filter")
             if partition_filter:
                 df = reader.load(filepath)
-                logger.info(f"Aplicando partition_filter: {partition_filter}")
+                logger.info(f"Applying partition_filter: {partition_filter}")
                 return df.where(partition_filter)
             else:
                 return reader.load(filepath)
@@ -98,7 +98,7 @@ class DeltaReader(SparkReaderBase):
                 df = reader.load(source)
 
             if partition_filter:
-                logger.info(f"Aplicando partition_filter: {partition_filter}")
+                logger.info(f"Applying partition_filter: {partition_filter}")
                 return df.where(partition_filter)
             return df
         except ReadOperationError:
@@ -158,27 +158,27 @@ class PickleReader(SparkReaderBase):
     def _read_distributed_pickle(self, source: str, config: Dict[str, Any]) -> Any:
         """Read pickle files using Spark distributed processing.
 
-        Nota: Para evitar OOM en el driver por collect(), se aplica por defecto un límite
-        de registros cuando no se especifica 'max_records'. Puede desactivarse con max_records=0.
+        Note: To avoid OOM on the driver from collect(), a default record limit is applied
+        when 'max_records' is not specified. This can be disabled with max_records=0.
         """
         spark = self._ctx_spark()
         to_dataframe = config.get("to_dataframe", True)
 
-        # Comportamiento por defecto más seguro: limitar si no se especifica
+        # Default safer behavior: apply limit if not specified
         try:
             raw_max = int(config.get("max_records", -1))
         except Exception:
             raw_max = -1
 
         if raw_max < 0:
-            max_records = 10000  # límite por defecto seguro
+            max_records = 10000  # safe default limit
             logger.warning(
                 "No 'max_records' specified for distributed pickle read. "
                 "Applying default limit of 10000 records to avoid driver OOM. "
                 "Set config.max_records=0 to read all, or a positive integer to customize."
             )
         elif raw_max == 0:
-            max_records = 0  # sin límite
+            max_records = 0  # no limit
         else:
             max_records = raw_max
 
@@ -288,7 +288,7 @@ class XMLReader(SparkReaderBase):
 
 
 class QueryReader(BaseIO):
-    """Reader para ejecutar consultas SQL en Spark."""
+    """Reader for executing SQL queries in Spark."""
 
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         """Execute SQL query and return results."""

@@ -256,7 +256,7 @@ class StreamingExecutor(BaseExecutor):
         logger.info(f"Executing streaming pipeline: {pipeline_name}")
 
         pipeline = self._get_pipeline_config(pipeline_name)
-        # Validación con el validador del manager (único punto de verdad)
+        # Validation via manager's validator (single source of truth)
         self.streaming_manager.validator.validate_streaming_pipeline_config(pipeline)
 
         running_pipelines = self.streaming_manager.list_running_pipelines()
@@ -458,7 +458,7 @@ class HybridExecutor(BaseExecutor):
         pipeline_nodes = self._extract_pipeline_nodes(pipeline)
         node_configs = self._get_node_configs(pipeline_nodes)
 
-        # Usar la misma política de formatos del contexto via PipelineValidator (batch/streaming/híbrido)
+        # Use the same format policy from context via PipelineValidator (batch/streaming/hybrid)
         validation_result = PipelineValidator.validate_hybrid_pipeline(
             pipeline, node_configs, self.context.format_policy
         )

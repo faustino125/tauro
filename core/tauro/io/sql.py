@@ -35,18 +35,18 @@ class SQLSanitizer:
     }
 
     COMMENT_PATTERNS: ClassVar[List[str]] = [
-        r"--[^\r\n]*",  # Comentarios de línea --
-        r"/\*[\s\S]*?\*/",  # Comentarios de bloque /* */
-        r"#[^\r\n]*",  # Comentarios de línea # (MySQL)
+        r"--[^\r\n]*",  # Line comments --
+        r"/\*[\s\S]*?\*/",  # Block comments /* */
+        r"#[^\r\n]*",  # Line comments # (MySQL)
     ]
 
     SUSPICIOUS_PATTERNS: ClassVar[List[str]] = [
-        r";\s*\w",  # Múltiples sentencias
-        r"0x[0-9a-f]+",  # Valores hexadecimales
-        r"char\s*\(",  # Conversiones char() sospechosas
-        r"ascii\s*\(",  # Funciones ASCII sospechosas
-        r"waitfor\s+delay",  # Ataques de tiempo
-        r"benchmark\s*\(",  # Ataques de benchmark
+        r";\s*\w",  # Multiple statements
+        r"0x[0-9a-f]+",  # Hexadecimal values
+        r"char\s*\(",  # Suspicious char() conversions
+        r"ascii\s*\(",  # Suspicious ASCII functions
+        r"waitfor\s+delay",  # Timing attacks
+        r"benchmark\s*\(",  # Benchmark attacks
     ]
 
     @classmethod

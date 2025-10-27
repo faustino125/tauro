@@ -1,7 +1,7 @@
 """
-Re-export perezoso para mantener compatibilidad:
+Lazy re-export for backward compatibility:
 from tauro.config import Context, SparkSessionFactory
-sin importar submódulos pesados en import-time.
+without importing heavy submodules at import-time.
 """
 
 from typing import Any

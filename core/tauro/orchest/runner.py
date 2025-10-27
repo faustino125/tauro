@@ -140,52 +140,52 @@ class OrchestratorRunner:
         logger.info(f"Created PipelineRun {pr.id} for pipeline '{pipeline_id}'")
         return pr
 
-    def start_run(
-        self,
-        run_id: str,
-        retries: int = 0,
-        retry_delay_sec: int = 0,
-        concurrency: Optional[int] = None,
-        timeout_seconds: Optional[int] = None,
-    ) -> RunState:
+    def _check_circuit_breaker(self, run_id: str) -> bool:
         """
-        Start a pipeline run with resilience protections.
+        Check if circuit breaker allows execution.
+        Returns True if OK, False if OPEN (reject).
         """
-        # Check circuit breaker state
-        if self._enable_circuit_breaker:
-            cb_metrics = self._circuit_breaker.get_metrics()
-            if cb_metrics.state.value == "OPEN":
-                logger.error(
-                    f"Circuit breaker is OPEN, cannot start run {run_id}",
-                    extra={"run_id": run_id, "circuit_state": cb_metrics.state.value},
-                )
-                self.store.update_pipeline_run_state(
-                    run_id,
-                    RunState.FAILED,
-                    error="Circuit breaker is OPEN - system is experiencing issues",
-                )
-                return RunState.FAILED
+        if not self._enable_circuit_breaker:
+            return True
 
+        cb_metrics = self._circuit_breaker.get_metrics()
+        if cb_metrics.state.value == "OPEN":
+            logger.error(
+                f"Circuit breaker is OPEN, cannot start run {run_id}",
+                extra={"run_id": run_id, "circuit_state": cb_metrics.state.value},
+            )
+            self.store.update_pipeline_run_state(
+                run_id,
+                RunState.FAILED,
+                error="Circuit breaker is OPEN - system is experiencing issues",
+            )
+            return False
+        return True
+
+    def _validate_run_state(self, run_id: str) -> Optional[PipelineRun]:
+        """
+        Validate that run exists and is in startable state.
+        Returns PipelineRun if valid, or None with error already persisted.
+        """
         pr = self.store.get_pipeline_run(run_id)
         if not pr:
             raise ValueError(f"PipelineRun '{run_id}' not found")
 
         if pr.state not in (RunState.PENDING, RunState.QUEUED, RunState.FAILED):
             logger.warning(f"Run {run_id} in state {pr.state}, cannot start")
-            return pr.state
+            return None
 
-        self.store.update_pipeline_run_state(
-            pr.id, RunState.RUNNING, started_at=datetime.now(timezone.utc)
-        )
+        return pr
 
-        start_date = (pr.params or {}).get("start_date")
-        end_date = (pr.params or {}).get("end_date")
-
+    def _create_task_state_callback(self, pr: PipelineRun) -> Any:
+        """
+        Create a callback function for persisting task state changes.
+        """
         persisted_tasks: Dict[str, str] = {}
         persisted_tasks_lock = threading.Lock()
 
         def on_task_state(tr: TaskRun):
-            """Callback to persist task state."""
+            """Persist task state to database."""
             try:
                 with persisted_tasks_lock:
                     if tr.task_id not in persisted_tasks:
@@ -203,95 +203,172 @@ class OrchestratorRunner:
                         log_uri=tr.log_uri,
                     )
             except Exception:
-                logger.exception("Failed to persist task state")
-
-        def execute_with_protections():
-            """Execute pipeline with resilience protections."""
-            ex = LocalDagExecutor(self.context)
-
-            with self._lock:
-                self._active_executors[pr.id] = ex
-
-            try:
-                ex.execute(
-                    pr.pipeline_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                    on_task_state=on_task_state,
-                    retries=retries,
-                    retry_delay_sec=retry_delay_sec,
-                    concurrency=concurrency,
-                    timeout_seconds=timeout_seconds,
+                logger.exception(
+                    f"Failed to persist task state for run {pr.id}",
+                    extra={"run_id": pr.id, "task_id": tr.task_id},
                 )
-            finally:
-                with self._lock:
-                    self._active_executors.pop(pr.id, None)
 
+        return on_task_state
+
+    def _execute_pipeline_with_protections(
+        self,
+        pr: PipelineRun,
+        on_task_state: Any,
+        retries: int,
+        retry_delay_sec: int,
+        concurrency: Optional[int],
+        timeout_seconds: Optional[int],
+    ) -> None:
+        """
+        Execute pipeline DAG with resilience protections and tracking.
+        """
+        ex = LocalDagExecutor(self.context)
+
+        with self._lock:
+            self._active_executors[pr.id] = ex
+
+        try:
+            start_date = (pr.params or {}).get("start_date")
+            end_date = (pr.params or {}).get("end_date")
+
+            ex.execute(
+                pr.pipeline_id,
+                start_date=start_date,
+                end_date=end_date,
+                on_task_state=on_task_state,
+                retries=retries,
+                retry_delay_sec=retry_delay_sec,
+                concurrency=concurrency,
+                timeout_seconds=timeout_seconds,
+            )
+        finally:
+            with self._lock:
+                self._active_executors.pop(pr.id, None)
+
+    def _handle_run_success(
+        self, run_id: str, pr: PipelineRun, execution_time: float
+    ) -> RunState:
+        """Handle successful pipeline execution."""
+        logger.info(
+            f"Run {run_id} completed successfully in {execution_time:.2f} seconds",
+            extra={
+                "run_id": run_id,
+                "pipeline_id": pr.pipeline_id,
+                "execution_time": execution_time,
+            },
+        )
+
+        self.store.update_pipeline_run_state(
+            pr.id, RunState.SUCCESS, finished_at=datetime.now(timezone.utc)
+        )
+
+        self._update_metrics(execution_time, success=True)
+        return RunState.SUCCESS
+
+    def _handle_run_failure(
+        self,
+        run_id: str,
+        pr: PipelineRun,
+        execution_time: float,
+        error: Exception,
+        is_circuit_breaker: bool = False,
+    ) -> RunState:
+        """Handle failed pipeline execution."""
+        if is_circuit_breaker:
+            error_msg = "Rejected by circuit breaker - system is experiencing issues"
+            logger.error(
+                f"Run {run_id} rejected by circuit breaker",
+                extra={"run_id": run_id, "error": str(error)},
+            )
+        else:
+            error_msg = str(error)
+            logger.exception(
+                f"Run {run_id} failed after {execution_time:.2f} seconds",
+                extra={
+                    "run_id": run_id,
+                    "pipeline_id": pr.pipeline_id,
+                    "execution_time": execution_time,
+                },
+            )
+
+        self.store.update_pipeline_run_state(
+            pr.id,
+            RunState.FAILED,
+            finished_at=datetime.now(timezone.utc),
+            error=error_msg,
+        )
+
+        self._update_metrics(execution_time, success=False)
+        return RunState.FAILED
+
+    def start_run(
+        self,
+        run_id: str,
+        retries: int = 0,
+        retry_delay_sec: int = 0,
+        concurrency: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
+    ) -> RunState:
+        """
+        Start a pipeline run with resilience protections.
+
+        This method orchestrates the execution by delegating to specialized methods
+        for better testability and maintainability.
+        """
+        # Step 1: Check circuit breaker
+        if not self._check_circuit_breaker(run_id):
+            return RunState.FAILED
+
+        # Step 2: Validate run exists and is in startable state
+        pr = self._validate_run_state(run_id)
+        if pr is None:
+            return RunState.QUEUED  # Already logged, return current state
+
+        # Step 3: Mark as running
+        self.store.update_pipeline_run_state(
+            pr.id, RunState.RUNNING, started_at=datetime.now(timezone.utc)
+        )
+
+        # Step 4: Create task state callback
+        on_task_state = self._create_task_state_callback(pr)
+
+        # Step 5: Execute with timing
         start_time = time.time()
 
         try:
             # Execute with circuit breaker if enabled
             if self._enable_circuit_breaker:
-                self._circuit_breaker.call(execute_with_protections)
+                self._circuit_breaker.call(
+                    self._execute_pipeline_with_protections,
+                    pr,
+                    on_task_state,
+                    retries,
+                    retry_delay_sec,
+                    concurrency,
+                    timeout_seconds,
+                )
             else:
-                execute_with_protections()
+                self._execute_pipeline_with_protections(
+                    pr,
+                    on_task_state,
+                    retries,
+                    retry_delay_sec,
+                    concurrency,
+                    timeout_seconds,
+                )
 
             execution_time = time.time() - start_time
-
-            logger.info(
-                f"Run {run_id} completed successfully in {execution_time:.2f} seconds",
-                extra={
-                    "run_id": run_id,
-                    "pipeline_id": pr.pipeline_id,
-                    "execution_time": execution_time,
-                },
-            )
-
-            self.store.update_pipeline_run_state(
-                pr.id, RunState.SUCCESS, finished_at=datetime.now(timezone.utc)
-            )
-
-            self._update_metrics(execution_time, success=True)
-            return RunState.SUCCESS
+            return self._handle_run_success(run_id, pr, execution_time)
 
         except CircuitBreakerOpenError as e:
             execution_time = time.time() - start_time
-            logger.error(
-                f"Run {run_id} rejected by circuit breaker",
-                extra={"run_id": run_id, "error": str(e)},
+            return self._handle_run_failure(
+                run_id, pr, execution_time, e, is_circuit_breaker=True
             )
-
-            self.store.update_pipeline_run_state(
-                pr.id,
-                RunState.FAILED,
-                finished_at=datetime.now(timezone.utc),
-                error="Rejected by circuit breaker - system is experiencing issues",
-            )
-
-            self._update_metrics(execution_time, success=False)
-            return RunState.FAILED
 
         except Exception as e:
             execution_time = time.time() - start_time
-            logger.exception(
-                f"Run {run_id} failed after {execution_time:.2f} seconds: {e}",
-                extra={
-                    "run_id": run_id,
-                    "pipeline_id": pr.pipeline_id,
-                    "error": str(e),
-                    "execution_time": execution_time,
-                },
-            )
-
-            self.store.update_pipeline_run_state(
-                pr.id,
-                RunState.FAILED,
-                finished_at=datetime.now(timezone.utc),
-                error=str(e),
-            )
-
-            self._update_metrics(execution_time, success=False)
-            return RunState.FAILED
+            return self._handle_run_failure(run_id, pr, execution_time, e)
 
     def get_run(self, run_id: str) -> Optional[PipelineRun]:
         return self.store.get_pipeline_run(run_id)

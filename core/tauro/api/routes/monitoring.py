@@ -160,9 +160,9 @@ async def api_info(
     settings: Settings = Depends(get_current_settings),
 ):
     """
-    Información de la API.
+    API information.
 
-    Retorna información sobre la API y su configuración.
+    Returns information about the API and its configuration.
     """
     return APIInfo(
         name=settings.api_title,
@@ -183,10 +183,10 @@ async def get_stats(
     store=Depends(get_orchestrator_store),
 ):
     """
-    Estadísticas generales.
+    General statistics.
 
-    Retorna estadísticas sobre pipelines, ejecuciones y schedules.
-    Se cachean por 60 segundos para evitar queries costosas al almacén.
+    Returns statistics about pipelines, executions and schedules.
+    Cached for 60 seconds to avoid expensive queries to store.
     """
     global _STATS_CACHE, _STATS_CACHE_TIME
 
@@ -273,9 +273,9 @@ try:
     @router.get("/metrics")
     async def metrics():
         """
-        Endpoint de métricas Prometheus.
+        Prometheus metrics endpoint.
 
-        Expone métricas en formato Prometheus para monitoring.
+        Expose metrics in Prometheus format for monitoring.
         """
         return Response(
             content=generate_latest(),

@@ -67,10 +67,10 @@ async def create_schedule(
     config_manager=Depends(get_config_manager),
 ):
     """
-    Crear un nuevo schedule.
+    Create a new schedule.
 
-    Crea una programación para ejecutar un pipeline de forma automática.
-    Valida que el pipeline exista antes de crear el schedule.
+    Create a schedule to automatically execute a pipeline.
+    Validates that the pipeline exists before creating the schedule.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -170,7 +170,7 @@ async def get_schedule(
     schedule_id: str,
     store=Depends(get_orchestrator_store),
 ):
-    """Obtener información de un schedule específico"""
+    """Get information for a specific schedule"""
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
 
@@ -205,9 +205,9 @@ async def update_schedule(
     store=Depends(get_orchestrator_store),
 ):
     """
-    Actualizar un schedule.
+    Update a schedule.
 
-    Permite modificar la configuración de un schedule existente.
+    Allow modifying the configuration of an existing schedule.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)

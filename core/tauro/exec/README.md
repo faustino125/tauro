@@ -1,352 +1,1136 @@
 # tauro.exec
 
-The `tauro.exec` module orchestrates the execution of Tauro data pipelines (batch and hybrid), turning configuration into a dependency-aware execution plan and running nodes in parallel while respecting dependencies. It integrates tightly with:
+A sophisticated execution engine for Apache Spark-based data pipelines. Orchestrates the execution of batch and hybrid (batch + streaming) pipelines by transforming configuration into dependency-aware execution plans, executing nodes in parallel while respecting dependencies, and providing comprehensive state tracking and error recovery capabilities.
 
-- `tauro.config.Context` (for configuration, Spark session, and format policy)
-- `tauro.io.input.InputLoader` and `tauro.io.output.DataOutputManager` (for reading inputs and persisting outputs)
-- `tauro.streaming` (for streaming-specific execution, coordinated elsewhere)
+This module integrates tightly with:
+- `tauro.config.Context` (configuration, Spark session, format policy, and global settings)
+- `tauro.io.input.InputLoader` and `tauro.io.output.DataOutputManager` (reading inputs and persisting outputs)
+- `tauro.streaming.StreamingPipelineManager` (orchestrating streaming nodes in hybrid pipelines)
 
 This module provides:
-- A command pattern for node execution (standard and ML nodes)
-- Dependency resolution and topological sorting
-- Safe parallel execution with retry/circuit-breaker support
-- Validation utilities for pipeline shape and format compatibility
-- Execution state tracking for monitoring and recovery
-- Utilities to normalize and extract dependencies
+- A command pattern for node execution (standard and ML-enhanced nodes)
+- Intelligent dependency resolution with topological sorting
+- Safe parallel execution with retry and circuit-breaker support
+- Comprehensive validation for pipeline shape and format compatibility
+- Unified execution state tracking for monitoring, recovery, and debugging
+- Resource cleanup and memory management
+- ML-aware execution with hyperparameter injection and experiment optimization
+- Utilities to normalize and extract dependencies from various formats
+
+---
+
+## Table of Contents
+
+- [Key Concepts](#key-concepts)
+- [Architecture Overview](#architecture-overview)
+- [Components Reference](#components-reference)
+- [Node Function Signatures](#node-function-signatures)
+- [Dependencies Format and Normalization](#dependencies-format-and-normalization)
+- [Dependency Resolution and Ordering](#dependency-resolution-and-ordering)
+- [Commands](#commands)
+- [Node Executor](#node-executor)
+- [Pipeline Validation](#pipeline-validation)
+- [Unified Pipeline State](#unified-pipeline-state)
+- [Base Executor](#base-executor)
+- [Execution Modes](#execution-modes)
+- [Best Practices](#best-practices)
+- [Error Handling](#error-handling)
+- [Getting Started](#getting-started)
+- [Examples](#examples)
+- [Troubleshooting](#troubleshooting)
+- [API Quick Reference](#api-quick-reference)
 
 ---
 
 ## Key Concepts
 
-- Node: A unit of work (function) that takes 0..N input DataFrames and date boundaries, and returns a DataFrame (or another artifact).
-- Pipeline: An ordered set of nodes with explicit dependencies.
-- Executor: Loads inputs, executes node functions, validates and saves outputs.
-- Command: Encapsulates a node invocation (standard or ML-enhanced).
-- DAG (Directed Acyclic Graph): Constructed from node dependencies; determines order/parallelism.
+### Node
+A unit of work representing a data transformation or processing step. Each node:
+- Has an identifier (name) and a corresponding function
+- Accepts 0 to N input DataFrames
+- Receives date boundaries (start_date, end_date) for filtering and parameterization
+- Returns a single output DataFrame or artifact
+- May have dependencies on other nodes
+- Can be annotated with ML metadata (hyperparameters, metrics, etc.)
+
+### Pipeline
+An ordered set of nodes with explicit inter-node dependencies. Pipelines can be:
+- **Batch pipelines**: All nodes are batch operations
+- **Streaming pipelines**: All nodes are streaming operations
+- **Hybrid pipelines**: Mix of batch and streaming nodes with coordinated execution
+
+### Executor
+The orchestration engine that:
+- Loads inputs via InputLoader
+- Creates execution commands for nodes
+- Validates configurations
+- Executes nodes according to dependency ordering
+- Saves outputs via DataOutputManager
+- Tracks state and provides monitoring capabilities
+
+### Command
+An encapsulation of a single node invocation with:
+- Function reference
+- Input DataFrames
+- Date boundaries
+- Optional ML-specific metadata
+
+### DAG (Directed Acyclic Graph)
+A graph representation of dependencies where:
+- Nodes are pipeline tasks
+- Edges represent dependencies
+- Topological sorting determines valid execution orders
+- Cycles are detected and raise clear errors
+
+### Dependency
+References between nodes that establish:
+- Execution order constraints
+- Data flow patterns
+- Node relationships for scheduling
 
 ---
 
-## Components Overview
+## Architecture Overview
 
-- Commands (`commands.py`)
-  - Command: Base protocol.
-  - NodeCommand: Executes a node function.
-  - MLNodeCommand: Adds ML concerns (hyperparameters, metrics, spark confs).
-  - ExperimentCommand: Optional hyperparameter optimization (lazy dependency on `skopt`).
-- NodeExecutor (`node_executor.py`)
-  - Loads node function and inputs; executes a node using a Command; validates and persists results.
-  - Parallel execution of multiple nodes respecting DAG.
-- DependencyResolver (`dependency_resolver.py`)
-  - Builds a dependency graph and performs topological sort.
-  - Normalizes various dependency formats.
-- PipelineValidator (`pipeline_validator.py`)
-  - Validates basic pipeline shape and supported formats for batch/hybrid flows.
-- Pipeline State (`pipeline_state.py`)
-  - Tracks node status, dependencies, retries, metrics, and circuit breaker.
-- Base Executor (`executor.py`)
-  - Wires Context, IO, NodeExecutor, and validation; prepares ML metadata and pipeline execution.
-- Utils (`utils.py`)
-  - Helpers to normalize and extract dependencies, and to extract node names from mixed representations.
+The execution module is built in layers:
+
+### Layer 1: Configuration & Parsing
+- Reads pipeline and node configurations from Context
+- Normalizes dependency formats (string, dict, list)
+- Validates configuration integrity
+
+### Layer 2: Dependency Analysis
+- Builds dependency graph from configuration
+- Performs topological sort for execution ordering
+- Detects circular dependencies
+- Identifies independent nodes for parallel execution
+
+### Layer 3: Command Construction
+- Creates appropriate command objects (NodeCommand, MLNodeCommand, etc.)
+- Injected with function references, inputs, and parameters
+- Configures ML-specific parameters when applicable
+
+### Layer 4: Execution Engine
+- Uses ThreadPoolExecutor for parallel execution
+- Respects dependency constraints
+- Handles retries and circuit-breaker logic
+- Manages resource lifecycle (caching, unpersisting)
+
+### Layer 5: State Management
+- Tracks per-node execution state (pending, running, completed, failed, retrying)
+- Records execution metadata (start time, duration, status)
+- Provides progress monitoring and recovery points
+
+### Layer 6: Output Management
+- Validates result schemas
+- Persists outputs via DataOutputManager
+- Coordinates resource cleanup
 
 ---
 
-## Node Function Signature
+## Components Reference
 
-Tauro supports flexible node function signatures. Recommended signature:
+### Commands (`commands.py`)
+
+**Command Protocol**
+- Base interface for node execution
+- Requires `execute()` method returning the result
+- Enables testability and extensibility
+
+**NodeCommand**
+- Minimal execution for standard nodes
+- Loads function and input DataFrames
+- Invokes with dates as keyword arguments
+- Returns result DataFrame
+
+**MLNodeCommand**
+- Extends NodeCommand for machine learning
+- Merges hyperparameters: defaults → pipeline-level → explicit overrides
+- Configures Spark properties under `tauro.ml.*` namespace
+- Records execution metadata (duration, status)
+- Optionally passes `ml_context` dict to function if supported
+
+**ExperimentCommand**
+- Lazy-imports `skopt` at execution time
+- Runs Bayesian optimization with `gp_minimize`
+- Uses configured search space and objective function
+- Returns optimized parameters
+
+### NodeExecutor (`node_executor.py`)
+
+Responsibilities:
+- Resolves node configuration and imports node functions
+- Loads input DataFrames via InputLoader
+- Builds appropriate Command object based on context
+- Executes command and captures result
+- Validates output schema
+- Persists results via DataOutputManager
+- Releases resources explicitly (unpersist, close, clear)
+
+Key methods:
+```python
+execute_single_node(node_name, start_date, end_date, ml_info)
+execute_nodes_parallel(execution_order, node_configs, dag, start_date, end_date, ml_info)
+```
+
+Parallel execution features:
+- ThreadPoolExecutor with configurable max_workers
+- Dynamic scheduling based on completed dependencies
+- Retry support with exponential backoff
+- Circuit breaker for cascading failures
+
+### DependencyResolver (`dependency_resolver.py`)
+
+Responsibilities:
+- Builds dependency graph from configuration
+- Performs topological sorting
+- Normalizes dependency formats
+- Detects circular dependencies
+
+Key methods:
+```python
+build_dependency_graph(pipeline_nodes, node_configs) -> Dict[str, Set[str]]
+topological_sort(dag) -> List[str]
+get_node_dependencies(node_config) -> List[str]
+normalize_dependencies(deps) -> List[str]
+```
+
+### PipelineValidator (`pipeline_validator.py`)
+
+Focuses on batch/hybrid pipeline validation:
+- Required parameters (pipeline name, date window)
+- Pipeline configuration integrity
+- Node configuration completeness
+- Format compatibility (leveraging FormatPolicy)
+- Supported batch outputs: parquet, delta, json, csv, kafka, orc
+- Batch-streaming compatibility in hybrid pipelines
+
+Key methods:
+```python
+validate_required_params(pipeline_name, start_date, end_date, context_start_date, context_end_date)
+validate_pipeline_config(pipeline)
+validate_node_configs(pipeline_nodes, node_configs)
+validate_hybrid_pipeline(pipeline, node_configs, format_policy=None)
+```
+
+### Pipeline State (`pipeline_state.py`)
+
+**UnifiedPipelineState** tracks:
+- Per-node execution status (pending, running, completed, failed, retrying, cancelled)
+- Failure counts and circuit breaker threshold
+- Dependencies and reverse dependents
+- Batch output DataFrame handles
+- Streaming query execution IDs
+- Execution metadata (timestamps, durations)
+
+Used by orchestrators to:
+- Coordinate batch and streaming execution
+- React to failures with retry or skip logic
+- Provide monitoring and debugging information
+- Support recovery from partial failures
+
+### Base Executor (`executor.py`)
+
+Wires all components together:
+- Manages Context, IO managers, and NodeExecutor
+- Prepares ML metadata and resolves hyperparameters
+- Orchestrates batch, streaming, and hybrid execution
+- Validates using PipelineValidator
+- Resolves dependencies using DependencyResolver
+- Tracks state using UnifiedPipelineState
+- Provides high-level API for pipeline execution
+
+### Utils (`utils.py`)
+
+Helper functions:
+- `normalize_dependencies()`: Convert various dependency formats to lists
+- `extract_dependency_name()`: Extract node name from strings or dicts
+- `extract_pipeline_nodes()`: Get node list from pipeline config
+- `get_node_dependencies()`: Retrieve dependencies for a node
+
+---
+
+## Node Function Signatures
+
+### Recommended Signature
 
 ```python
 def my_node(*dfs, start_date: str, end_date: str, ml_context: dict | None = None):
     # dfs: 0..N input DataFrames in configured order
-    # start_date/end_date: ISO strings passed by the executor (keyword args)
-    # ml_context (optional for ML nodes): hyperparams, spark, execution metadata, etc.
+    # start_date/end_date: ISO strings (YYYY-MM-DD) passed as keyword arguments
+    # ml_context (optional for ML nodes): dict with hyperparams, spark, execution metadata
     ...
     return output_df
 ```
 
-Notes:
-- `NodeCommand` invokes the function passing `start_date` and `end_date` as keyword arguments for robustness.
-- `MLNodeCommand` inspects the function signature; if it supports `ml_context`, it passes it, otherwise falls back to standard invocation.
-- Functions must be importable via a dotted path (e.g., `package.module.function`) as defined in `nodes_config`.
+### Important Notes
+
+- Always use keyword-only arguments for `start_date` and `end_date` (after `*dfs`)
+- Functions must be importable via dotted path (e.g., `package.module.function`)
+- NodeCommand automatically passes dates as keyword arguments
+- MLNodeCommand inspects signature; passes `ml_context` only if function accepts it
+- Functions should be pure when possible (avoid global state mutations)
+
+### Example Node Functions
+
+```python
+# Minimal node (no inputs)
+def generate_data(*, start_date: str, end_date: str):
+    return spark.range(0, 100).toDF()
+
+# Single input
+def filter_events(events_df, *, start_date: str, end_date: str):
+    return events_df.filter(
+        (col("date") >= start_date) & (col("date") <= end_date)
+    )
+
+# Multiple inputs
+def join_datasets(customers, orders, *, start_date: str, end_date: str):
+    return customers.join(orders, "customer_id")
+
+# ML node with hyperparameters
+def train_model(training_df, *, start_date: str, end_date: str, ml_context=None):
+    if ml_context:
+        hyperparams = ml_context.get("hyperparams", {})
+        lr = hyperparams.get("learning_rate", 0.01)
+    else:
+        lr = 0.01
+    
+    model = GBTClassifier(learningRate=lr)
+    return model.fit(training_df)
+```
 
 ---
 
-## Node Configuration (from config layer)
+## Node Configuration
 
-Typical node configuration fields:
-- name: Node name (required).
-- function: Dotted path to the Python function to execute.
-- input: List of input identifiers (resolved by `InputLoader`) or per-source descriptors (depending on IO config).
-- output: List or descriptor of outputs (handled by `DataOutputManager`).
-- dependencies: Node dependencies (string | dict | list; see below).
-- hyperparams/metrics/description: Optional ML-related metadata.
-
-Example (nodes_config.yml):
+Node configurations define execution parameters:
 
 ```yaml
 extract:
   function: "my_pkg.etl.extract"
   input: ["src_raw"]
   output: ["bronze.events"]
+  
+transform:
+  function: "my_pkg.etl.transform"
+  input:
+    - bronze.events  # Automatic dependency from input
+  output: ["silver.events"]
+  dependencies: ["extract"]  # Explicit dependency
+  
+train_model:
+  function: "my_pkg.ml.train"
+  input: ["silver.events"]
+  dependencies:
+    - transform
+  output: ["model"]
+  hyperparams:
+    learning_rate: 0.01
+    max_depth: 6
+  metrics:
+    - accuracy
+    - precision
+    - recall
+```
+
+**Configuration Fields:**
+- `function`: Dotted path to Python function
+- `input`: List of input identifiers
+- `output`: Output identifier or list
+- `dependencies`: Explicit dependencies (string, dict, or list)
+- `hyperparams`: ML-related hyperparameters (optional)
+- `metrics`: Metrics to track (optional)
+- `description`: Human-readable description (optional)
+
+---
+
+## Dependencies Format and Normalization
+
+The exec module supports multiple dependency specification formats:
+
+### Format Examples
+
+```yaml
+# Format 1: String (single dependency)
+dependencies: "extract"
+
+# Format 2: Dictionary (single key)
+dependencies:
+  extract: {}
+
+# Format 3: List of strings
+dependencies:
+  - extract
+  - transform
+
+# Format 4: List of dictionaries (single key each)
+dependencies:
+  - extract: {}
+  - transform: {}
+
+# Format 5: Mixed list
+dependencies:
+  - extract
+  - transform: {}
+```
+
+### Normalization Process
+
+All formats normalize to a list of node names:
+- `"extract"` → `["extract"]`
+- `{"extract": {}}` → `["extract"]`
+- `["extract", "transform"]` → `["extract", "transform"]`
+- `[{"extract": {}}, "transform"]` → `["extract", "transform"]`
+
+Normalization happens automatically in:
+- `DependencyResolver.normalize_dependencies()`
+- `PipelineValidator._get_node_dependencies()`
+
+---
+
+## Dependency Resolution and Ordering
+
+### Graph Construction
+
+`DependencyResolver.build_dependency_graph()` creates a mapping:
+- **Key**: Node name
+- **Value**: Set of nodes that depend on it (reverse dependencies)
+
+Example:
+```python
+# Pipeline: extract → transform → model
+# Dependencies: transform depends on extract, model depends on transform
+dag = {
+    "extract": {"transform"},
+    "transform": {"model"},
+    "model": set(),
+}
+```
+
+### Topological Sorting
+
+`DependencyResolver.topological_sort()` returns valid execution order:
+```python
+order = DependencyResolver.topological_sort(dag)
+# Result: ["extract", "transform", "model"]
+```
+
+### Circular Dependency Detection
+
+Circular dependencies raise clear error:
+```python
+# Invalid: node2 depends on node1, node1 depends on node2
+raise ValueError("Circular dependency detected: node1 <-> node2")
+```
+
+### Execution Planning
+
+From topological order, the executor:
+1. Identifies independent nodes (no unmet dependencies)
+2. Schedules them in parallel
+3. Waits for dependencies to complete
+4. Schedules next batch of ready nodes
+5. Continues until all nodes complete or failure occurs
+
+---
+
+## Commands
+
+### NodeCommand
+
+Standard node execution without ML enhancements.
+
+```python
+command = NodeCommand(
+    function=my_node_function,
+    input_dfs=[df1, df2],
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    node_name="transform",
+)
+
+result = command.execute()
+```
+
+### MLNodeCommand
+
+Machine learning node with hyperparameter support.
+
+```python
+command = MLNodeCommand(
+    function=train_model_function,
+    input_dfs=[training_df],
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    node_name="train_model",
+    model_version="v1.0.0",
+    hyperparams={"learning_rate": 0.05, "max_depth": 8},
+    node_config={"metrics": ["auc", "f1"]},
+    pipeline_config={"model_name": "gbt_classifier"},
+    spark=spark_session,
+)
+
+model = command.execute()
+```
+
+**Hyperparameter Merging:**
+1. Start with defaults from `MLNodeCommand`
+2. Merge pipeline-level hyperparams
+3. Apply explicit overrides
+4. Pass final dict to function via `ml_context`
+
+### ExperimentCommand
+
+Bayesian optimization for hyperparameter tuning.
+
+```python
+from skopt import Real, Integer
+
+def objective(params):
+    # Train model with params, return validation loss
+    ...
+
+space = [
+    Real(0.001, 0.1, name="learning_rate"),
+    Integer(3, 10, name="max_depth"),
+]
+
+command = ExperimentCommand(
+    objective_func=objective,
+    space=space,
+    n_calls=20,
+    random_state=42,
+)
+
+best_params = command.execute()
+```
+
+---
+
+## Node Executor
+
+### Responsibilities
+
+1. **Resolution**: Find and load node function
+2. **Input Loading**: Retrieve input DataFrames via InputLoader
+3. **Command Building**: Create appropriate Command object
+4. **Execution**: Run command and capture result
+5. **Validation**: Check output schema
+6. **Persistence**: Save results via DataOutputManager
+7. **Cleanup**: Release resources explicitly
+
+### Single Node Execution
+
+```python
+executor = NodeExecutor(
+    context=context,
+    input_loader=input_loader,
+    output_manager=output_manager,
+    max_workers=4,
+)
+
+executor.execute_single_node(
+    node_name="transform",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    ml_info={"hyperparams": {"lr": 0.01}},
+)
+```
+
+### Parallel Execution
+
+```python
+# Execute nodes respecting dependencies
+executor.execute_nodes_parallel(
+    execution_order=["extract", "transform", "model"],
+    node_configs=node_configs,
+    dag=dependency_graph,
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    ml_info={},
+)
+```
+
+**Parallel Execution Features:**
+- ThreadPoolExecutor with configurable worker count
+- Dynamic scheduling based on dependency satisfaction
+- Automatic retry with exponential backoff
+- Circuit breaker to prevent cascading failures
+- Resource cleanup per node
+
+### Resource Management
+
+```python
+# Explicit cleanup
+if hasattr(df, 'unpersist'):
+    df.unpersist()
+
+# Close connections
+if hasattr(resource, 'close'):
+    resource.close()
+
+# Clear caches
+if hasattr(cache, 'clear'):
+    cache.clear()
+```
+
+---
+
+## Pipeline Validation
+
+### Validation Scope (Batch/Hybrid)
+
+The exec module validates:
+- Required parameters present and valid
+- Pipeline configuration has required structure
+- All referenced nodes have configurations
+- Format compatibility with batch/streaming
+- Supported output formats (parquet, delta, json, csv, kafka, orc)
+- Hybrid pipeline structure
+
+### Streaming Validation
+
+For streaming-specific validation, see `tauro.streaming.validators.StreamingValidator`.
+
+### Validation Example
+
+```python
+from tauro.exec.pipeline_validator import PipelineValidator
+
+# Validate required parameters
+PipelineValidator.validate_required_params(
+    pipeline_name="daily_pipeline",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    context_start_date="2025-01-01",
+    context_end_date="2025-01-31",
+)
+
+# Validate pipeline configuration
+PipelineValidator.validate_pipeline_config(pipeline)
+
+# Validate node configurations
+PipelineValidator.validate_node_configs(pipeline_nodes, node_configs)
+
+# Validate hybrid pipeline
+result = PipelineValidator.validate_hybrid_pipeline(
+    pipeline, node_configs, context.format_policy
+)
+print(result["batch_nodes"])      # List of batch nodes
+print(result["streaming_nodes"])  # List of streaming nodes
+```
+
+---
+
+## Unified Pipeline State
+
+Tracks comprehensive execution state:
+
+```python
+state = UnifiedPipelineState(circuit_breaker_threshold=3)
+
+# Register nodes
+state.register_node_with_dependencies("transform", ["extract"])
+
+# Update status
+state.set_node_status("extract", "completed")
+state.set_node_status("transform", "running")
+
+# Retrieve status
+status = state.get_node_status("transform")
+dependencies = state.get_node_dependencies("transform")
+
+# Handle failures
+if state.get_node_failure_count("node") > 3:
+    state.set_node_status("node", "cancelled")
+```
+
+---
+
+## Base Executor
+
+Highest-level orchestration API:
+
+```python
+executor = BaseExecutor(
+    context=context,
+    input_loader=input_loader,
+    output_manager=output_manager,
+    streaming_manager=streaming_manager,
+)
+
+# Execute batch pipeline
+executor.execute_pipeline(
+    pipeline_name="daily_etl",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    max_workers=4,
+)
+
+# Execute hybrid pipeline
+executor.execute_hybrid_pipeline(
+    pipeline_name="streaming_etl",
+    model_version="v1.0.0",
+    hyperparams={"lr": 0.01},
+)
+
+# Execute streaming pipeline
+executor.execute_streaming_pipeline(
+    pipeline_name="realtime_ingestion",
+    execution_mode="async",  # or "sync"
+)
+```
+
+---
+
+## Execution Modes
+
+### Batch Pipeline Execution
+
+Traditional sequential or parallel execution:
+- Validates all inputs upfront
+- Builds complete dependency graph
+- Executes according to topological order
+- Persists all outputs
+- Returns execution summary
+
+### Streaming Pipeline Execution
+
+Streaming-optimized execution:
+- Delegates to StreamingPipelineManager
+- Manages long-running query lifecycle
+- Supports both synchronous (wait) and asynchronous (background) modes
+- Handles resource conflicts
+- Provides query monitoring
+
+### Hybrid Pipeline Execution
+
+Coordinated batch and streaming:
+- Validates both batch and streaming nodes
+- Executes batch nodes first
+- Transitions to streaming phase
+- Manages data flow between phases
+- Provides unified state tracking
+- Graceful shutdown of streaming on completion
+
+---
+
+## Best Practices
+
+### 1. Node Function Design
+
+```python
+# ✅ DO: Use keyword-only date arguments
+def my_node(df1, df2, *, start_date: str, end_date: str):
+    return df1.filter(...)
+
+# ❌ DON'T: Use positional date arguments
+def bad_node(df1, df2, start_date, end_date):
+    ...
+```
+
+### 2. Dependency Management
+
+```yaml
+# ✅ DO: Explicit, minimal dependencies
+transform:
+  dependencies: ["extract"]
+  input: ["bronze.events"]
+
+# ❌ DON'T: Rely only on implicit input dependencies
+transform:
+  input: ["bronze.events"]  # Circular if input is output of another node
+```
+
+### 3. Resource Management
+
+```python
+# ✅ DO: Cache when reused, unpersist when done
+df.cache()
+result = df.count()
+df.unpersist()
+
+# ❌ DON'T: Leave large DataFrames in memory
+large_df.cache()
+# ... never unpersist
+```
+
+### 4. Worker Configuration
+
+```python
+# ✅ DO: Match workers to cluster resources
+max_workers = min(spark_partition_count // 2, available_cores // 2)
+
+# ❌ DON'T: Use excessive workers
+max_workers = 100  # Causes thread pool overhead
+```
+
+### 5. Error Handling
+
+```python
+# ✅ DO: Let exceptions propagate with context
+try:
+    execute_nodes_parallel(...)
+except Exception as e:
+    logger.error(f"Pipeline failed: {e}")
+    # Clean up resources
+    raise
+
+# ❌ DON'T: Silently catch all exceptions
+try:
+    execute_nodes_parallel(...)
+except:
+    pass  # Critical failures hidden!
+```
+
+### 6. Hyperparameter Management
+
+```python
+# ✅ DO: Define defaults, allow overrides
+ml_info = {
+    "hyperparams": {
+        "learning_rate": 0.01,  # Default
+        "max_depth": 6,
+    }
+}
+
+# ❌ DON'T: Hardcode hyperparameters
+model = GBTClassifier(learningRate=0.01, maxDepth=6)
+```
+
+---
+
+## Error Handling
+
+### Exception Hierarchy
+
+- `ExecutionError`: Base execution exception
+- `NodeExecutionError`: Node-specific failures
+- `DependencyError`: Dependency resolution issues
+- `ValidationError`: Configuration validation failures
+- `ResourceError`: Resource/memory issues
+
+### Common Error Scenarios
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `ModuleNotFoundError` | Function not importable | Check dotted path in `function` config |
+| `TypeError` | Function signature mismatch | Ensure keyword-only date arguments |
+| `ValidationError` | Invalid configuration | Run validation separately to diagnose |
+| `CircularDependencyError` | Dependency cycle | Review dependency graph |
+| `OutOfMemoryError` | Too many nodes in parallel | Reduce `max_workers` |
+| `TimeoutError` | Node execution too slow | Increase timeout or optimize function |
+
+### Logging and Debugging
+
+```python
+from loguru import logger
+
+logger.enable("tauro.exec")
+logger.add(sys.stderr, level="DEBUG")
+
+# Trace execution
+executor.execute_pipeline(...)
+```
+
+---
+
+## Getting Started
+
+### Setup
+
+```python
+from tauro.config import Context
+from tauro.io.input import InputLoader
+from tauro.io.output import DataOutputManager
+from tauro.exec.executor import BaseExecutor
+
+# 1. Load context
+context = Context.load_from_file("config.yaml")
+
+# 2. Create managers
+input_loader = InputLoader(context)
+output_manager = DataOutputManager(context)
+
+# 3. Create executor
+executor = BaseExecutor(
+    context=context,
+    input_loader=input_loader,
+    output_manager=output_manager,
+)
+
+# 4. Execute pipeline
+executor.execute_pipeline(
+    pipeline_name="daily_etl",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    max_workers=4,
+)
+```
+
+---
+
+## Examples
+
+### Example 1: Simple ETL Pipeline
+
+```yaml
+# nodes_config.yml
+extract:
+  function: "my_pkg.etl.extract_raw"
+  output: ["bronze.raw_events"]
 
 transform:
   function: "my_pkg.etl.transform"
   dependencies: ["extract"]
   output: ["silver.events"]
 
+aggregate:
+  function: "my_pkg.etl.aggregate"
+  dependencies: ["transform"]
+  output: ["gold.event_summary"]
+```
+
+```python
+executor.execute_pipeline(
+    pipeline_name="daily_etl",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+)
+# Execution order: extract → transform → aggregate
+```
+
+### Example 2: ML Pipeline with Hyperparameters
+
+```yaml
+# nodes_config.yml
+prepare_data:
+  function: "my_pkg.ml.prepare_data"
+  output: ["training_data"]
+
 train_model:
   function: "my_pkg.ml.train"
-  dependencies:
-    - transform
+  dependencies: ["prepare_data"]
+  output: ["model"]
   hyperparams:
     learning_rate: 0.01
     max_depth: 6
+
+evaluate_model:
+  function: "my_pkg.ml.evaluate"
+  dependencies: ["train_model"]
+  output: ["metrics"]
+  metrics:
+    - accuracy
+    - precision
 ```
 
----
-
-## Dependencies: Formats and Normalization
-
-`tauro.exec` accepts multiple dependency shapes:
-
-- String: `"extract"`
-- Dict: `{"extract": {}}` (only one key allowed)
-- List: `["extract", "transform"]`
-
-Normalization logic (in `utils.py` / `dependency_resolver.py`):
-- `normalize_dependencies` converts any supported form into a list of dependency entries.
-- `extract_dependency_name` extracts the name from strings or single-key dicts; raises for invalid shapes.
-
----
-
-## Dependency Graph and Ordering
-
-- `DependencyResolver.build_dependency_graph(pipeline_nodes, node_configs)` builds a DAG mapping each node to its dependents.
-- `DependencyResolver.topological_sort(dag)` returns an execution order honoring dependencies.
-- Circular dependencies raise a clear error.
-
----
-
-## Commands
-
-- NodeCommand
-  - Minimal execution: load function and input DataFrames, call with dates as keyword args, return result.
-- MLNodeCommand
-  - Merges hyperparameters: defaults -> pipeline-level -> explicit overrides
-  - Optionally configures Spark conf under the `tauro.ml.*` namespace for downstream context
-  - Records execution metadata (start/end time, duration, status)
-- ExperimentCommand
-  - Lazy-imports `skopt` at execution time
-  - Runs Bayesian optimization with `gp_minimize` on a provided objective and space
-
----
-
-## NodeExecutor
-
-Responsibilities:
-- Resolve node config and import the node function
-- Load all necessary input DataFrames via `InputLoader`
-- Build a `Command` (NodeCommand or MLNodeCommand) depending on layer/context
-- Execute and capture the result
-- Validate and persist results via `DataOutputManager`
-- Release resources explicitly (unpersist/close/clear) to encourage GC
-
-Parallel execution:
-- `execute_nodes_parallel(...)` uses `ThreadPoolExecutor` with `max_workers`
-- Tracks running/completed/failed nodes; submits nodes whose dependencies are satisfied
-- Retries and circuit breaker can be coordinated with `UnifiedPipelineState` (where used)
-
-Resource cleanup:
-- DataFrames are unpersisted if applicable; general objects may be closed/cleared when supported.
-
----
-
-## Pipeline Validation (exec scope)
-
-`PipelineValidator` (in `exec`) focuses on:
-- Required params (pipeline name and date window) presence
-- Pipeline config integrity (nodes existence, non-empty lists)
-- Format compatibility hints for batch/hybrid (leveraging a `FormatPolicy` where applicable)
-- Supported batch outputs include: `parquet`, `delta`, `json`, `csv`, `kafka`, `orc`
-
-For streaming-specific validation, see `tauro.streaming.validators`.
-
----
-
-## Unified Pipeline State
-
-`UnifiedPipelineState` tracks:
-- Per-node execution status (pending/running/completed/failed/retrying/cancelled)
-- Dependencies and reverse dependents
-- Failure counts and a circuit breaker threshold
-- Batch outputs and streaming query handles for hybrid cases
-
-Used by orchestrators to coordinate execution and react to failures.
-
----
-
-## BaseExecutor
-
-`BaseExecutor` wires everything together:
-- `context`: sourced from `tauro.config.Context` or compatible object
-- IO managers: `InputLoader` and `DataOutputManager`
-- `NodeExecutor`: executes nodes with ML-aware behavior when applicable
-- ML prep:
-  - Merge hyperparams and resolve model version from context or pipeline-level config
-  - Optionally integrate with a model registry provided by the context
-  - Provide an `ml_info` dict to `NodeExecutor` for ML nodes
-
-It also uses:
-- `tauro.exec.pipeline_validator.PipelineValidator`
-- `tauro.exec.dependency_resolver.DependencyResolver`
-- `tauro.exec.utils` helpers
-
----
-
-## Logging and Error Handling
-
-- Uses `loguru` for structured logging.
-- Catches and logs exceptions with context (node name, pipeline, durations).
-- Raises explicit errors for:
-  - Missing/invalid dependencies
-  - Function import failures
-  - Invalid node results
-  - IO errors when saving outputs
-- Streaming-specific errors are handled by `tauro.streaming` exceptions and decorators.
-
----
-
-## Examples
-
-### 1) Writing a Node Function
-
 ```python
-# my_pkg/etl.py
-from pyspark.sql import functions as F
-
-def transform(df_events, *, start_date: str, end_date: str, ml_context=None):
-    # df_events is first input
-    out = df_events.filter((F.col("date") >= start_date) & (F.col("date") <= end_date))
-    if ml_context:
-        # optional: leverage hyperparams or metadata
-        hp = ml_context.get("hyperparams", {})
-        out = out.withColumn("hp_max_depth", F.lit(hp.get("max_depth", None)))
-    return out
-```
-
-Note the signature uses keyword-only `start_date` and `end_date`. This is recommended.
-
-### 2) Executing a Single Node
-
-```python
-from tauro.config import Context
-from tauro.exec.node_executor import NodeExecutor
-from tauro.io.input import InputLoader
-from tauro.io.output import DataOutputManager
-
-context = Context(...)
-
-input_loader = InputLoader(context)
-output_manager = DataOutputManager(context)
-
-executor = NodeExecutor(context, input_loader, output_manager, max_workers=4)
-
-ml_info = {
-    "model_version": "1.0.0",
-    "hyperparams": {"max_depth": 6},
-    "pipeline_config": {},
-}
-
-executor.execute_single_node(
-    node_name="transform",
+executor.execute_pipeline(
+    pipeline_name="daily_ml",
     start_date="2025-01-01",
     end_date="2025-01-31",
-    ml_info=ml_info,
+    model_version="v1.0.0",
+    hyperparams={"learning_rate": 0.05},  # Override
 )
 ```
 
-### 3) Building and Executing a Small Pipeline
+### Example 3: Hybrid Pipeline
 
-```python
-from tauro.exec.dependency_resolver import DependencyResolver
-from tauro.exec.node_executor import NodeExecutor
+```yaml
+# nodes_config.yml
+type: "hybrid"
 
-# Suppose you have a pipeline dict and nodes_config already loaded via context
-pipeline = context._pipeline_manager.get_pipeline("daily_pipeline")
-node_configs = context.nodes_config
+extract_batch:
+  function: "my_pkg.batch.extract"
+  output: ["bronze.events"]
 
-# Extract node names
-from tauro.exec.utils import extract_pipeline_nodes
-pipeline_nodes = extract_pipeline_nodes(pipeline)
+stream_events:
+  function: "my_pkg.streaming.stream_kafka"
+  output: ["stream.events"]
 
-# Build DAG and order
-dag = DependencyResolver.build_dependency_graph(pipeline_nodes, node_configs)
-order = DependencyResolver.topological_sort(dag)
-
-# Execute nodes in order (simple version; see NodeExecutor.execute_nodes_parallel for parallel execution)
-for node_name in order:
-    executor.execute_single_node(
-        node_name=node_name,
-        start_date=context.global_settings.get("start_date", "2025-01-01"),
-        end_date=context.global_settings.get("end_date", "2025-01-31"),
-        ml_info={},  # or computed via BaseExecutor._prepare_ml_info(...)
-    )
+join_sources:
+  function: "my_pkg.ml.join"
+  dependencies:
+    - extract_batch
+    - stream_events
+  output: ["gold.unified"]
 ```
 
-### 4) ML Node with Hyperparameters
-
 ```python
-ml_info = {
-    "model_version": "2.1.0",
-    "hyperparams": {
-        "learning_rate": 0.05,
-        "max_depth": 8,
-    },
-    "pipeline_config": {
-        "model_name": "gbt_classifier",
-        "metrics": ["auc", "f1"]
-    },
-}
-
-executor.execute_single_node(
-    "train_model", "2025-01-01", "2025-01-31", ml_info
+executor.execute_hybrid_pipeline(
+    pipeline_name="hybrid_etl",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
 )
 ```
 
 ---
 
-## Best Practices
+## Troubleshooting
 
-- Keep node functions pure with clear inputs/outputs; avoid side effects where possible.
-- Always use keyword arguments for date bounds in your function signatures.
-- Use `ml_context` if you need hyperparams, Spark session, or execution metadata.
-- Keep dependencies explicit and minimal; avoid hidden couplings between nodes.
-- Choose appropriate `max_workers` based on cluster resources and I/O characteristics.
-- Release resources aggressively in long pipelines (e.g., cache/unpersist appropriately).
+### Circular Dependency Error
+
+```
+ValueError: Circular dependency detected: node1 <-> node2
+```
+
+**Solution:**
+1. Review node dependencies in configuration
+2. Draw dependency graph manually
+3. Remove or restructure circular references
+
+### Function Not Importable
+
+```
+ModuleNotFoundError: No module named 'my_pkg.etl'
+```
+
+**Solution:**
+1. Verify function path in `nodes_config`
+2. Ensure package is in Python path
+3. Check for typos in dotted path
+
+### Signature Mismatch
+
+```
+TypeError: my_node() got an unexpected keyword argument 'start_date'
+```
+
+**Solution:**
+1. Modify function to accept keyword arguments
+2. Use `*, start_date: str, end_date: str` syntax
+
+### Out of Memory
+
+```
+java.lang.OutOfMemoryError: Java heap space
+```
+
+**Solution:**
+1. Reduce `max_workers`
+2. Add explicit `.unpersist()` calls
+3. Increase Spark executor memory
+
+### Validation Errors
+
+```
+ValidationError: Pipeline validation failed
+```
+
+**Solution:**
+1. Run validation separately: `PipelineValidator.validate_pipeline_config()`
+2. Check error message for specific field
+3. Review configuration against schema
 
 ---
-
-
 
 ## API Quick Reference
 
-- Commands
-  - `Command.execute() -> Any`
-  - `NodeCommand(function, input_dfs, start_date, end_date, node_name)`
-  - `MLNodeCommand(..., model_version, hyperparams=None, node_config=None, pipeline_config=None, spark=None)`
-  - `ExperimentCommand(objective_func, space, n_calls=20, random_state=None)`
-- NodeExecutor
-  - `execute_single_node(node_name, start_date, end_date, ml_info) -> None`
-  - `execute_nodes_parallel(execution_order, node_configs, dag, start_date, end_date, ml_info) -> None`
-- DependencyResolver
-  - `build_dependency_graph(pipeline_nodes, node_configs) -> Dict[str, Set[str]]`
-  - `topological_sort(dag) -> List[str]`
-  - `get_node_dependencies(node_config) -> List[str]`
-- PipelineValidator (exec)
-  - `validate_required_params(pipeline_name, start_date, end_date, context_start_date, context_end_date)`
-  - `validate_pipeline_config(pipeline)`
-  - `validate_node_configs(pipeline_nodes, node_configs)`
-  - `validate_hybrid_pipeline(pipeline, node_configs, format_policy=None) -> Dict[str, Any]`
-- Pipeline State
-  - `UnifiedPipelineState(circuit_breaker_threshold=3)`
+### BaseExecutor
+
+```python
+executor = BaseExecutor(context, input_loader, output_manager, streaming_manager)
+
+# Batch execution
+executor.execute_pipeline(pipeline_name, start_date, end_date, max_workers=4)
+
+# Hybrid execution
+executor.execute_hybrid_pipeline(pipeline_name, model_version, hyperparams)
+
+# Streaming execution
+executor.execute_streaming_pipeline(pipeline_name, execution_mode="async")
+```
+
+### NodeExecutor
+
+```python
+executor = NodeExecutor(context, input_loader, output_manager, max_workers=4)
+
+# Execute single node
+executor.execute_single_node(node_name, start_date, end_date, ml_info)
+
+# Execute multiple nodes in parallel
+executor.execute_nodes_parallel(execution_order, node_configs, dag, start_date, end_date, ml_info)
+```
+
+### DependencyResolver
+
+```python
+# Build dependency graph
+dag = DependencyResolver.build_dependency_graph(pipeline_nodes, node_configs)
+
+# Get execution order
+order = DependencyResolver.topological_sort(dag)
+
+# Get node dependencies
+deps = DependencyResolver.get_node_dependencies(node_config)
+
+# Normalize dependencies
+normalized = DependencyResolver.normalize_dependencies(dependencies)
+```
+
+### PipelineValidator
+
+```python
+# Validate required parameters
+PipelineValidator.validate_required_params(pipeline_name, start_date, end_date, ctx_start, ctx_end)
+
+# Validate configuration
+PipelineValidator.validate_pipeline_config(pipeline)
+PipelineValidator.validate_node_configs(pipeline_nodes, node_configs)
+
+# Validate hybrid pipeline
+result = PipelineValidator.validate_hybrid_pipeline(pipeline, node_configs, format_policy)
+```
+
+### Commands
+
+```python
+# Standard node execution
+command = NodeCommand(function, input_dfs, start_date, end_date, node_name)
+result = command.execute()
+
+# ML node execution
+command = MLNodeCommand(function, input_dfs, start_date, end_date, node_name,
+                        model_version, hyperparams, node_config, pipeline_config, spark)
+result = command.execute()
+
+# Experiment execution
+command = ExperimentCommand(objective_func, space, n_calls, random_state)
+best_params = command.execute()
+```
+
+---
+
+## Architecture Improvements
+
+Recent enhancements to the execution module:
+
+- **Enhanced Error Context**: Detailed exception messages with operation, component, and field information
+- **Unified State Management**: Comprehensive tracking of execution across batch and streaming
+- **Smart Parallelization**: Automatic detection of independent nodes for optimal throughput
+- **ML Integration**: First-class support for hyperparameter injection and experiment management
+- **Resource Lifecycle**: Explicit cleanup of DataFrames and connections
+- **Format Policy Integration**: Batch/streaming format compatibility via context policy
+- **Comprehensive Validation**: Multi-layer validation for configuration integrity
+
+---
+
+## Notes
+
+- The exec module coordinates batch and hybrid pipelines; streaming is delegated to `tauro.streaming`
+- Use `DependencyResolver` for complex pipeline analysis and visualization
+- Keep node functions pure; use `ml_context` for parameterization
+- Always set appropriate `max_workers` based on cluster resources
+- For very large pipelines, consider breaking into stages with intermediate persistence
+- Integrate with a model registry via `context` for production ML workflows
+
+---
+
+## License
+
+Copyright (c) 2025 Faustino Lopez Ramos. For licensing information, see the LICENSE file in the project root.
 
 ---

@@ -11,14 +11,14 @@ from tauro.api.schemas.requests import RunState, ScheduleKind
 
 
 class MessageResponse(BaseModel):
-    """Response genérico con mensaje"""
+    """Generic response with message"""
 
     message: str
     detail: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
-    """Response de error"""
+    """Error response"""
 
     error: str
     detail: Optional[str] = None
@@ -31,7 +31,7 @@ class ErrorResponse(BaseModel):
 
 
 class PipelineInfo(BaseModel):
-    """Información básica de un pipeline"""
+    """Basic pipeline information"""
 
     id: str
     name: Optional[str] = None
@@ -41,14 +41,14 @@ class PipelineInfo(BaseModel):
 
 
 class PipelineListResponse(BaseModel):
-    """Lista de pipelines"""
+    """List of pipelines"""
 
     pipelines: List[PipelineInfo]
     total: int
 
 
 class PipelineRunResponse(BaseModel):
-    """Respuesta de ejecución de pipeline"""
+    """Pipeline execution response"""
 
     run_id: str
     pipeline_id: str
@@ -92,7 +92,7 @@ class PipelineRunResponse(BaseModel):
 
 
 class RunListResponse(BaseModel):
-    """Lista de ejecuciones"""
+    """List of executions"""
 
     runs: List[PipelineRunResponse]
     total: int
@@ -104,7 +104,7 @@ class RunListResponse(BaseModel):
 
 
 class ConfigContextResponse(BaseModel):
-    """Representación del contexto de configuración activo."""
+    """Representation of the active configuration context."""
 
     project_id: str
     environment: str
@@ -117,7 +117,7 @@ class ConfigContextResponse(BaseModel):
 
 
 class ConfigVersionMetadataResponse(BaseModel):
-    """Metadatos de la versión activa."""
+    """Metadata of the active version."""
 
     project_id: str
     environment: str
@@ -132,7 +132,7 @@ class ConfigVersionMetadataResponse(BaseModel):
 
 
 class ScheduleResponse(BaseModel):
-    """Respuesta de schedule"""
+    """Schedule response"""
 
     id: str
     pipeline_id: str
@@ -164,7 +164,7 @@ class ScheduleResponse(BaseModel):
 
 
 class ScheduleListResponse(BaseModel):
-    """Lista de schedules"""
+    """List of schedules"""
 
     schedules: List[ScheduleResponse]
     total: int
@@ -199,7 +199,7 @@ class HealthCheck(BaseModel):
 
 
 class APIInfo(BaseModel):
-    """Información de la API"""
+    """API information"""
 
     name: str
     version: str
@@ -209,7 +209,7 @@ class APIInfo(BaseModel):
 
 
 class StatsResponse(BaseModel):
-    """Estadísticas generales"""
+    """General statistics"""
 
     total_pipelines: int
     total_runs: int

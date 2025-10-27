@@ -1,4 +1,4 @@
-"""Configuración del módulo core"""
+"""Core module configuration"""
 
 from .config import settings, get_settings, Settings
 from .deps import (

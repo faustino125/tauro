@@ -1,16 +1,19 @@
 """
 Standard API Response Models
 
-Todos los endpoints deben retornar uno de estos modelos:
-- APIResponse: Respuestas normales (success/error)
-- AsyncResponse: Operaciones asincronas (202 Accepted)
-- ListResponse: Respuestas con paginación
+All endpoints must return one of these models:
+- APIResponse: Normal responses (success/error)
+- AsyncResponse: Async operations (202 Accepted)
+- ListResponse: Paginated responses
 """
 
 from typing import Any, Optional, Dict, List
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from enum import Enum
+
+RESPONSE_TIMESTAMP_DESC = "Response timestamp"
+EXAMPLE_TIMESTAMP = "2025-01-15T10:30:00Z"
 
 
 class ResponseStatus(str, Enum):
@@ -39,11 +42,11 @@ class APIResponse(BaseModel):
         default=None, description="Response data (null for errors)"
     )
     error: Optional[ErrorDetail] = Field(
-        default=None, description="Error information (null for success)"
+        default=None, description="Error details (null for success)"
     )
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
-        description="Response timestamp",
+        description=RESPONSE_TIMESTAMP_DESC,
     )
 
     class Config:
@@ -51,9 +54,9 @@ class APIResponse(BaseModel):
             "examples": [
                 {
                     "status": "success",
-                    "data": {"id": "proj-123", "name": "My Project"},
+                    "data": None,
                     "error": None,
-                    "timestamp": "2025-01-15T10:30:00Z",
+                    "timestamp": EXAMPLE_TIMESTAMP,
                 },
                 {
                     "status": "error",
@@ -63,7 +66,7 @@ class APIResponse(BaseModel):
                         "message": "Project not found",
                         "details": {"project_id": "proj-123"},
                     },
-                    "timestamp": "2025-01-15T10:30:00Z",
+                    "timestamp": EXAMPLE_TIMESTAMP,
                 },
             ]
         }
@@ -81,7 +84,7 @@ class AsyncResponse(BaseModel):
     )
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
-        description="Response timestamp",
+        description=RESPONSE_TIMESTAMP_DESC,
     )
 
     class Config:
@@ -89,9 +92,8 @@ class AsyncResponse(BaseModel):
             "example": {
                 "status": "accepted",
                 "task_id": "run-abc123",
-                "status_url": "/api/v1/runs/run-abc123",
                 "message": "Pipeline execution started in background",
-                "timestamp": "2025-01-15T10:30:00Z",
+                "timestamp": EXAMPLE_TIMESTAMP,
             }
         }
 
@@ -114,7 +116,7 @@ class ListResponse(BaseModel):
     pagination: PaginationInfo = Field(..., description="Pagination info")
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
-        description="Response timestamp",
+        description=RESPONSE_TIMESTAMP_DESC,
     )
 
     class Config:
@@ -129,7 +131,7 @@ class ListResponse(BaseModel):
                     "has_next": True,
                     "has_previous": False,
                 },
-                "timestamp": "2025-01-15T10:30:00Z",
+                "timestamp": EXAMPLE_TIMESTAMP,
             }
         }
 

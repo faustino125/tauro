@@ -1,8 +1,8 @@
 """
-RunService: Gestión de pipeline runs (ejecuciones de pipelines)
+RunService: Pipeline run management (pipeline executions)
 
-Este servicio implementa la lógica de negocio para crear, seguimiento y gestión
-de ejecuciones de pipelines (runs).
+This service implements business logic for creating, tracking and managing
+pipeline executions (runs).
 """
 
 import logging
@@ -26,41 +26,41 @@ logger = logging.getLogger(__name__)
 
 
 class RunNotFoundError(Exception):
-    """Run no encontrado"""
+    """Run not found"""
 
     pass
 
 
 class RunStateError(Exception):
-    """Error relacionado con el estado del run"""
+    """Error related to run state"""
 
     pass
 
 
 class InvalidRunError(Exception):
-    """Datos de run inválidos"""
+    """Invalid run data"""
 
     pass
 
 
 class RunService:
     """
-    Servicio de gestión de pipeline runs.
+    Pipeline run management service.
 
-    Responsabilidades:
-    - CRUD de runs (Create, Read, Update, Delete)
-    - Gestión de estados de runs
-    - Seguimiento de progreso
-    - Manejo de tareas dentro de runs
-    - Cancellación de ejecuciones
+    Responsibilities:
+    - CRUD operations on runs (Create, Read, Update, Delete)
+    - Run state management
+    - Progress tracking
+    - Task management within runs
+    - Execution cancellation
     """
 
     def __init__(self, db: AsyncDatabase):
         """
-        Inicializa el servicio con una instancia de MongoDB.
+        Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance de Motor
+            db: AsyncDatabase instance from Motor
         """
         self.db = db
         self.runs_collection = db["pipeline_runs"]
@@ -73,37 +73,37 @@ class RunService:
         created_by: str,
     ) -> RunResponse:
         """
-        Crea un nuevo run (ejecución de pipeline).
+        Create a new run (pipeline execution).
 
         Args:
-            run_data: Datos del run a crear
-            created_by: Usuario que crea el run (email o ID)
+            run_data: Run data to create
+            created_by: User creating the run (email or ID)
 
         Returns:
-            RunResponse con el run creado
+            RunResponse with created run
 
         Raises:
-            InvalidRunError: Si los datos no son válidos
+            InvalidRunError: If data is invalid
         """
         try:
-            # Validar que el proyecto existe
+            # Validate that the project exists
             project = await self.projects_collection.find_one(
                 {"id": str(run_data.project_id)}
             )
             if not project:
-                raise InvalidRunError(f"Proyecto {run_data.project_id} no encontrado")
+                raise InvalidRunError(f"Project {run_data.project_id} not found")
 
-            # Validar que el pipeline existe en el proyecto
+            # Validate that the pipeline exists in the project
             pipelines = project.get("pipelines", [])
             pipeline_found = any(
                 str(p.get("id")) == str(run_data.pipeline_id) for p in pipelines
             )
             if not pipeline_found:
                 raise InvalidRunError(
-                    f"Pipeline {run_data.pipeline_id} no encontrado en proyecto"
+                    f"Pipeline {run_data.pipeline_id} not found in project"
                 )
 
-            # Crear documento de run
+            # Create run document
             run_id = str(uuid4())
             now = datetime.now(timezone.utc)
 
@@ -129,37 +129,37 @@ class RunService:
                 "timeout_seconds": run_data.timeout_seconds,
             }
 
-            # Insertar en MongoDB
+            # Insert into MongoDB
             await self.runs_collection.insert_one(run_doc)
-            logger.info(f"Run creado: {run_id} para pipeline {run_data.pipeline_id}")
+            logger.info(f"Run created: {run_id} for pipeline {run_data.pipeline_id}")
 
-            # Remover _id de MongoDB
+            # Remove MongoDB _id
             run_doc.pop("_id", None)
             return RunResponse(**run_doc)
 
         except InvalidRunError:
             raise
         except Exception as e:
-            logger.error(f"Error al crear run: {str(e)}")
-            raise InvalidRunError(f"Error al crear run: {str(e)}")
+            logger.error(f"Error creating run: {str(e)}")
+            raise InvalidRunError(f"Error creating run: {str(e)}")
 
     async def get_run(self, run_id: str) -> RunResponse:
         """
-        Obtiene un run por ID.
+        Get a run by ID.
 
         Args:
-            run_id: ID del run
+            run_id: ID of the run
 
         Returns:
-            RunResponse con los datos del run
+            RunResponse with run data
 
         Raises:
-            RunNotFoundError: Si el run no existe
+            RunNotFoundError: If run does not exist
         """
         run_doc = await self.runs_collection.find_one({"id": run_id})
 
         if not run_doc:
-            raise RunNotFoundError(f"Run {run_id} no encontrado")
+            raise RunNotFoundError(f"Run {run_id} not found")
 
         run_doc.pop("_id", None)
         return RunResponse(**run_doc)
@@ -173,19 +173,19 @@ class RunService:
         offset: int = 0,
     ) -> tuple[List[RunResponse], int]:
         """
-        Lista runs con filtros opcionales.
+        List runs with optional filters.
 
         Args:
-            project_id: Filtrar por proyecto
-            pipeline_id: Filtrar por pipeline
-            state: Filtrar por estado
-            limit: Número máximo de resultados
-            offset: Número de resultados a saltar
+            project_id: Filter by project
+            pipeline_id: Filter by pipeline
+            state: Filter by state
+            limit: Maximum number of results
+            offset: Number of results to skip
 
         Returns:
-            Tupla de (lista de runs, total de registros)
+            Tuple of (list of runs, total records)
         """
-        # Construir filtro
+        # Build filter
         query = {}
 
         if project_id:
@@ -197,10 +197,10 @@ class RunService:
         if state:
             query["state"] = state
 
-        # Contar total
+        # Count total
         total = await self.runs_collection.count_documents(query)
 
-        # Obtener página ordenada por más reciente primero
+        # Get page sorted by most recent first
         cursor = (
             self.runs_collection.find(query)
             .sort("created_at", -1)
@@ -214,7 +214,7 @@ class RunService:
             runs.append(RunResponse(**doc))
 
         logger.debug(
-            f"Listados {len(runs)} runs con filtros: "
+            f"Listed {len(runs)} runs with filters: "
             f"project_id={project_id}, pipeline_id={pipeline_id}, state={state}"
         )
 
@@ -227,24 +227,24 @@ class RunService:
         error: Optional[str] = None,
     ) -> RunResponse:
         """
-        Actualiza el estado de un run.
+        Update the state of a run.
 
         Args:
-            run_id: ID del run
-            new_state: Nuevo estado (PENDING, RUNNING, SUCCESS, FAILED, CANCELLED)
-            error: Mensaje de error (si aplica)
+            run_id: ID of the run
+            new_state: New state (PENDING, RUNNING, SUCCESS, FAILED, CANCELLED)
+            error: Error message (if applicable)
 
         Returns:
-            RunResponse actualizado
+            Updated RunResponse
 
         Raises:
-            RunNotFoundError: Si el run no existe
-            RunStateError: Si la transición de estado no es válida
+            RunNotFoundError: If run does not exist
+            RunStateError: If state transition is invalid
         """
-        # Obtener run actual
+        # Get current run
         run = await self.get_run(run_id)
 
-        # Validar transición de estado
+        # Validate state transition
         valid_transitions = {
             RunState.PENDING.value: [
                 RunState.RUNNING.value,
@@ -264,12 +264,14 @@ class RunService:
             new_state not in valid_transitions.get(run.state, [])
             and new_state != run.state
         ):
-            raise RunStateError(f"Transición inválida de {run.state} a {new_state}")
+            raise RunStateError(
+                f"Invalid state transition from {run.state} to {new_state}"
+            )
 
-        # Preparar actualización
+        # Prepare update
         update_dict = {"state": new_state}
 
-        # Agregar timestamps según el estado
+        # Add timestamps based on state
         now = datetime.now(timezone.utc)
         if new_state == RunState.RUNNING.value and not run.started_at:
             update_dict["started_at"] = now
@@ -281,21 +283,21 @@ class RunService:
         ]:
             update_dict["completed_at"] = now
 
-        # Agregar error si aplica
+        # Add error if applicable
         if error:
             update_dict["error"] = error
 
-        # Actualizar en MongoDB
+        # Update in MongoDB
         result = await self.runs_collection.update_one(
             {"id": run_id},
             {"$set": update_dict},
         )
 
         if result.matched_count == 0:
-            raise RunNotFoundError(f"Run {run_id} no encontrado")
+            raise RunNotFoundError(f"Run {run_id} not found")
 
         logger.info(
-            f"Run {run_id} transicionó a estado {new_state}. "
+            f"Run {run_id} transitioned to state {new_state}. "
             f"Error: {error or 'None'}"
         )
 
@@ -303,28 +305,26 @@ class RunService:
 
     async def cancel_run(self, run_id: str, reason: str = "") -> RunResponse:
         """
-        Cancela un run.
+        Cancel a run.
 
         Args:
-            run_id: ID del run a cancelar
-            reason: Razón de la cancelación
+            run_id: ID of the run to cancel
+            reason: Reason for cancellation
 
         Returns:
-            RunResponse actualizado
+            Updated RunResponse
 
         Raises:
-            RunNotFoundError: Si el run no existe
-            RunStateError: Si el run no puede ser cancelado
+            RunNotFoundError: If run does not exist
+            RunStateError: If run cannot be cancelled
         """
         run_data = await self.get_run(run_id)
 
-        # Solo se puede cancelar si está en PENDING o RUNNING
+        # Can only cancel if in PENDING or RUNNING
         if run_data.state not in [RunState.PENDING.value, RunState.RUNNING.value]:
-            raise RunStateError(
-                f"No se puede cancelar un run en estado {run_data.state}"
-            )
+            raise RunStateError(f"Cannot cancel a run in state {run_data.state}")
 
-        error_msg = f"Cancelado: {reason}" if reason else "Cancelado por usuario"
+        error_msg = f"Cancelled: {reason}" if reason else "Cancelled by user"
         return await self.update_run_state(
             run_id,
             RunState.CANCELLED.value,
@@ -333,20 +333,20 @@ class RunService:
 
     async def get_run_progress(self, run_id: str) -> RunProgress:
         """
-        Obtiene el progreso actual de un run.
+        Get the current progress of a run.
 
         Args:
-            run_id: ID del run
+            run_id: ID of the run
 
         Returns:
-            RunProgress con estadísticas de progreso
+            RunProgress with progress statistics
 
         Raises:
-            RunNotFoundError: Si el run no existe
+            RunNotFoundError: If run does not exist
         """
         await self.get_run(run_id)
 
-        # Contar tareas por estado
+        # Count tasks by state
         tasks = []
         cursor = self.tasks_collection.find({"run_id": run_id})
         async for task in cursor:
@@ -357,7 +357,7 @@ class RunService:
             state = task.get("state")
             tasks_by_state[state] = tasks_by_state.get(state, 0) + 1
 
-        # Calcular progreso
+        # Calculate progress
         total_tasks = len(tasks)
         completed_tasks = sum(
             1
@@ -380,23 +380,23 @@ class RunService:
         node_id: str,
     ) -> str:
         """
-        Agrega una tarea a un run.
+        Add a task to a run.
 
         Args:
-            run_id: ID del run
-            task_name: Nombre de la tarea
-            node_id: ID del nodo que ejecuta la tarea
+            run_id: ID of the run
+            task_name: Name of the task
+            node_id: ID of the node executing the task
 
         Returns:
-            ID de la tarea creada
+            ID of the created task
 
         Raises:
-            RunNotFoundError: Si el run no existe
+            RunNotFoundError: If run does not exist
         """
-        # Verificar que el run existe
+        # Verify that the run exists
         run = await self.get_run(run_id)
 
-        # Crear documento de tarea
+        # Create task document
         task_id = str(uuid4())
         task_doc: TaskRunDocument = {
             "id": task_id,
@@ -412,9 +412,9 @@ class RunService:
             "output": None,
         }
 
-        # Insertar en MongoDB
+        # Insert into MongoDB
         await self.tasks_collection.insert_one(task_doc)
-        logger.info(f"Tarea {task_id} agregada a run {run_id}")
+        logger.info(f"Task {task_id} added to run {run_id}")
 
         return task_id
 
@@ -426,16 +426,16 @@ class RunService:
         output: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Actualiza el estado de una tarea.
+        Update the state of a task.
 
         Args:
-            task_id: ID de la tarea
-            new_state: Nuevo estado (PENDING, RUNNING, SUCCESS, FAILED)
-            error: Mensaje de error (si aplica)
-            output: Salida de la tarea (si aplica)
+            task_id: ID of the task
+            new_state: New state (PENDING, RUNNING, SUCCESS, FAILED)
+            error: Error message (if applicable)
+            output: Task output (if applicable)
 
         Returns:
-            Documento de la tarea actualizada
+            Updated task document
         """
         update_dict = {"state": new_state}
 
@@ -457,27 +457,27 @@ class RunService:
             {"$set": update_dict},
         )
 
-        logger.info(f"Tarea {task_id} actualizada a estado {new_state}")
+        logger.info(f"Task {task_id} updated to state {new_state}")
 
-        # Retornar tarea actualizada
+        # Return updated task
         task = await self.tasks_collection.find_one({"id": task_id})
         task.pop("_id", None)
         return task
 
     async def get_run_tasks(self, run_id: str) -> List[Dict[str, Any]]:
         """
-        Obtiene todas las tareas de un run.
+        Get all tasks for a run.
 
         Args:
-            run_id: ID del run
+            run_id: ID of the run
 
         Returns:
-            Lista de documentos de tareas
+            List of task documents
 
         Raises:
-            RunNotFoundError: Si el run no existe
+            RunNotFoundError: If run does not exist
         """
-        # Verificar que el run existe
+        # Verify that the run exists
         await self.get_run(run_id)
 
         tasks = []
@@ -489,7 +489,7 @@ class RunService:
         return tasks
 
     # =========================================================================
-    # START AND CANCEL RUN - NUEVOS MÉTODOS CRÍTICOS
+    # START AND CANCEL RUN - CRITICAL NEW METHODS
     # =========================================================================
 
     async def start_run(
@@ -498,54 +498,54 @@ class RunService:
         timeout_seconds: Optional[int] = None,
     ) -> RunResponse:
         """
-        Inicia la ejecución de un run que está en estado PENDING.
+        Start the execution of a run that is in PENDING state.
 
-        Este método delega la ejecución real a ExecutionService,
-        que se encarga de:
-        1. Cambiar estado a RUNNING
-        2. Ejecutar en background (no bloquea)
-        3. Actualizar progreso en MongoDB
-        4. Cambiar a SUCCESS/FAILED cuando termine
+        This method delegates actual execution to ExecutionService,
+        which handles:
+        1. Changing state to RUNNING
+        2. Executing in background (non-blocking)
+        3. Updating progress in MongoDB
+        4. Changing to SUCCESS/FAILED when complete
 
         Args:
-            run_id: ID del run a iniciar
-            timeout_seconds: Timeout para la ejecución
+            run_id: ID of the run to start
+            timeout_seconds: Timeout for execution
 
         Returns:
-            RunResponse con run en estado RUNNING
+            RunResponse with run in RUNNING state
 
         Raises:
-            RunNotFoundError: Si run no existe
-            RunStateError: Si run no está en PENDING
-            InvalidRunError: Si hay errores
+            RunNotFoundError: If run does not exist
+            RunStateError: If run is not in PENDING
+            InvalidRunError: If there are errors
         """
         try:
-            logger.info(f"Iniciando ejecución de run {run_id}")
+            logger.info(f"Starting execution of run {run_id}")
 
-            # 1. VALIDAR: Run existe
+            # 1. VALIDATE: Run exists
             run = await self.runs_collection.find_one({"id": run_id})
             if not run:
-                raise RunNotFoundError(f"Run {run_id} no encontrado")
+                raise RunNotFoundError(f"Run {run_id} not found")
 
-            # 2. VALIDAR: Estado es PENDING
+            # 2. VALIDATE: State is PENDING
             current_state = run.get("state", RunState.PENDING.value)
             if current_state != RunState.PENDING.value:
                 raise RunStateError(
-                    f"Run {run_id} no está en PENDING (estado: {current_state}). "
-                    f"Solo se pueden iniciar runs en PENDING."
+                    f"Run {run_id} is not in PENDING (state: {current_state}). "
+                    f"Only runs in PENDING can be started."
                 )
 
-            # 3. ACTUALIZAR timeout si se proporciona
+            # 3. UPDATE timeout if provided
             if timeout_seconds:
                 await self.runs_collection.update_one(
                     {"id": run_id}, {"$set": {"timeout_seconds": timeout_seconds}}
                 )
 
-            # NOTA: La ejecución real (cambiar a RUNNING, etc.) la hace ExecutionService
-            # Este método simplemente valida y retorna el run actualizado
-            # para que el caller (route) sepa que puede proceder
+            # NOTE: Actual execution (changing to RUNNING, etc.) is done by ExecutionService
+            # This method simply validates and returns the updated run
+            # so the caller (route) knows it can proceed
 
-            # 4. RETORNAR RUN ACTUALIZADO
+            # 4. RETURN UPDATED RUN
             run = await self.runs_collection.find_one({"id": run_id})
             run.pop("_id", None)
 
@@ -554,8 +554,8 @@ class RunService:
         except (RunNotFoundError, RunStateError, InvalidRunError):
             raise
         except Exception as e:
-            logger.error(f"Error iniciando run {run_id}: {e}", exc_info=True)
-            raise InvalidRunError(f"Error al iniciar run: {str(e)}")
+            logger.error(f"Error starting run {run_id}: {e}", exc_info=True)
+            raise InvalidRunError(f"Error starting run: {str(e)}")
 
     async def cancel_run(
         self,
@@ -563,37 +563,37 @@ class RunService:
         reason: str = "User cancelled",
     ) -> RunResponse:
         """
-        Cancela un run que está en ejecución.
+        Cancel a run that is in execution.
 
-        Este método delega la cancelación real a ExecutionService,
-        que se encarga de:
-        1. Cambiar estado a CANCELLED
-        2. Signal a OrchestratorRunner
-        3. Marcar task asincronas como canceladas
+        This method delegates actual cancellation to ExecutionService,
+        which handles:
+        1. Changing state to CANCELLED
+        2. Signal to OrchestratorRunner
+        3. Marking async tasks as cancelled
 
         Args:
-            run_id: ID del run a cancelar
-            reason: Razón de la cancelación
+            run_id: ID of the run to cancel
+            reason: Reason for cancellation
 
         Returns:
-            RunResponse con run en estado CANCELLED
+            RunResponse with run in CANCELLED state
 
         Raises:
-            RunNotFoundError: Si run no existe
-            InvalidRunError: Si hay errores
+            RunNotFoundError: If run does not exist
+            InvalidRunError: If there are errors
         """
         try:
-            logger.info(f"Cancelando run {run_id}: {reason}")
+            logger.info(f"Cancelling run {run_id}: {reason}")
 
-            # 1. VALIDAR: Run existe
+            # 1. VALIDATE: Run exists
             run = await self.runs_collection.find_one({"id": run_id})
             if not run:
-                raise RunNotFoundError(f"Run {run_id} no encontrado")
+                raise RunNotFoundError(f"Run {run_id} not found")
 
-            # NOTA: La cancelación real (cambiar estado, etc.) la hace ExecutionService
-            # Este método simplemente valida y retorna el run
+            # NOTE: Actual cancellation (changing state, etc.) is done by ExecutionService
+            # This method simply validates and returns the run
 
-            # 2. RETORNAR RUN ACTUALIZADO
+            # 2. RETURN UPDATED RUN
             run = await self.runs_collection.find_one({"id": run_id})
             run.pop("_id", None)
 
@@ -602,7 +602,7 @@ class RunService:
         except RunNotFoundError:
             raise
         except Exception as e:
-            logger.error(f"Error cancelando run {run_id}: {e}", exc_info=True)
-            raise InvalidRunError(f"Error al cancelar run: {str(e)}")
+            logger.error(f"Error cancelling run {run_id}: {e}", exc_info=True)
+            raise InvalidRunError(f"Error cancelling run: {str(e)}")
 
         return tasks

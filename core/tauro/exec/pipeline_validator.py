@@ -31,7 +31,7 @@ class PipelineValidator:
 
     @staticmethod
     def validate_pipeline_config(pipeline: Dict[str, Any]) -> None:
-        """Valida configuración básica del pipeline."""
+        """Validate basic pipeline configuration."""
         if not isinstance(pipeline, dict):
             raise ValueError("Pipeline configuration must be a dictionary")
 
@@ -49,7 +49,7 @@ class PipelineValidator:
     def validate_node_configs(
         pipeline_nodes: List[str], node_configs: Dict[str, Dict[str, Any]]
     ) -> None:
-        """Valida que todos los nodos del pipeline tengan configuraciones."""
+        """Validate that all pipeline nodes have configurations."""
         missing_nodes = []
         for node_name in pipeline_nodes:
             if node_name not in node_configs:
@@ -64,7 +64,7 @@ class PipelineValidator:
         node_configs: Dict[str, Dict[str, Any]],
         format_policy: Optional[FormatPolicy] = None,
     ) -> Dict[str, Any]:
-        """Valida pipeline híbrido y retorna análisis detallado."""
+        """Validate hybrid pipeline and return detailed analysis."""
         policy = format_policy or FormatPolicy()
 
         validation_result = {
@@ -437,7 +437,7 @@ class PipelineValidator:
         node_configs: Dict[str, Dict[str, Any]],
         policy: FormatPolicy,
     ) -> List[str]:
-        """Valida requerimientos específicos para nodos streaming."""
+        """Validate specific requirements for streaming nodes."""
         errors: List[str] = []
         for streaming_node in streaming_nodes:
             node_config = node_configs.get(streaming_node, {})
@@ -503,7 +503,7 @@ class PipelineValidator:
 
     @staticmethod
     def _get_node_dependencies(node_config: Dict[str, Any]) -> List[str]:
-        """Extrae dependencias de la configuración del nodo."""
+        """Extract dependencies from node configuration."""
         dependencies = node_config.get("dependencies", [])
 
         if dependencies is None:
@@ -527,7 +527,7 @@ class PipelineValidator:
 
     @staticmethod
     def validate_dataframe_schema(result_df: Any) -> None:
-        """Valida que el DataFrame resultado tenga un esquema no vacío."""
+        """Validate that the result DataFrame has a non-empty schema."""
         if result_df is None:
             raise ValueError("Result DataFrame is None")
 

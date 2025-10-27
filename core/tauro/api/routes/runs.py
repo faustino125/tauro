@@ -1,10 +1,10 @@
 """
 Runs Router - Pipeline Run Management Endpoints
 
-Endpoints para gestionar la ejecución de pipelines:
-- Crear, listar, obtener estado de runs
-- Cancelar ejecuciones
-- Obtener tareas y logs de un run
+Endpoints for managing pipeline executions:
+- Create, list, get run status
+- Cancel executions
+- Get tasks and logs for a run
 """
 
 from fastapi import APIRouter, Depends, status, Query
@@ -51,7 +51,7 @@ ERROR_RUN_STATE = "Invalid state transition"
 
 
 # =============================================================================
-# CREATE - Crear nuevo run
+# CREATE - Create new run
 # =============================================================================
 
 
@@ -59,18 +59,18 @@ ERROR_RUN_STATE = "Invalid state transition"
     "",
     response_model=APIResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Crear un nuevo run",
-    description="Crea un nuevo pipeline run en estado PENDING",
+    summary="Create a new run",
+    description="Create a new pipeline run in PENDING state",
 )
 async def create_run(
     request: RunCreate,
     run_service=Depends(get_run_service),
 ):
     """
-    Crear un nuevo pipeline run.
+    Create a new pipeline run.
 
-    Este endpoint crea un nuevo run en estado PENDING.
-    Posteriormente, use POST /runs/{run_id}/start para iniciar la ejecución.
+    This endpoint creates a new run in PENDING state.
+    Later, use POST /runs/{run_id}/start to start execution.
     """
     try:
         logger.info(
@@ -102,25 +102,25 @@ async def create_run(
 
 
 # =============================================================================
-# READ - Obtener un run específico
+# READ - Get a specific run
 # =============================================================================
 
 
 @router.get(
     "/{run_id}",
     response_model=APIResponse,
-    summary="Obtener estado de un run",
-    description="Obtiene el estado actual y detalles de un pipeline run",
+    summary="Get run status",
+    description="Get current status and details of a pipeline run",
 )
 async def get_run(
     run_id: str,
     run_service=Depends(get_run_service),
 ):
     """
-    Obtener estado actual de un run.
+    Get current status of a run.
 
-    Retorna información completa del run incluyendo estado actual,
-    tareas ejecutadas y progreso.
+    Returns complete information including current state,
+    executed tasks and progress.
     """
     try:
         logger.debug(f"Getting run {run_id}")
@@ -142,29 +142,29 @@ async def get_run(
 
 
 # =============================================================================
-# LIST - Listar runs con filtros
+# LIST - List runs with filters
 # =============================================================================
 
 
 @router.get(
     "",
     response_model=ListResponse,
-    summary="Listar runs",
-    description="Lista los pipeline runs con filtros opcionales",
+    summary="List runs",
+    description="List pipeline runs with optional filters",
 )
 async def list_runs(
-    project_id: Optional[str] = Query(None, description="Filtrar por proyecto"),
-    pipeline_id: Optional[str] = Query(None, description="Filtrar por pipeline"),
-    state: Optional[str] = Query(None, description="Filtrar por estado"),
-    skip: int = Query(0, ge=0, description="Número de runs a saltar"),
-    limit: int = Query(50, ge=1, le=100, description="Máximo de runs a retornar"),
+    project_id: Optional[str] = Query(None, description="Filter by project"),
+    pipeline_id: Optional[str] = Query(None, description="Filter by pipeline"),
+    state: Optional[str] = Query(None, description="Filter by state"),
+    skip: int = Query(0, ge=0, description="Number of runs to skip"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum runs to return"),
     run_service=Depends(get_run_service),
 ):
     """
-    Listar pipeline runs con filtros.
+    List pipeline runs with filters.
 
-    Retorna una lista paginada de runs con filtros opcionales por
-    proyecto, pipeline y estado.
+    Returns a paginated list of runs with optional filters by
+    project, pipeline and state.
     """
     try:
         logger.debug(
@@ -192,7 +192,7 @@ async def list_runs(
 
 
 # =============================================================================
-# START - Iniciar/resumir un run
+# START - Start/resume a run
 # =============================================================================
 
 
@@ -200,22 +200,22 @@ async def list_runs(
     "/{run_id}/start",
     response_model=APIResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Iniciar ejecución de un run",
-    description="Inicia la ejecución asíncrona de un pipeline run",
+    summary="Start execution of a run",
+    description="Start async execution of a pipeline run",
 )
 async def start_run(
     run_id: str,
     timeout_seconds: Optional[int] = Query(
-        None, ge=1, description="Timeout en segundos"
+        None, ge=1, description="Timeout in seconds"
     ),
     run_service=Depends(get_run_service),
 ):
     """
-    Iniciar ejecución de un run.
+    Start execution of a run.
 
-    Inicia la ejecución del run de forma asíncrona. El endpoint retorna
-    inmediatamente con 202 Accepted. Use GET /runs/{run_id} para
-    monitorear el progreso.
+    Start run execution asynchronously. The endpoint returns
+    immediately with 202 Accepted. Use GET /runs/{run_id} to
+    monitor progress.
     """
     try:
         logger.info(f"Starting run {run_id} (timeout: {timeout_seconds}s)")
@@ -253,26 +253,26 @@ async def start_run(
 
 
 # =============================================================================
-# CANCEL - Cancelar un run
+# CANCEL - Cancel a run
 # =============================================================================
 
 
 @router.post(
     "/{run_id}/cancel",
     response_model=APIResponse,
-    summary="Cancelar ejecución de un run",
-    description="Cancela la ejecución de un pipeline run",
+    summary="Cancel execution of a run",
+    description="Cancel the execution of a pipeline run",
 )
 async def cancel_run(
     run_id: str,
-    reason: Optional[str] = Query(None, description="Razón de cancelación"),
+    reason: Optional[str] = Query(None, description="Reason for cancellation"),
     run_service=Depends(get_run_service),
 ):
     """
-    Cancelar ejecución de un run.
+    Cancel execution of a run.
 
-    Cancela la ejecución del run. Solo funciona si el run está en estado
-    RUNNING o PENDING.
+    Cancel run execution. Only works if the run is in
+    RUNNING or PENDING state.
     """
     try:
         logger.info(f"Cancelling run {run_id}, reason={reason}")
@@ -305,27 +305,27 @@ async def cancel_run(
 
 
 # =============================================================================
-# TASKS - Obtener tareas de un run
+# TASKS - Get tasks for a run
 # =============================================================================
 
 
 @router.get(
     "/{run_id}/tasks",
     response_model=ListResponse,
-    summary="Obtener tareas de un run",
-    description="Obtiene la lista de tareas ejecutadas en un run",
+    summary="Get tasks for a run",
+    description="Get list of tasks executed in a run",
 )
 async def get_run_tasks(
     run_id: str,
-    skip: int = Query(0, ge=0, description="Número de tareas a saltar"),
-    limit: int = Query(50, ge=1, le=100, description="Máximo de tareas a retornar"),
+    skip: int = Query(0, ge=0, description="Number of tasks to skip"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum tasks to return"),
     run_service=Depends(get_run_service),
 ):
     """
-    Obtener tareas de un run.
+    Get tasks for a run.
 
-    Retorna la lista paginada de tareas (nodos del pipeline) ejecutadas
-    o siendo ejecutadas en el run.
+    Returns paginated list of tasks (pipeline nodes) executed
+    or being executed in the run.
     """
     try:
         logger.debug(f"Getting tasks for run {run_id}")
@@ -350,30 +350,30 @@ async def get_run_tasks(
 
 
 # =============================================================================
-# LOGS - Obtener logs de un run
+# LOGS - Get logs for a run
 # =============================================================================
 
 
 @router.get(
     "/{run_id}/logs",
     response_model=ListResponse,
-    summary="Obtener logs de un run",
-    description="Obtiene los logs de ejecución de un run",
+    summary="Get logs for a run",
+    description="Get execution logs for a run",
 )
 async def get_run_logs(
     run_id: str,
-    skip: int = Query(0, ge=0, description="Número de logs a saltar"),
-    limit: int = Query(100, ge=1, le=1000, description="Máximo de logs a retornar"),
+    skip: int = Query(0, ge=0, description="Number of logs to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum logs to return"),
     level: Optional[str] = Query(
-        None, description="Filtrar por nivel (DEBUG, INFO, WARNING, ERROR)"
+        None, description="Filter by level (DEBUG, INFO, WARNING, ERROR)"
     ),
     run_service=Depends(get_run_service),
 ):
     """
-    Obtener logs de un run.
+    Get logs for a run.
 
-    Retorna los logs de ejecución del run. Puede filtrar por nivel de log
-    y paginar el resultado.
+    Returns run execution logs. Can filter by log level
+    and paginate the result.
     """
     try:
         logger.debug(f"Getting logs for run {run_id}, level={level}")

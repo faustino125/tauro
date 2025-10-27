@@ -64,7 +64,7 @@ DEFAULT_STREAMING_CONFIG = {
     "options": {},
 }
 
-# Configuraciones específicas por formato
+# Format-specific configurations
 STREAMING_FORMAT_CONFIGS: Dict[str, Dict[str, Any]] = {
     StreamingFormat.KAFKA.value: {
         "required_options": ["kafka.bootstrap.servers"],
@@ -107,7 +107,7 @@ STREAMING_FORMAT_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Validaciones específicas
+# Format-specific validations
 STREAMING_VALIDATIONS = {
     "max_checkpoint_age_hours": 24,
     "min_trigger_interval_seconds": 1,
