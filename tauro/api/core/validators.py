@@ -1,16 +1,11 @@
 """
-Centralized validation utilities for API endpoints.
-
-Provides common validation logic to avoid code duplication and ensure
-consistency across all API routes.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
 
 import re
 from fastapi import HTTPException, status
-from typing import Optional
 
-# Pattern for valid identifiers: alphanumeric, underscore, hyphen, dot only
-# This prevents path traversal and SQL injection attacks
 VALID_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 

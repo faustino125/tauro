@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
@@ -13,11 +17,11 @@ import time
 from datetime import datetime, timezone
 from collections import deque
 
-from tauro.config.contexts import Context
-from tauro.orchest.models import PipelineRun, TaskRun, RunState
-from tauro.orchest.store import OrchestratorStore
-from tauro.orchest.executor.local import LocalDagExecutor
-from tauro.orchest.resilience import (
+from tauro.core.config.contexts import Context
+from tauro.api.orchest.models import PipelineRun, TaskRun, RunState
+from tauro.api.orchest.store import OrchestratorStore
+from tauro.api.orchest.executor.local import LocalDagExecutor
+from tauro.api.orchest.resilience import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     get_resilience_manager,
@@ -133,9 +137,7 @@ class OrchestratorRunner:
                 }
             )
 
-    def create_run(
-        self, pipeline_id: str, params: Optional[Dict] = None
-    ) -> PipelineRun:
+    def create_run(self, pipeline_id: str, params: Optional[Dict] = None) -> PipelineRun:
         pr = self.store.create_pipeline_run(pipeline_id, params or {})
         logger.info(f"Created PipelineRun {pr.id} for pipeline '{pipeline_id}'")
         return pr
@@ -245,9 +247,7 @@ class OrchestratorRunner:
             with self._lock:
                 self._active_executors.pop(pr.id, None)
 
-    def _handle_run_success(
-        self, run_id: str, pr: PipelineRun, execution_time: float
-    ) -> RunState:
+    def _handle_run_success(self, run_id: str, pr: PipelineRun, execution_time: float) -> RunState:
         """Handle successful pipeline execution."""
         logger.info(
             f"Run {run_id} completed successfully in {execution_time:.2f} seconds",
@@ -362,9 +362,7 @@ class OrchestratorRunner:
 
         except CircuitBreakerOpenError as e:
             execution_time = time.time() - start_time
-            return self._handle_run_failure(
-                run_id, pr, execution_time, e, is_circuit_breaker=True
-            )
+            return self._handle_run_failure(run_id, pr, execution_time, e, is_circuit_breaker=True)
 
         except Exception as e:
             execution_time = time.time() - start_time
@@ -389,9 +387,7 @@ class OrchestratorRunner:
             created_before=created_before,
         )
 
-    def list_task_runs(
-        self, run_id: str, state: Optional[RunState] = None
-    ) -> List[TaskRun]:
+    def list_task_runs(self, run_id: str, state: Optional[RunState] = None) -> List[TaskRun]:
         return self.store.list_task_runs(run_id, state=state)
 
     def cancel_run(self, run_id: str) -> bool:
@@ -403,9 +399,7 @@ class OrchestratorRunner:
             return False
 
         if pr.state.is_terminal():
-            logger.warning(
-                f"PipelineRun '{run_id}' is already in terminal state {pr.state}"
-            )
+            logger.warning(f"PipelineRun '{run_id}' is already in terminal state {pr.state}")
             return False
 
         with self._lock:
@@ -462,9 +456,7 @@ class OrchestratorRunner:
             logger.exception(f"Error updating cancellation status: {e}")
             return False
 
-    def run_pipeline(
-        self, pipeline_id: str, params: Optional[Dict] = None, **kwargs
-    ) -> str:
+    def run_pipeline(self, pipeline_id: str, params: Optional[Dict] = None, **kwargs) -> str:
         """
         Convenience: create and kick off a background run protected by the bulkhead.
         Returns run_id immediately.
@@ -543,9 +535,7 @@ class OrchestratorRunner:
         # Métricas de ejecuciones recientes
         if self._recent_executions:
             recent_list = list(self._recent_executions)
-            recent_success_rate = sum(1 for e in recent_list if e["success"]) / len(
-                recent_list
-            )
+            recent_success_rate = sum(1 for e in recent_list if e["success"]) / len(recent_list)
             metrics["recent_success_rate"] = recent_success_rate
 
         return metrics
@@ -605,9 +595,7 @@ class OrchestratorRunner:
             futures = list(self._futures.values())
             future_count = len(futures)
 
-        logger.info(
-            f"Stopping {active_count} active executors and {future_count} futures"
-        )
+        logger.info(f"Stopping {active_count} active executors and {future_count} futures")
 
         # 2. Cancelar todos los futures pendientes
         for f in futures:

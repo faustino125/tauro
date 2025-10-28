@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from typing import Optional, Dict, Any, List
 from threading import Event, Thread, RLock
@@ -10,16 +14,16 @@ import warnings
 
 from loguru import logger  # type: ignore
 
-from tauro.orchest.models import ScheduleKind, Schedule, RunState
-from tauro.orchest.store import OrchestratorStore
-from core.orchest.services.run_service import RunService
-from tauro.orchest.resilience import (
+from tauro.api.orchest.models import ScheduleKind, Schedule, RunState
+from tauro.api.orchest.store import OrchestratorStore
+from tauro.api.orchest.services.run_service import RunService
+from tauro.api.orchest.resilience import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     get_resilience_manager,
 )
-from tauro.config.contexts import Context
+from tauro.core.config.contexts import Context
 
 # Deprecation warning
 warnings.warn(
@@ -35,9 +39,7 @@ try:
     HAS_CRONITER = True
 except ImportError:
     HAS_CRONITER = False
-    logger.warning(
-        "croniter not installed, cron schedules will use placeholder behavior"
-    )
+    logger.warning("croniter not installed, cron schedules will use placeholder behavior")
 
 
 def _parse_interval_seconds(expr: str) -> int:
@@ -141,18 +143,14 @@ class SchedulerService:
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
             except Exception as exc:
-                logging.getLogger(__name__).warning(
-                    "Failed to register signals: %s", exc
-                )
+                logging.getLogger(__name__).warning("Failed to register signals: %s", exc)
         else:
             logging.getLogger(__name__).debug(
                 "Running in non-main thread: not registering signal handlers."
             )
 
     def _signal_handler(self, signum, frame) -> None:
-        logging.getLogger(__name__).info(
-            "SchedulerService received signal %s, stopping...", signum
-        )
+        logging.getLogger(__name__).info("SchedulerService received signal %s, stopping...", signum)
         self.stop()
 
     def start(self, poll_interval: float = 1.0):
@@ -198,9 +196,7 @@ class SchedulerService:
     def _check_stuck_runs(self):
         """Detect and handle stuck executions."""
         try:
-            stuck_runs = self.store.get_stuck_pipeline_runs(
-                self.stuck_run_timeout_minutes
-            )
+            stuck_runs = self.store.get_stuck_pipeline_runs(self.stuck_run_timeout_minutes)
 
             for run in stuck_runs:
                 logger.warning(
@@ -320,12 +316,8 @@ class SchedulerService:
         time.sleep(poll_interval)
 
     def _can_schedule(self, s: Schedule) -> bool:
-        running = self.store.list_pipeline_runs(
-            pipeline_id=s.pipeline_id, state=RunState.RUNNING
-        )
-        queued = self.store.list_pipeline_runs(
-            pipeline_id=s.pipeline_id, state=RunState.QUEUED
-        )
+        running = self.store.list_pipeline_runs(pipeline_id=s.pipeline_id, state=RunState.RUNNING)
+        queued = self.store.list_pipeline_runs(pipeline_id=s.pipeline_id, state=RunState.QUEUED)
         if len(running) + len(queued) >= s.max_concurrency:
             logger.debug(
                 f"Skipping schedule {s.id} due to concurrency "
@@ -337,8 +329,6 @@ class SchedulerService:
     def _create_and_start_run(self, s: Schedule, now: datetime) -> bool:
         """
         Create the pipeline run, start it in a thread and bump the next run.
-        Uses per-schedule circuit breakers to isolate problematic schedules.
-        Returns True if the scheduler should stop (due to reaching failure threshold), otherwise False.
         """
 
         def _create_run():
@@ -381,9 +371,6 @@ class SchedulerService:
                 # fallback conservative bump
                 next_run = now + timedelta(seconds=60)
 
-            # Attempt to atomically claim the schedule for this runner. If claim
-            # succeeds we proceed to create the run; otherwise another instance
-            # already claimed it.
             claimed = self.store.claim_schedule_next_run(s.id, s.next_run_at, next_run)
             if not claimed:
                 # someone else claimed it
@@ -499,21 +486,15 @@ class SchedulerService:
                 except Exception:
                     logger.exception(f"Error parsing cron expression {s.expression}")
                     # fallback to conservative 60s
-                    self.store.update_schedule(
-                        s.id, next_run_at=now + timedelta(seconds=60)
-                    )
+                    self.store.update_schedule(s.id, next_run_at=now + timedelta(seconds=60))
             else:
                 # fallback placeholder: schedule in 60s
-                self.store.update_schedule(
-                    s.id, next_run_at=now + timedelta(seconds=60)
-                )
+                self.store.update_schedule(s.id, next_run_at=now + timedelta(seconds=60))
 
     def backfill(self, pipeline_id: str, count: int):
         for _ in range(max(0, int(count))):
             pr = self.store.create_pipeline_run(pipeline_id, params={})
-            Thread(
-                target=self._start_run_in_thread, args=(pr.id, Schedule()), daemon=True
-            ).start()
+            Thread(target=self._start_run_in_thread, args=(pr.id, Schedule()), daemon=True).start()
             time.sleep(0.1)
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -559,16 +540,10 @@ class SchedulerService:
 
         # Verificar circuit breakers de forma delegada
         if self._enable_circuit_breakers:
-            open_circuits, half_open_circuits = self._get_circuit_breaker_summary(
-                metrics
-            )
+            open_circuits, half_open_circuits = self._get_circuit_breaker_summary(metrics)
             if open_circuits:
-                warnings.append(
-                    f"{len(open_circuits)} schedule(s) with OPEN circuit breaker"
-                )
-                issues.extend(
-                    [f"Schedule {sid}: circuit breaker OPEN" for sid in open_circuits]
-                )
+                warnings.append(f"{len(open_circuits)} schedule(s) with OPEN circuit breaker")
+                issues.extend([f"Schedule {sid}: circuit breaker OPEN" for sid in open_circuits])
             if half_open_circuits:
                 warnings.append(f"{len(half_open_circuits)} schedule(s) recovering")
 
@@ -590,9 +565,7 @@ class SchedulerService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    def _get_circuit_breaker_summary(
-        self, metrics: Dict[str, Any]
-    ) -> tuple[List[str], List[str]]:
+    def _get_circuit_breaker_summary(self, metrics: Dict[str, Any]) -> tuple[List[str], List[str]]:
         """Return lists of open and half-open circuit breaker schedule ids."""
         open_circuits: List[str] = []
         half_open_circuits: List[str] = []

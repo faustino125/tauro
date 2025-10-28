@@ -134,9 +134,7 @@ class MLNodeCommand(NodeCommand):
                 }
             )
 
-            logger.success(
-                f"ML node '{self.node_name}' executed successfully in {duration:.2f}s"
-            )
+            logger.success(f"ML node '{self.node_name}' executed successfully in {duration:.2f}s")
             self._log_execution_summary()
 
             return result
@@ -170,9 +168,7 @@ class MLNodeCommand(NodeCommand):
             sig = inspect.signature(self.function)
             params = sig.parameters
             accepts_ml_context = "ml_context" in params
-            accepts_kwargs = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-            )
+            accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
             if accepts_ml_context or accepts_kwargs:
                 logger.debug(
@@ -185,9 +181,7 @@ class MLNodeCommand(NodeCommand):
                     ml_context=ml_context,
                 )
             else:
-                logger.debug(
-                    "Function does not accept ml_context - calling standard signature"
-                )
+                logger.debug("Function does not accept ml_context - calling standard signature")
                 return self.function(
                     *self.input_dfs,
                     start_date=self.start_date,
@@ -214,16 +208,12 @@ class MLNodeCommand(NodeCommand):
     def _configure_spark_parameters(self) -> None:
         """Configure ML-related parameters in the Spark session."""
         if self.spark is None:
-            logger.warning(
-                "Spark session not available. Skipping parameter configuration."
-            )
+            logger.warning("Spark session not available. Skipping parameter configuration.")
             return
 
         try:
             if not hasattr(self.spark, "conf"):
-                logger.debug(
-                    "Spark session has no conf attribute; skipping spark param config"
-                )
+                logger.debug("Spark session has no conf attribute; skipping spark param config")
                 return
 
             for param_name, param_value in self.merged_hyperparams.items():
@@ -231,9 +221,7 @@ class MLNodeCommand(NodeCommand):
                 try:
                     self.spark.conf.set(key, str(param_value))
                 except Exception:
-                    logger.debug(
-                        f"Failed to set Spark conf {key}={param_value}", exc_info=True
-                    )
+                    logger.debug(f"Failed to set Spark conf {key}={param_value}", exc_info=True)
         except Exception as e:
             logger.debug(
                 f"Unexpected error while configuring Spark parameters: {e}",

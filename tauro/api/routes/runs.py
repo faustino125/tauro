@@ -1,33 +1,24 @@
 """
-Runs Router - Pipeline Run Management Endpoints
-
-Endpoints for managing pipeline executions:
-- Create, list, get run status
-- Cancel executions
-- Get tasks and logs for a run
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from fastapi import APIRouter, Depends, status, Query
 from typing import Optional
 from datetime import datetime, timezone
 from loguru import logger
 
-from core.api.core.deps import (
+from tauro.api.core.deps import (
     get_run_service,
 )
-from core.api.core.responses import (
+from tauro.api.core.responses import (
     APIResponse,
     ListResponse,
     success_response,
     error_response,
     list_response,
 )
-from core.api.schemas.models import (
-    RunCreate,
-    RunResponse,
-    RunState,
-)
-from core.api.services.run_service import (
+from tauro.api.schemas.models import RunCreate
+from tauro.api.services.run_service import (
     RunNotFoundError,
     RunStateError,
     InvalidRunError,
@@ -68,14 +59,10 @@ async def create_run(
 ):
     """
     Create a new pipeline run.
-
-    This endpoint creates a new run in PENDING state.
-    Later, use POST /runs/{run_id}/start to start execution.
     """
     try:
         logger.info(
-            f"Creating run for project={request.project_id}, "
-            f"pipeline={request.pipeline_id}"
+            f"Creating run for project={request.project_id}, " f"pipeline={request.pipeline_id}"
         )
 
         run = await run_service.create_run(
@@ -118,9 +105,6 @@ async def get_run(
 ):
     """
     Get current status of a run.
-
-    Returns complete information including current state,
-    executed tasks and progress.
     """
     try:
         logger.debug(f"Getting run {run_id}")
@@ -162,9 +146,6 @@ async def list_runs(
 ):
     """
     List pipeline runs with filters.
-
-    Returns a paginated list of runs with optional filters by
-    project, pipeline and state.
     """
     try:
         logger.debug(
@@ -205,17 +186,11 @@ async def list_runs(
 )
 async def start_run(
     run_id: str,
-    timeout_seconds: Optional[int] = Query(
-        None, ge=1, description="Timeout in seconds"
-    ),
+    timeout_seconds: Optional[int] = Query(None, ge=1, description="Timeout in seconds"),
     run_service=Depends(get_run_service),
 ):
     """
     Start execution of a run.
-
-    Start run execution asynchronously. The endpoint returns
-    immediately with 202 Accepted. Use GET /runs/{run_id} to
-    monitor progress.
     """
     try:
         logger.info(f"Starting run {run_id} (timeout: {timeout_seconds}s)")
@@ -270,9 +245,6 @@ async def cancel_run(
 ):
     """
     Cancel execution of a run.
-
-    Cancel run execution. Only works if the run is in
-    RUNNING or PENDING state.
     """
     try:
         logger.info(f"Cancelling run {run_id}, reason={reason}")
@@ -323,9 +295,6 @@ async def get_run_tasks(
 ):
     """
     Get tasks for a run.
-
-    Returns paginated list of tasks (pipeline nodes) executed
-    or being executed in the run.
     """
     try:
         logger.debug(f"Getting tasks for run {run_id}")
@@ -364,9 +333,7 @@ async def get_run_logs(
     run_id: str,
     skip: int = Query(0, ge=0, description="Number of logs to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum logs to return"),
-    level: Optional[str] = Query(
-        None, description="Filter by level (DEBUG, INFO, WARNING, ERROR)"
-    ),
+    level: Optional[str] = Query(None, description="Filter by level (DEBUG, INFO, WARNING, ERROR)"),
     run_service=Depends(get_run_service),
 ):
     """

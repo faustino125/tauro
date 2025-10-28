@@ -1,11 +1,15 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from typing import Dict, Optional, List, Any
 from datetime import datetime
 
 from loguru import logger
 
-from tauro.config.contexts import Context
-from tauro.orchest import (
+from tauro.core.config.contexts import Context
+from tauro.api.orchest import (
     RunService,
     ScheduleService,
     MetricsService,

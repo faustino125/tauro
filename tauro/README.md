@@ -1,141 +1,152 @@
 # Tauro
 
-Tauro is a simple CLI for running and managing data pipelines (batch and streaming). It runs locally or with Spark and provides a concise command set to list, inspect, validate and execute pipelines.
+**Tauro** is your go-to tool for automating data workflows. Whether you're processing files once a day or continuously streaming data, Tauro makes it simple to build, run, and manage pipelines without complexity.
 
-Quick highlights
-- Run batch, streaming and hybrid pipelines
-- Read/write common formats (Parquet, JSON, CSV, Delta, Avro, ORC)
-- Built-in validation, safe path handling and structured logs
-- Lightweight configuration model with environment-aware settings
+## What Can Tauro Do?
 
-Installation
+✅ **Move and transform data** — Read from one place, process, write to another  
+✅ **Run on a schedule** — Process data automatically every day, hour, or minute  
+✅ **Handle real-time data** — Stream data continuously as it arrives  
+✅ **Work with popular formats** — CSV, JSON, Parquet, Delta, and more  
+✅ **Easy to configure** — Single settings file for all environments (dev, staging, production)  
+✅ **Built-in safety** — Validation and error handling out of the box
 
-- From PyPI (recommended):
-```
+## Get Started in Minutes
+
+### Step 1: Install Tauro
+```bash
 pip install tauro
 ```
 
-Minimum requirements
-- Python 3.9+
-- (Optional) Spark 3.4+ if using Spark-backed formats
-- (Optional) delta-spark for Delta format outside Databricks
+**Requirements:**
+- Python 3.9 or newer
+- (Optional) Spark 3.4+ for large-scale data processing
 
-Quick start (under 5 minutes)
-
-1. Generate a project template
-```
-tauro --template medallion_basic --project-name demo_project
-```
-
-2. Install project dependencies and open the project
-```
-cd demo_project
+### Step 2: Create Your First Project
+```bash
+tauro --template medallion_basic --project-name my_project
+cd my_project
 pip install -r requirements.txt
 ```
 
-3. Run a batch pipeline
-```
-tauro --env dev --pipeline bronze_batch_ingestion
-```
-
-4. Start a streaming pipeline (async)
-```
-tauro --streaming --streaming-command run \
-  --streaming-config ./settings.json \
-  --streaming-pipeline bronze_streaming_ingestion \
-  --streaming-mode async
-```
-
-Configuration (high level)
-- Tauro uses a single configuration index (settings file) that points to environment-specific sections.
-- Key concepts:
-  - settings file (JSON or YAML) — entry point
-  - environment (dev, prod, etc.) — select runtime values
-  - pipelines and nodes — define DAGs and processing steps
-- Keep per-node streaming options (checkpoint_location, trigger) when using streaming.
-
-Common commands
-
-- List pipelines
-```
+### Step 3: See Your Pipelines
+```bash
 tauro --list-pipelines
 ```
 
-- Show pipeline info
-```
-tauro --pipeline-info <pipeline_name>
+This shows you all available pipelines ready to run.
+
+### Step 4: Run a Pipeline
+```bash
+tauro --env dev --pipeline sales_daily_report
 ```
 
-- Execute a pipeline
-```
-tauro --env <dev|prod|...> --pipeline <name> [--node <node_name>] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--dry-run]
+That's it! Your data pipeline is running.
+
+## Real-World Examples
+
+### Example 1: Daily Sales Report
+Process sales data every morning and save a clean report:
+```bash
+tauro --env production --pipeline daily_sales_summary
 ```
 
-- Validate configuration without running
-```
-tauro --env dev --pipeline my_pipeline --validate-only
+### Example 2: Verify Before Running
+Always test your pipeline before processing real data:
+```bash
+tauro --env production --pipeline daily_sales_summary --validate-only
 ```
 
-Helpful flags
-- Verbosity: `--verbose` `--quiet`
-- Date range: use ISO format `YYYY-MM-DD` (start_date must be <= end_date)
-
-Streaming commands
-
-- Run
+### Example 3: Process a Specific Date Range
+Reprocess historical data from March 1-15:
+```bash
+tauro --env production --pipeline daily_sales_summary \
+  --start-date 2024-03-01 --end-date 2024-03-15
 ```
+
+### Example 4: Stream Real-Time Data
+Continuously ingest data as it arrives:
+```bash
 tauro --streaming --streaming-command run \
-  --streaming-config <settings_file> \
-  --streaming-pipeline <pipeline_name> \
-  [--streaming-mode sync|async]
+  --streaming-config settings.json \
+  --streaming-pipeline real_time_events
 ```
 
-- Status
-```
+### Example 5: Check Status of Streaming Job
+```bash
 tauro --streaming --streaming-command status \
-  --streaming-config <settings_file> \
-  [--execution-id <id>]
+  --streaming-config settings.json
 ```
 
-- Stop
-```
+### Example 6: Stop a Streaming Job
+```bash
 tauro --streaming --streaming-command stop \
-  --streaming-config <settings_file> \
-  --execution-id <id>
+  --streaming-config settings.json \
+  --execution-id my_job_123
 ```
 
-Best practices
-- Always set a checkpoint_location for streaming nodes.
-- Prefer atomic output formats (Delta, Parquet) for production.
-- Use `dry-run` or `--validate-only` before running in production.
-- Pin Spark and connector versions when running on a cluster.
+## Useful Commands at a Glance
 
-Troubleshooting (quick)
+| What do you want to do? | Command |
+|---|---|
+| See all available pipelines | `tauro --list-pipelines` |
+| Learn about a specific pipeline | `tauro --pipeline-info sales_pipeline` |
+| Get help | `tauro --help` |
+| See detailed logs (for troubleshooting) | `tauro --env dev --pipeline my_pipeline --verbose` |
+| Quiet mode (less output) | `tauro --env dev --pipeline my_pipeline --quiet` |
+| Test without making changes | `tauro --env dev --pipeline my_pipeline --dry-run` |
 
-- Command not found / --help not working:
-  - Try: `python -m tauro --help`
+## How Tauro Organizes Your Work
 
-- Spark session missing:
-  - Ensure Spark is installed and the runtime provides a Spark session when using Spark formats.
+Tauro uses three simple concepts:
 
-- Date validation errors:
-  - Use ISO format `YYYY-MM-DD` and ensure start_date ≤ end_date.
+1. **Settings File** — Your master configuration (JSON or YAML). It's like a recipe book.
+2. **Environments** — Different settings for different situations (dev for testing, production for real work).
+3. **Pipelines** — The actual workflows you want to run (e.g., "daily_sales_report", "customer_etl").
 
-- Configuration not found or invalid:
-  - Verify the settings file path and that the selected environment section exists.
+Just point Tauro to your settings file and tell it which environment and pipeline to use. The rest is automatic.
 
-- Security/path errors:
-  - Avoid symlinks, hidden paths or locations outside the project workspace.
+## Best Practices (Keep It Simple)
 
-Exit codes
-- 0: success
-- 1: general error
-- 2: configuration error
-- 3: validation error
-- 4: execution error
-- 5: dependency error
-- 6: security error
+✓ **Test first** — Always run with `--validate-only` before running for real  
+✓ **Use environments** — Keep dev, staging, and production separate  
+✓ **Set checkpoints for streaming** — This lets you resume if something fails  
+✓ **Atomic formats** — Use Parquet or Delta for reliable production data  
+✓ **Dry-run first** — See what will happen before it happens with `--dry-run`
 
-Need more help?
-- Use `tauro --help` for a full list of commands and options.
-- For complex issues, reproduce with `--log-level DEBUG` and include the generated log when asking
+## Troubleshooting
+
+**Problem:** "Command not found"  
+**Solution:** Try `python -m tauro --help`
+
+**Problem:** "Can't find my settings file"  
+**Solution:** Make sure the file path is correct and use full paths when needed.
+
+**Problem:** Dates are giving errors  
+**Solution:** Use YYYY-MM-DD format (e.g., 2024-03-15) and make sure start date is before end date.
+
+**Problem:** My pipeline is failing  
+**Solution:** Run with `--verbose` to see detailed logs: 
+```bash
+tauro --env dev --pipeline my_pipeline --verbose
+```
+
+**Problem:** Something went wrong and I need to debug  
+**Solution:** Check the generated logs and run with `--verbose` for more details.
+
+## Exit Codes
+
+- **0** — Success! Everything worked.
+- **1** — General error (something went wrong).
+- **2** — Configuration error (check your settings file).
+- **3** — Validation error (your data or pipeline is invalid).
+- **4** — Execution error (the pipeline ran but failed).
+- **5** — Dependency error (missing required software).
+- **6** — Security error (permission or access issue).
+
+## Need More Help?
+
+- Use `tauro --help` to see all commands  
+- Use `tauro --pipeline-info <pipeline_name>` to understand a specific pipeline
+- Run with `--verbose` to see what's happening  
+- Check the logs generated by Tauro for detailed error messages

@@ -1,17 +1,16 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from fastapi import APIRouter, Depends
 from datetime import datetime
 from loguru import logger
 import time
 import asyncio
 
-from core.api.core import get_current_settings, get_orchestrator_store
-from core.api.core.responses import (
-    APIResponse,
-    success_response,
-    error_response,
-)
-from core.api.schemas import HealthCheck, APIInfo, StatsResponse, RunState
-from core.api.core.config import Settings
+from tauro.api.core import get_current_settings, get_orchestrator_store
+from tauro.api.schemas import HealthCheck, APIInfo, StatsResponse, RunState
+from tauro.api.core.config import Settings
 
 router = APIRouter(tags=["monitoring"])
 
@@ -44,9 +43,6 @@ async def health_check(
 ):
     """
     Health check endpoint.
-
-    Verifica el estado de salud de la API y sus componentes.
-    Retorna 200 si healthy, 503 si degraded/unhealthy.
     """
     components = {
         "api": "healthy",
@@ -96,15 +92,13 @@ async def health_check(
 async def _check_database_health_async() -> str:
     """Async database health check with real MongoDB connectivity"""
     try:
-        from core.api.core.deps import get_database
+        from tauro.api.core.deps import get_database
 
         # Get database connection
         db = await get_database()
 
         # Try a ping command with timeout
-        await asyncio.wait_for(
-            db.command("ping"), timeout=3.0  # 3 second timeout for health check
-        )
+        await asyncio.wait_for(db.command("ping"), timeout=3.0)  # 3 second timeout for health check
 
         # Try a simple count query to verify collections exist
         collections = await asyncio.wait_for(db.list_collection_names(), timeout=2.0)
@@ -192,10 +186,7 @@ async def get_stats(
 
     # Check cache validity
     current_time = time.time()
-    if (
-        _STATS_CACHE is not None
-        and (current_time - _STATS_CACHE_TIME) < _STATS_CACHE_TTL
-    ):
+    if _STATS_CACHE is not None and (current_time - _STATS_CACHE_TIME) < _STATS_CACHE_TTL:
         logger.debug("Returning cached statistics")
         return _STATS_CACHE
 
@@ -224,9 +215,7 @@ async def get_stats(
             RunState.RUNNING.value,
         }
         active_runs = sum(1 for run in all_runs if run.state.value in active_states)
-        failed_runs = sum(
-            1 for run in all_runs if run.state.value == RunState.FAILED.value
-        )
+        failed_runs = sum(1 for run in all_runs if run.state.value == RunState.FAILED.value)
 
         # Get schedules with limit
         all_schedules = store.list_schedules()

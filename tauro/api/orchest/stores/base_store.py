@@ -1,13 +1,7 @@
 """
-Base store implementation providing common database operations.
-
-This module provides:
-- Common initialization and connection management
-- Helper methods for MongoDB operations
-- Type definitions and abstract interfaces
-- Health checking and monitoring
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, List
 import threading
@@ -15,18 +9,12 @@ from datetime import datetime, timezone
 import json
 
 from loguru import logger  # type: ignore
-from tauro.orchest.models import PipelineRun, TaskRun, RunState
+from tauro.api.orchest.models import PipelineRun, TaskRun, RunState
 
 
 class BaseStore(ABC):
     """
     Abstract base class for store implementations.
-
-    Provides:
-    - Connection management
-    - Health checks
-    - Type safety
-    - Common patterns
     """
 
     def __init__(self, context: Optional[Any] = None):
@@ -81,9 +69,6 @@ class BaseStore(ABC):
     def health_check(self) -> Dict[str, Any]:
         """
         Perform health check on store.
-
-        Returns:
-            Dictionary with health status
         """
         return {
             "healthy": True,

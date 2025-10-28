@@ -18,9 +18,7 @@ class MLNodeValidator:
     OPTIONAL_ML_PARAMETERS = {"ml_context"}
 
     @staticmethod
-    def validate_ml_node_signature(
-        function: Callable, node_name: str
-    ) -> Tuple[bool, List[str]]:
+    def validate_ml_node_signature(function: Callable, node_name: str) -> Tuple[bool, List[str]]:
         """Validate that an ML node function has the correct signature.
 
         Args:
@@ -42,22 +40,16 @@ class MLNodeValidator:
                 p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values()
             )
             if not has_var_positional:
-                issues.append(
-                    f"Node '{node_name}' must accept *input_dfs for variable inputs"
-                )
+                issues.append(f"Node '{node_name}' must accept *input_dfs for variable inputs")
 
             # Check for required parameters
             missing_required = MLNodeValidator.REQUIRED_PARAMETERS - param_names
             if missing_required:
-                issues.append(
-                    f"Node '{node_name}' missing required parameters: {missing_required}"
-                )
+                issues.append(f"Node '{node_name}' missing required parameters: {missing_required}")
 
             # Check for ML context support
             has_ml_context = "ml_context" in param_names
-            has_var_keyword = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-            )
+            has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
             if not has_ml_context and not has_var_keyword:
                 logger.warning(
@@ -86,9 +78,7 @@ class MLNodeValidator:
             if "ml_context" in params:
                 return "explicit"
 
-            has_var_keyword = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-            )
+            has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
             if has_var_keyword:
                 return "kwargs"
 
@@ -155,9 +145,7 @@ class MLNodeValidator:
             Tuple of (can_execute: bool, error_message: Optional[str])
         """
         # Validate signatures
-        is_valid, sig_issues = MLNodeValidator.validate_ml_node_signature(
-            function, node_name
-        )
+        is_valid, sig_issues = MLNodeValidator.validate_ml_node_signature(function, node_name)
         if not is_valid:
             return False, "; ".join(sig_issues)
 
@@ -223,9 +211,7 @@ class MLNodeValidator:
         if ml_context:
             guidance_lines.append("  • ML context available:")
             if "model_version" in ml_context:
-                guidance_lines.append(
-                    f"    - Model version: {ml_context['model_version']}"
-                )
+                guidance_lines.append(f"    - Model version: {ml_context['model_version']}")
             if "hyperparams" in ml_context:
                 guidance_lines.append(
                     f"    - Hyperparameters: {len(ml_context['hyperparams'])} items"
@@ -238,9 +224,7 @@ class MLNodeValidator:
         elif mode == "kwargs":
             guidance_lines.append("  ✓ Function will receive ml_context via **kwargs")
         else:
-            guidance_lines.append(
-                "  ⚠ Function does not support ML context (features unavailable)"
-            )
+            guidance_lines.append("  ⚠ Function does not support ML context (features unavailable)")
 
         return "\n".join(guidance_lines)
 
@@ -259,9 +243,7 @@ class MLNodeValidator:
         report: Dict[str, Dict[str, Any]] = {}
 
         for node_name, function in nodes_to_validate.items():
-            is_valid, issues = MLNodeValidator.validate_ml_node_signature(
-                function, node_name
-            )
+            is_valid, issues = MLNodeValidator.validate_ml_node_signature(function, node_name)
             mode = MLNodeValidator.get_ml_context_handling_mode(function)
 
             report[node_name] = {

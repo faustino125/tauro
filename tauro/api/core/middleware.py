@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +16,7 @@ from datetime import datetime, timedelta
 import contextvars
 
 # Context variables for request tracking
-request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "request_id", default=""
-)
+request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
 request_context: contextvars.ContextVar[dict] = contextvars.ContextVar(
     "request_context", default={}
 )
@@ -74,9 +76,7 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
                     "error": "Internal server error",
-                    "detail": str(e)
-                    if request.app.state.settings.debug
-                    else "An error occurred",
+                    "detail": str(e) if request.app.state.settings.debug else "An error occurred",
                     "path": request.url.path,
                 },
             )
@@ -261,9 +261,7 @@ class RequestLimitsMiddleware(BaseHTTPMiddleware):
             try:
                 size = int(content_length)
                 if size > self.max_body_size:
-                    logger.warning(
-                        f"Request body too large: {size} > {self.max_body_size}"
-                    )
+                    logger.warning(f"Request body too large: {size} > {self.max_body_size}")
                     return JSONResponse(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         content={
@@ -394,9 +392,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._last_global_cleanup = current_time
 
         if cleaned_count > 0:
-            logger.debug(
-                f"Periodic cleanup: removed {cleaned_count} old request records"
-            )
+            logger.debug(f"Periodic cleanup: removed {cleaned_count} old request records")
 
     async def dispatch(self, request: Request, call_next: Callable):
         # Skip rate limiting for exempt paths (configurable)

@@ -1,9 +1,7 @@
-"""MongoDB Document Models for Tauro API
-
-This module defines the MongoDB document structures using TypedDict and Pydantic
-for type safety and validation.
 """
-
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import TypedDict, Optional, List, Dict, Any
 from datetime import datetime
 

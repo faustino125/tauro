@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 
 import os
@@ -45,9 +49,7 @@ def _create_client() -> MongoClient:
     return MongoClient(
         DATABASE_URL,
         tz_aware=True,
-        serverSelectionTimeoutMS=int(
-            os.environ.get("ORCHESTRATOR_MONGO_TIMEOUT_MS", "5000")
-        ),
+        serverSelectionTimeoutMS=int(os.environ.get("ORCHESTRATOR_MONGO_TIMEOUT_MS", "5000")),
     )
 
 
@@ -86,18 +88,6 @@ def ping_database() -> bool:
 class MongoContextManager:
     """
     Context manager for safe MongoDB connection handling.
-
-    Ensures connections are properly closed even if errors occur.
-
-    Example:
-        ```python
-        # Automatic cleanup
-        with MongoContextManager() as client:
-            db = client[DATABASE_NAME]
-            result = db.collection.find_one()
-
-        # Connection is closed automatically
-        ```
     """
 
     def __init__(self):
@@ -120,16 +110,6 @@ class MongoContextManager:
 def get_mongo_context() -> MongoContextManager:
     """
     Get a context manager for MongoDB operations.
-
-    Returns:
-        MongoContextManager for use with 'with' statement
-
-    Example:
-        ```python
-        with get_mongo_context() as client:
-            collection = client[DATABASE_NAME]["collections"]
-            collection.insert_one({"data": "value"})
-        ```
     """
     return MongoContextManager()
 
@@ -137,19 +117,6 @@ def get_mongo_context() -> MongoContextManager:
 class ManagedMongoClient:
     """
     Wrapper for MongoDB client with guaranteed cleanup.
-
-    This is useful for applications that need strict resource cleanup
-    or when integrating with dependency injection frameworks.
-
-    Example:
-        ```python
-        client = ManagedMongoClient()
-        try:
-            db = client.database
-            result = db.collection.find_one()
-        finally:
-            client.close()
-        ```
     """
 
     def __init__(self):

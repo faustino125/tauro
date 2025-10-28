@@ -5,7 +5,7 @@ For licensing information, see the LICENSE file in the project root
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger  # type: ignore
 
-from tauro.config.validators import FormatPolicy
+from tauro.core.config.validators import FormatPolicy
 
 
 class PipelineValidator:
@@ -122,9 +122,7 @@ class PipelineValidator:
 
         except Exception as e:
             validation_result["is_valid"] = False
-            validation_result["errors"].append(
-                f"Validation failed with error: {str(e)}"
-            )
+            validation_result["errors"].append(f"Validation failed with error: {str(e)}")
 
         return validation_result
 
@@ -459,16 +457,12 @@ class PipelineValidator:
 
         input_config = node_config.get("input", {})
         if not input_config:
-            node_errors.append(
-                f"Streaming node '{streaming_node}' must have input configuration"
-            )
+            node_errors.append(f"Streaming node '{streaming_node}' must have input configuration")
             return node_errors
 
         input_format = input_config.get("format")
         if not input_format:
-            node_errors.append(
-                f"Streaming node '{streaming_node}' must specify input format"
-            )
+            node_errors.append(f"Streaming node '{streaming_node}' must specify input format")
             return node_errors
 
         if not policy.is_supported_input(input_format):
@@ -479,16 +473,12 @@ class PipelineValidator:
 
         output_config = node_config.get("output", {})
         if not output_config:
-            node_errors.append(
-                f"Streaming node '{streaming_node}' must have output configuration"
-            )
+            node_errors.append(f"Streaming node '{streaming_node}' must have output configuration")
             return node_errors
 
         output_format = output_config.get("format")
         if not output_format:
-            node_errors.append(
-                f"Streaming node '{streaming_node}' must specify output format"
-            )
+            node_errors.append(f"Streaming node '{streaming_node}' must specify output format")
 
         if input_format in policy.checkpoint_required_inputs:
             streaming_config = node_config.get("streaming", {})

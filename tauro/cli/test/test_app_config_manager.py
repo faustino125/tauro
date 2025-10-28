@@ -31,9 +31,7 @@ def test_app_config_manager_loads_and_merges_envs(tmp_path: Path, monkeypatch):
     # Monkeypatch SecurityValidator.validate_path to simply return the path (avoid strict checks)
     from tauro.cli.core import SecurityValidator
 
-    monkeypatch.setattr(
-        SecurityValidator, "validate_path", staticmethod(lambda b, t: Path(t))
-    )
+    monkeypatch.setattr(SecurityValidator, "validate_path", staticmethod(lambda b, t: Path(t)))
 
     mgr = AppConfigManager(str(settings_file))
     envs = mgr.get_env_config("dev")

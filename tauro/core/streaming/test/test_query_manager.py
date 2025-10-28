@@ -114,14 +114,10 @@ def test_stop_query_removes_from_active(sqm):
         assert key not in sqm._active_queries
 
 
-def test_ensure_checkpoint_dir_raises_streaming_error_on_mkdir_failure(
-    sqm, monkeypatch
-):
+def test_ensure_checkpoint_dir_raises_streaming_error_on_mkdir_failure(sqm, monkeypatch):
     # Force Path.mkdir to raise OSError
     import pathlib
 
-    monkeypatch.setattr(
-        pathlib.Path, "mkdir", mock.MagicMock(side_effect=OSError("no perm"))
-    )
+    monkeypatch.setattr(pathlib.Path, "mkdir", mock.MagicMock(side_effect=OSError("no perm")))
     with pytest.raises(StreamingError):
         sqm._ensure_checkpoint_dir("/tmp/forbidden_path")

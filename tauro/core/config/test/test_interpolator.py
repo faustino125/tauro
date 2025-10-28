@@ -5,9 +5,7 @@ from tauro.config.interpolator import VariableInterpolator
 def test_interpolate_env_precedence(monkeypatch):
     monkeypatch.setenv("FOO", "env_value")
     s = "path/${FOO}/and/${BAR}"
-    result = VariableInterpolator.interpolate(
-        s, {"BAR": "var_value", "FOO": "var_override"}
-    )
+    result = VariableInterpolator.interpolate(s, {"BAR": "var_value", "FOO": "var_override"})
     # env has precedence for FOO, variables used for BAR
     assert result == "path/env_value/and/var_value"
 
@@ -26,9 +24,7 @@ def test_interpolate_config_paths_nested(tmp_path):
 
 def test_interpolate_structure_recursive():
     data = {"a": "${X}", "b": ["one", "${Y}", {"c": "${Z}"}]}
-    res = VariableInterpolator.interpolate_structure(
-        data, {"X": 1, "Y": "two", "Z": "three"}
-    )
+    res = VariableInterpolator.interpolate_structure(data, {"X": 1, "Y": "two", "Z": "three"})
     assert res["a"] == "1"
     assert res["b"][1] == "two"
     assert res["b"][2]["c"] == "three"

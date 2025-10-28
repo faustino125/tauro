@@ -48,9 +48,7 @@ class ResourceHandle:
                 self._default_cleanup()
 
             self.is_released = True
-            logger.debug(
-                f"Successfully released {self.resource_type} resource {self.resource_id}"
-            )
+            logger.debug(f"Successfully released {self.resource_type} resource {self.resource_id}")
 
         except Exception as e:
             logger.error(
@@ -155,9 +153,7 @@ class ResourcePool:
                 self._node_resources[node_id] = []
             self._node_resources[node_id].append(resource_id)
 
-            logger.debug(
-                f"Registered {resource_type} resource {resource_id} for node '{node_id}'"
-            )
+            logger.debug(f"Registered {resource_type} resource {resource_id} for node '{node_id}'")
 
             return resource_id
 
@@ -244,9 +240,7 @@ class ResourcePool:
             Tuple of (all_released: bool, unreleased_ids: List[str])
         """
         with self._lock:
-            unreleased = [
-                rid for rid, handle in self._resources.items() if not handle.is_released
-            ]
+            unreleased = [rid for rid, handle in self._resources.items() if not handle.is_released]
 
             return len(unreleased) == 0, unreleased
 

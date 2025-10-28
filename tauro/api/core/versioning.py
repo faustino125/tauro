@@ -1,9 +1,7 @@
 """
-API versioning and deprecation utilities.
-
-Provides decorators and utilities for managing API versions and deprecations.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from functools import wraps
 from typing import Callable, Optional
 from fastapi import Header
@@ -30,11 +28,7 @@ class APIVersion:
     def __eq__(self, other):
         if isinstance(other, str):
             return self.version_string == other
-        return (
-            self.major == other.major
-            and self.minor == other.minor
-            and self.patch == other.patch
-        )
+        return self.major == other.major and self.minor == other.minor and self.patch == other.patch
 
     def __lt__(self, other):
         if isinstance(other, str):
@@ -180,9 +174,7 @@ def version_header(api_version: str = Header(default="1.0.0")) -> str:
 # =============================================================================
 
 
-def is_version_supported(
-    version: str, min_version: str, max_version: Optional[str] = None
-) -> bool:
+def is_version_supported(version: str, min_version: str, max_version: Optional[str] = None) -> bool:
     """
     Check if version is supported.
 

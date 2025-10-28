@@ -2,6 +2,7 @@
 Copyright (c) 2025 Faustino Lopez Ramos. 
 For licensing information, see the LICENSE file in the project root
 """
+import importlib
 import inspect
 import time
 from collections import deque
@@ -12,16 +13,14 @@ from typing import Any, Callable, Dict, List, Set
 
 from loguru import logger  # type: ignore
 
-from tauro.exec.commands import Command, MLNodeCommand, NodeCommand
-from tauro.exec.dependency_resolver import DependencyResolver
-from tauro.exec.pipeline_validator import PipelineValidator
-from core.exec.resource_pool import ResourcePool, get_default_resource_pool
+from tauro.core.exec.commands import Command, MLNodeCommand, NodeCommand
+from tauro.core.exec.dependency_resolver import DependencyResolver
+from tauro.core.exec.pipeline_validator import PipelineValidator
+from tauro.core.exec.resource_pool import get_default_resource_pool
 
 
 @lru_cache(maxsize=64)
 def _import_module_cached(module_path: str):
-    import importlib
-
     logger.debug(f"Importing module: {module_path}")
     return importlib.import_module(module_path)
 
@@ -123,13 +122,9 @@ class NodeExecutor:
                     resource=df,
                     resource_type=resource_type,
                 )
-                logger.debug(
-                    f"Registered {resource_type} resource #{idx} for node '{node_name}'"
-                )
+                logger.debug(f"Registered {resource_type} resource #{idx} for node '{node_name}'")
             except Exception as e:
-                logger.warning(
-                    f"Failed to register resource for node '{node_name}': {str(e)}"
-                )
+                logger.warning(f"Failed to register resource for node '{node_name}': {str(e)}")
 
     def _detect_resource_type(self, resource: Any) -> str:
         """Detect the type of resource for proper cleanup.
@@ -180,9 +175,7 @@ class NodeExecutor:
         Orchestrates parallel execution by delegating to specialized phases.
         """
         # Phase 1: Initialize execution state
-        execution_state = self._initialize_execution_state(
-            execution_order, node_configs
-        )
+        execution_state = self._initialize_execution_state(execution_order, node_configs)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             try:
@@ -399,9 +392,7 @@ class NodeExecutor:
                 "config": node_configs.get(node_name, {}),
             }
 
-    def _prepare_node_ml_info(
-        self, node_name: str, ml_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _prepare_node_ml_info(self, node_name: str, ml_info: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare node-specific ML information."""
         if not self.is_ml_layer:
             return ml_info
@@ -496,14 +487,10 @@ class NodeExecutor:
         logger.info("=" * 60)
 
         successful_nodes = [
-            name
-            for name, result in execution_results.items()
-            if result.get("status") == "success"
+            name for name, result in execution_results.items() if result.get("status") == "success"
         ]
         failed_nodes = [
-            name
-            for name, result in execution_results.items()
-            if result.get("status") == "failed"
+            name for name, result in execution_results.items() if result.get("status") == "failed"
         ]
 
         logger.info(f"✅ Successful nodes: {len(successful_nodes)}")
@@ -599,11 +586,7 @@ class NodeExecutor:
         queued_nodes = set(ready_queue)
 
         for dependent in dag.get(completed_node, set()):
-            if (
-                dependent in completed
-                or dependent in running_nodes
-                or dependent in queued_nodes
-            ):
+            if dependent in completed or dependent in running_nodes or dependent in queued_nodes:
                 continue
 
             node_config = node_configs[dependent]
@@ -770,9 +753,7 @@ class NodeExecutor:
             )
         func = getattr(module, function_name)
         if not callable(func):
-            raise TypeError(
-                f"Object '{function_name}' in module '{module_path}' is not callable"
-            )
+            raise TypeError(f"Object '{function_name}' in module '{module_path}' is not callable")
         return func
 
     def _validate_function_signature(self, func, function_name):
@@ -789,8 +770,7 @@ class NodeExecutor:
 
             if self.is_ml_layer and "ml_context" not in params:
                 accepts_kwargs = any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD
-                    for p in sig.parameters.values()
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
                 )
                 if not accepts_kwargs:
                     logger.info(
@@ -799,6 +779,4 @@ class NodeExecutor:
                     )
 
         except ValueError as e:
-            logger.warning(
-                f"Signature validation skipped for {function_name}: {str(e)}"
-            )
+            logger.warning(f"Signature validation skipped for {function_name}: {str(e)}")

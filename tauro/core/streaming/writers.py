@@ -8,7 +8,7 @@ from typing import Any, Dict
 from loguru import logger  # type: ignore
 from pyspark.sql.streaming import DataStreamWriter, StreamingQuery  # type: ignore
 
-from tauro.streaming.exceptions import StreamingError, StreamingFormatNotSupportedError
+from tauro.core.streaming.exceptions import StreamingError, StreamingFormatNotSupportedError
 
 
 class BaseStreamingWriter(ABC):
@@ -24,9 +24,7 @@ class BaseStreamingWriter(ABC):
         """Write streaming data and return the streaming query."""
         pass
 
-    def _validate_config(
-        self, config: Dict[str, Any], required_fields: list = None
-    ) -> None:
+    def _validate_config(self, config: Dict[str, Any], required_fields: list = None) -> None:
         """Validate basic configuration requirements."""
         if not isinstance(config, dict):
             raise StreamingError("Configuration must be a dictionary")
@@ -36,9 +34,7 @@ class BaseStreamingWriter(ABC):
             if missing_fields:
                 raise StreamingError(f"Missing required fields: {missing_fields}")
 
-    def _apply_options(
-        self, writer: DataStreamWriter, options: Dict[str, Any]
-    ) -> DataStreamWriter:
+    def _apply_options(self, writer: DataStreamWriter, options: Dict[str, Any]) -> DataStreamWriter:
         """Apply options to writer with error handling."""
         try:
             for key, value in options.items():
@@ -151,17 +147,11 @@ class KafkaStreamingWriter(BaseStreamingWriter):
 
             # Validate required Kafka options
             required_kafka_options = ["kafka.bootstrap.servers", "topic"]
-            missing_options = [
-                opt for opt in required_kafka_options if opt not in options
-            ]
+            missing_options = [opt for opt in required_kafka_options if opt not in options]
             if missing_options:
-                raise StreamingError(
-                    f"Missing required Kafka options: {missing_options}"
-                )
+                raise StreamingError(f"Missing required Kafka options: {missing_options}")
 
-            logger.info(
-                f"Starting Kafka streaming writer to topic: {options.get('topic')}"
-            )
+            logger.info(f"Starting Kafka streaming writer to topic: {options.get('topic')}")
 
             writer = write_stream.format("kafka")
             writer = self._apply_options(writer, options)
@@ -185,9 +175,7 @@ class MemoryStreamingWriter(BaseStreamingWriter):
             options = config.get("options", {})
             query_name = options.get("queryName", "memory_query")
 
-            logger.info(
-                f"Starting memory streaming writer with query name: {query_name}"
-            )
+            logger.info(f"Starting memory streaming writer with query name: {query_name}")
 
             writer = write_stream.format("memory").queryName(query_name)
 
@@ -229,9 +217,7 @@ class ForeachBatchStreamingWriter(BaseStreamingWriter):
                 function_name = batch_function.get("function")
 
                 if not module_path or not function_name:
-                    raise StreamingError(
-                        "batch_function must specify 'module' and 'function'"
-                    )
+                    raise StreamingError("batch_function must specify 'module' and 'function'")
 
                 import importlib
 
@@ -252,9 +238,7 @@ class ForeachBatchStreamingWriter(BaseStreamingWriter):
             elif callable(batch_function):
                 return batch_function
             else:
-                raise StreamingError(
-                    "batch_function must be callable or dict with module/function"
-                )
+                raise StreamingError("batch_function must be callable or dict with module/function")
 
         except Exception as e:
             logger.error(f"Error loading batch function: {str(e)}")
@@ -390,9 +374,7 @@ class StreamingWriterFactory:
         """Register a custom streaming writer."""
         try:
             if not issubclass(writer_class, BaseStreamingWriter):
-                raise StreamingError(
-                    "Custom writer must inherit from BaseStreamingWriter"
-                )
+                raise StreamingError("Custom writer must inherit from BaseStreamingWriter")
 
             writer_instance = writer_class(self.context, *args, **kwargs)
             self._writers[format_name.lower()] = writer_instance

@@ -10,9 +10,7 @@ streaming_pm_mod = pytest.importorskip(
 )
 StreamingPipelineManager = getattr(streaming_pm_mod, "StreamingPipelineManager", None)
 if StreamingPipelineManager is None:
-    pytest.skip(
-        "StreamingPipelineManager class not found in tauro.streaming.pipeline_manager"
-    )
+    pytest.skip("StreamingPipelineManager class not found in tauro.streaming.pipeline_manager")
 
 from tauro.streaming.validators import (
     StreamingValidator,
@@ -42,9 +40,7 @@ def manager(monkeypatch):
     monkeypatch.setattr(streaming_pm_mod, "StreamingQuery", DummyStreamingQuery)
 
     ctx = DummyContext()
-    mgr = StreamingPipelineManager(
-        ctx, max_concurrent_pipelines=2, validator=StreamingValidator()
-    )
+    mgr = StreamingPipelineManager(ctx, max_concurrent_pipelines=2, validator=StreamingValidator())
 
     mgr.query_manager = mock.MagicMock()
     fake_query = mock.MagicMock()
@@ -123,7 +119,5 @@ def test_start_exceeding_max_concurrent_raises(manager):
     logger.debug("Started pipeline p2, exec_id=%s", exec2)
 
     with pytest.raises(Exception):
-        logger.debug(
-            "Attempting to start pipeline p3 which should exceed concurrency limits"
-        )
+        logger.debug("Attempting to start pipeline p3 which should exceed concurrency limits")
         manager.start_pipeline("p3", pipeline_cfg)

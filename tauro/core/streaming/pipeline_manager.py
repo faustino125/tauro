@@ -12,14 +12,14 @@ from typing import Any, Dict, List, Optional
 from loguru import logger  # type: ignore
 from pyspark.sql.streaming import StreamingQuery  # type: ignore
 
-from tauro.streaming.exceptions import (
+from tauro.core.streaming.exceptions import (
     StreamingError,
     StreamingPipelineError,
     create_error_context,
     handle_streaming_error,
 )
-from tauro.streaming.query_manager import StreamingQueryManager
-from tauro.streaming.validators import StreamingValidator
+from tauro.core.streaming.query_manager import StreamingQueryManager
+from tauro.core.streaming.validators import StreamingValidator
 
 
 class StreamingPipelineManager:
@@ -153,9 +153,7 @@ class StreamingPipelineManager:
             with self._lock:
                 pipeline_info = self._running_pipelines.get(execution_id)
                 if not pipeline_info:
-                    logger.warning(
-                        f"Pipeline '{execution_id}' not found or not running"
-                    )
+                    logger.warning(f"Pipeline '{execution_id}' not found or not running")
                     return False
                 pipeline_info["status"] = "stopping"
 
@@ -175,9 +173,7 @@ class StreamingPipelineManager:
                 if future:
                     future.cancel()
 
-            self._update_pipeline_stop_status(
-                execution_id, stopped_queries, failed_queries
-            )
+            self._update_pipeline_stop_status(execution_id, stopped_queries, failed_queries)
 
             if failed_queries:
                 logger.warning(
@@ -214,12 +210,8 @@ class StreamingPipelineManager:
         for query_name, query in pipeline_info["queries"].items():
             try:
                 if isinstance(query, StreamingQuery) and query.isActive:
-                    logger.info(
-                        f"Stopping query '{query_name}' in pipeline '{execution_id}'"
-                    )
-                    success = self.query_manager.stop_query(
-                        query, graceful, timeout_seconds
-                    )
+                    logger.info(f"Stopping query '{query_name}' in pipeline '{execution_id}'")
+                    success = self.query_manager.stop_query(query, graceful, timeout_seconds)
                     if success:
                         stopped_queries.append(query_name)
                     else:
@@ -237,9 +229,7 @@ class StreamingPipelineManager:
             if execution_id in self._running_pipelines:
                 self._running_pipelines[execution_id]["status"] = "stopped"
                 self._running_pipelines[execution_id]["end_time"] = time.time()
-                self._running_pipelines[execution_id][
-                    "stopped_queries"
-                ] = stopped_queries
+                self._running_pipelines[execution_id]["stopped_queries"] = stopped_queries
                 self._running_pipelines[execution_id]["failed_queries"] = failed_queries
 
     def get_pipeline_status(self, execution_id: str) -> Optional[Dict[str, Any]]:
@@ -270,9 +260,7 @@ class StreamingPipelineManager:
             return status
 
         except Exception as e:
-            logger.error(
-                f"Error getting pipeline status for '{execution_id}': {str(e)}"
-            )
+            logger.error(f"Error getting pipeline status for '{execution_id}': {str(e)}")
             return {
                 "execution_id": execution_id,
                 "status": "error",
@@ -359,9 +347,7 @@ class StreamingPipelineManager:
             }
 
             # Collect query-specific metrics
-            for query_name, query_status in pipeline_info.get(
-                "query_statuses", {}
-            ).items():
+            for query_name, query_status in pipeline_info.get("query_statuses", {}).items():
                 if (
                     query_status.get("isActive")
                     and "lastProgress" in query_status
@@ -371,9 +357,7 @@ class StreamingPipelineManager:
                     metrics["query_metrics"][query_name] = {
                         "batchId": progress.get("batchId"),
                         "inputRowsPerSecond": progress.get("inputRowsPerSecond"),
-                        "processedRowsPerSecond": progress.get(
-                            "processedRowsPerSecond"
-                        ),
+                        "processedRowsPerSecond": progress.get("processedRowsPerSecond"),
                         "timestamp": progress.get("timestamp"),
                         "durationMs": progress.get("durationMs", {}),
                         "eventTime": progress.get("eventTime", {}),
@@ -394,9 +378,7 @@ class StreamingPipelineManager:
                 "total_input_rate": total_input_rate,
                 "total_processing_rate": total_processing_rate,
                 "processing_efficiency": (
-                    (total_processing_rate / total_input_rate * 100)
-                    if total_input_rate > 0
-                    else 0
+                    (total_processing_rate / total_input_rate * 100) if total_input_rate > 0 else 0
                 ),
                 "health_score": self._calculate_health_score(pipeline_info),
             }
@@ -404,9 +386,7 @@ class StreamingPipelineManager:
             return metrics
 
         except Exception as e:
-            logger.error(
-                f"Error getting pipeline metrics for '{execution_id}': {str(e)}"
-            )
+            logger.error(f"Error getting pipeline metrics for '{execution_id}': {str(e)}")
             return None
 
     def _calculate_health_score(self, pipeline_info: Dict[str, Any]) -> float:
@@ -428,9 +408,7 @@ class StreamingPipelineManager:
             # Bonus for successful queries
             success_bonus = ((total_queries - failed_queries) / total_queries) * 30
 
-            health_score = max(
-                0, min(100, active_score + success_bonus - failure_penalty)
-            )
+            health_score = max(0, min(100, active_score + success_bonus - failure_penalty))
             return round(health_score, 2)
 
         except Exception:
@@ -489,13 +467,9 @@ class StreamingPipelineManager:
                     except Exception:
                         pass
                 except Exception as e:
-                    logger.warning(
-                        f"Error waiting for pipeline '{execution_id}' to finish: {e}"
-                    )
+                    logger.warning(f"Error waiting for pipeline '{execution_id}' to finish: {e}")
 
-            logger.info(
-                f"Completed {completed_threads}/{len(futures)} pipeline threads"
-            )
+            logger.info(f"Completed {completed_threads}/{len(futures)} pipeline threads")
 
             # Shutdown executor: ThreadPoolExecutor.shutdown does not accept a timeout kwarg
             logger.info("Shutting down thread pool executor...")
@@ -537,9 +511,7 @@ class StreamingPipelineManager:
         try:
             with self._lock:
                 if execution_id not in self._running_pipelines:
-                    logger.error(
-                        f"Pipeline {execution_id} not found in running pipelines"
-                    )
+                    logger.error(f"Pipeline {execution_id} not found in running pipelines")
                     return
                 self._running_pipelines[execution_id]["status"] = "running"
 
@@ -555,9 +527,7 @@ class StreamingPipelineManager:
                     execution_id=execution_id,
                 )
 
-            processed_nodes = self._process_pipeline_nodes(
-                execution_id, pipeline_name, nodes
-            )
+            processed_nodes = self._process_pipeline_nodes(execution_id, pipeline_name, nodes)
 
             if processed_nodes:
                 logger.info(
@@ -570,9 +540,7 @@ class StreamingPipelineManager:
                     self._running_pipelines[execution_id]["status"] = "failed"
 
         except Exception as e:
-            logger.error(
-                f"Error executing streaming pipeline '{execution_id}': {str(e)}"
-            )
+            logger.error(f"Error executing streaming pipeline '{execution_id}': {str(e)}")
             with self._lock:
                 if execution_id in self._running_pipelines:
                     self._running_pipelines[execution_id]["status"] = "error"
@@ -598,13 +566,9 @@ class StreamingPipelineManager:
                     self._running_pipelines[execution_id]["queries"][node_name] = query
                     self._running_pipelines[execution_id]["completed_nodes"] += 1
                 processed_nodes.append(node_name)
-                logger.info(
-                    f"Started streaming query '{node_name}' in pipeline '{execution_id}'"
-                )
+                logger.info(f"Started streaming query '{node_name}' in pipeline '{execution_id}'")
             except Exception as e:
-                logger.error(
-                    f"Error processing node {i} in pipeline '{execution_id}': {str(e)}"
-                )
+                logger.error(f"Error processing node {i} in pipeline '{execution_id}': {str(e)}")
                 with self._lock:
                     self._running_pipelines[execution_id]["status"] = "partial_failure"
                     self._running_pipelines[execution_id]["error"] = str(e)
@@ -660,9 +624,7 @@ class StreamingPipelineManager:
                 if self._handle_failed_queries(execution_id, failed_queries):
                     break
 
-                if self._handle_completed_queries(
-                    execution_id, active_queries, completed_queries
-                ):
+                if self._handle_completed_queries(execution_id, active_queries, completed_queries):
                     break
 
                 self._periodic_health_check(
@@ -725,12 +687,8 @@ class StreamingPipelineManager:
         with self._lock:
             if execution_id in self._running_pipelines:
                 self._running_pipelines[execution_id]["active_queries"] = active_queries
-                self._running_pipelines[execution_id]["completed_queries"] = len(
-                    completed_queries
-                )
-                self._running_pipelines[execution_id]["failed_queries"] = len(
-                    failed_queries
-                )
+                self._running_pipelines[execution_id]["completed_queries"] = len(completed_queries)
+                self._running_pipelines[execution_id]["failed_queries"] = len(failed_queries)
 
     def _handle_failed_queries(self, execution_id, failed_queries):
         if failed_queries:
@@ -742,9 +700,7 @@ class StreamingPipelineManager:
             return True
         return False
 
-    def _handle_completed_queries(
-        self, execution_id, active_queries, completed_queries
-    ):
+    def _handle_completed_queries(self, execution_id, active_queries, completed_queries):
         if active_queries == 0:
             if completed_queries:
                 logger.info(
@@ -771,9 +727,7 @@ class StreamingPipelineManager:
     ):
         current_time = time.time()
         if current_time - last_health_check > health_check_interval:
-            health_score = self._calculate_health_score(
-                self._running_pipelines[execution_id]
-            )
+            health_score = self._calculate_health_score(self._running_pipelines[execution_id])
             logger.debug(
                 f"Pipeline '{execution_id}' health score: {health_score}% (active: {active_queries}, completed: {len(completed_queries)})"
             )
@@ -803,9 +757,7 @@ class StreamingPipelineManager:
                     health_score = self._calculate_health_score(pipeline_info)
                     health_scores.append(health_score)
 
-                avg_health_score = (
-                    sum(health_scores) / len(health_scores) if health_scores else 0
-                )
+                avg_health_score = sum(health_scores) / len(health_scores) if health_scores else 0
                 healthy_count = sum(1 for score in health_scores if score >= 80)
 
                 if avg_health_score >= 80:

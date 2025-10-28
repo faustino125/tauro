@@ -1,9 +1,7 @@
 """
-Pagination utilities for API endpoints.
-
-Provides common pagination logic to avoid code duplication.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from typing import TypeVar, Generic, List, Dict, Any, Optional
 
 T = TypeVar("T")

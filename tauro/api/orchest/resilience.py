@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from enum import Enum
 from typing import Callable, Optional, Any, Dict, TypeVar
@@ -40,9 +44,7 @@ class CircuitBreakerMetrics:
     failure_count: int = 0
     success_count: int = 0
     last_failure_time: Optional[datetime] = None
-    last_state_change: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    last_state_change: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     total_calls: int = 0
     failed_calls: int = 0
     successful_calls: int = 0
@@ -58,9 +60,6 @@ class CircuitBreakerOpenError(Exception):
 class CircuitBreaker:
     """
     Circuit Breaker pattern implementation.
-
-    Prevents failure cascades by "opening the circuit" when too many consecutive
-    errors are detected.
     """
 
     def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None):
@@ -90,9 +89,7 @@ class CircuitBreaker:
                             "failure_count": self._metrics.failure_count,
                         },
                     )
-                    raise CircuitBreakerOpenError(
-                        f"Circuit breaker '{self.name}' is OPEN"
-                    )
+                    raise CircuitBreakerOpenError(f"Circuit breaker '{self.name}' is OPEN")
 
             # In HALF_OPEN, limit calls
             if self._metrics.state == CircuitState.HALF_OPEN:
@@ -221,14 +218,9 @@ class CircuitBreaker:
 class Bulkhead:
     """
     Implementación de Bulkhead pattern.
-
-    Aísla recursos para prevenir que un componente fallido afecte
-    a otros componentes del sistema.
     """
 
-    def __init__(
-        self, name: str, max_concurrent_calls: int, max_wait_duration: float = 30.0
-    ):
+    def __init__(self, name: str, max_concurrent_calls: int, max_wait_duration: float = 30.0):
         self.name = name
         self.max_concurrent_calls = max_concurrent_calls
         self.max_wait_duration = max_wait_duration
@@ -379,9 +371,7 @@ def with_circuit_breaker(name: str, config: Optional[CircuitBreakerConfig] = Non
     return decorator
 
 
-def with_bulkhead(
-    name: str, max_concurrent_calls: int, max_wait_duration: float = 30.0
-):
+def with_bulkhead(name: str, max_concurrent_calls: int, max_wait_duration: float = 30.0):
     """Decorador para aplicar bulkhead a una función"""
     bulkhead = Bulkhead(name, max_concurrent_calls, max_wait_duration)
 
@@ -405,9 +395,7 @@ def with_retry(
     jitter: bool = True,
 ):
     """Decorador para aplicar política de reintentos a una función"""
-    policy = RetryPolicy(
-        max_attempts, initial_delay, max_delay, exponential_base, jitter
-    )
+    policy = RetryPolicy(max_attempts, initial_delay, max_delay, exponential_base, jitter)
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -445,9 +433,7 @@ class ResilienceManager:
         """Obtener o crear un bulkhead"""
         with self._lock:
             if name not in self._bulkheads:
-                self._bulkheads[name] = Bulkhead(
-                    name, max_concurrent_calls, max_wait_duration
-                )
+                self._bulkheads[name] = Bulkhead(name, max_concurrent_calls, max_wait_duration)
             return self._bulkheads[name]
 
     def get_all_metrics(self) -> Dict[str, Any]:
@@ -455,12 +441,9 @@ class ResilienceManager:
         with self._lock:
             return {
                 "circuit_breakers": {
-                    name: cb.get_metrics()
-                    for name, cb in self._circuit_breakers.items()
+                    name: cb.get_metrics() for name, cb in self._circuit_breakers.items()
                 },
-                "bulkheads": {
-                    name: bh.get_metrics() for name, bh in self._bulkheads.items()
-                },
+                "bulkheads": {name: bh.get_metrics() for name, bh in self._bulkheads.items()},
             }
 
     def reset_all(self):
@@ -470,7 +453,6 @@ class ResilienceManager:
                 cb.reset()
 
 
-# Instancia global del gestor de resiliencia
 _resilience_manager = ResilienceManager()
 
 

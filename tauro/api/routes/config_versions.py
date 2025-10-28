@@ -1,17 +1,7 @@
 """
-Configuration Versioning REST Endpoints
-
-Endpoints for managing configuration versions, history, promotions, and rollbacks:
-
-GET  /api/v1/config-versions              - List versions with filters
-GET  /api/v1/config-versions/{id}         - Get specific version
-POST /api/v1/config-versions/{id}/promote - Promote to environment
-POST /api/v1/config-versions/{id}/rollback - Rollback to previous version
-GET  /api/v1/projects/{id}/versions       - List project version history
-GET  /api/v1/config-versions/compare      - Compare two versions
-GET  /api/v1/config-versions/stats        - Get version statistics
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from typing import Optional
 from uuid import UUID
 
@@ -19,17 +9,16 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from core.api.services.config_version_service import (
+from tauro.api.services.config_version_service import (
     ConfigVersionService,
-    ConfigVersionResponse,
     EnvironmentType,
     PromotionStatus,
     VersionNotFoundError,
     PromotionFailedError,
     RollbackFailedError,
 )
-from core.api.core.deps import get_config_version_service
-from core.api.core.responses import (
+from tauro.api.core.deps import get_config_version_service
+from tauro.api.core.responses import (
     APIResponse,
     ListResponse,
     success_response,
@@ -113,9 +102,7 @@ router = APIRouter(prefix="/api/v1/config-versions", tags=["configuration-versio
 async def list_versions(
     project_id: UUID = Query(..., description="Filter by project ID"),
     pipeline_id: Optional[UUID] = Query(None, description="Filter by pipeline ID"),
-    promotion_status: Optional[str] = Query(
-        None, description="Filter by promotion status"
-    ),
+    promotion_status: Optional[str] = Query(None, description="Filter by promotion status"),
     limit: int = Query(50, ge=1, le=500, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     service: ConfigVersionService = Depends(get_config_version_service),
@@ -257,9 +244,7 @@ async def rollback_version(
     """
     try:
         # Get current version to extract project_id
-        current_version = await service.get_version(
-            version_id=version_id, verify_hash=False
-        )
+        current_version = await service.get_version(version_id=version_id, verify_hash=False)
 
         rollback = await service.rollback(
             project_id=current_version.project_id,
@@ -315,9 +300,7 @@ async def compare_versions(
             from_version_id=from_version_id, to_version_id=to_version_id
         )
 
-        logger.info(
-            f"Comparison: version {comparison.from_version} → {comparison.to_version}"
-        )
+        logger.info(f"Comparison: version {comparison.from_version} → {comparison.to_version}")
 
         return success_response(
             VersionComparisonResponse(
@@ -408,9 +391,7 @@ async def list_project_versions(
     Get version history for a specific project.
     """
     try:
-        versions = await service.list_versions(
-            project_id=project_id, limit=limit, offset=offset
-        )
+        versions = await service.list_versions(project_id=project_id, limit=limit, offset=offset)
 
         logger.info(f"Retrieved version history for project {project_id}")
 

@@ -5,7 +5,7 @@ For licensing information, see the LICENSE file in the project root
 from typing import Any, Dict, List, Optional
 from loguru import logger  # type: ignore
 
-from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
+from tauro.core.config.exceptions import ConfigValidationError, PipelineValidationError
 
 
 class ConfigValidator:
@@ -27,9 +27,7 @@ class ConfigValidator:
             )
 
     @staticmethod
-    def validate_type(
-        config: Any, expected_type: type, config_name: str = "configuration"
-    ) -> None:
+    def validate_type(config: Any, expected_type: type, config_name: str = "configuration") -> None:
         if not isinstance(config, expected_type):
             raise ConfigValidationError(
                 f"{config_name} must be of type {expected_type.__name__}, got {type(config).__name__}"
@@ -40,9 +38,7 @@ class PipelineValidator:
     """Validator for pipeline configurations."""
 
     @staticmethod
-    def validate_pipeline_nodes(
-        pipelines: Dict[str, Any], nodes_config: Dict[str, Any]
-    ) -> None:
+    def validate_pipeline_nodes(pipelines: Dict[str, Any], nodes_config: Dict[str, Any]) -> None:
         missing_nodes = []
         for pipeline_name, pipeline in pipelines.items():
             for node in pipeline.get("nodes", []):
@@ -82,9 +78,7 @@ class FormatPolicy:
     # Compatibility: batch_output_format -> allowed streaming_input_format
     DEFAULT_COMPATIBILITY_MAP = {
         "parquet": ["file_stream"],
-        "delta": [
-            "delta_stream"
-        ],  # or "file_stream" if file-based reading is preferred
+        "delta": ["delta_stream"],  # or "file_stream" if file-based reading is preferred
         "json": ["file_stream"],
         "csv": ["file_stream"],
         "kafka": ["kafka"],
@@ -95,15 +89,9 @@ class FormatPolicy:
 
     def __init__(self, overrides: Optional[Dict[str, Any]] = None):
         overrides = overrides or {}
-        self.supported_inputs = overrides.get(
-            "supported_inputs", self.DEFAULT_SUPPORTED_INPUTS
-        )
-        self.supported_outputs = overrides.get(
-            "supported_outputs", self.DEFAULT_SUPPORTED_OUTPUTS
-        )
-        self.compatibility_map = overrides.get(
-            "compatibility_map", self.DEFAULT_COMPATIBILITY_MAP
-        )
+        self.supported_inputs = overrides.get("supported_inputs", self.DEFAULT_SUPPORTED_INPUTS)
+        self.supported_outputs = overrides.get("supported_outputs", self.DEFAULT_SUPPORTED_OUTPUTS)
+        self.compatibility_map = overrides.get("compatibility_map", self.DEFAULT_COMPATIBILITY_MAP)
         self.checkpoint_required_inputs = overrides.get(
             "checkpoint_required_inputs", self.DEFAULT_CHECKPOINT_REQUIRED_INPUTS
         )
@@ -151,16 +139,12 @@ class MLValidator:
                     )
                 node_config = nodes_config[node_name]
                 self._validate_node_config(node_config, node_name, strict=strict)
-            self._validate_spark_ml_config(
-                pipeline.get("spark_config", {}), strict=strict
-            )
+            self._validate_spark_ml_config(pipeline.get("spark_config", {}), strict=strict)
 
     def _validate_node_config(
         self, node_config: Dict[str, Any], node_name: str, *, strict: bool = True
     ) -> None:
-        missing_fields = [
-            field for field in self.REQUIRED_NODE_FIELDS if field not in node_config
-        ]
+        missing_fields = [field for field in self.REQUIRED_NODE_FIELDS if field not in node_config]
         if missing_fields:
             msg = f"ML node '{node_name}' is missing required fields: {', '.join(missing_fields)}"
             if strict:
@@ -373,9 +357,7 @@ class CrossValidator:
             for dep in deps:
                 dep_config = nodes_config.get(dep, {})
                 if node_type == "ml":
-                    CrossValidator._check_ml_node_dependency(
-                        node_name, dep, dep_config, errors
-                    )
+                    CrossValidator._check_ml_node_dependency(node_name, dep, dep_config, errors)
                 elif node_type == "streaming":
                     CrossValidator._check_streaming_node_dependency(
                         node_name, dep, dep_config, errors
@@ -399,9 +381,7 @@ class HybridValidator:
 
         # Structure of hybrid pipelines: they must have both types
         hybrid_pipelines = {
-            name: p
-            for name, p in context.pipelines_config.items()
-            if p.get("type") == "hybrid"
+            name: p for name, p in context.pipelines_config.items() if p.get("type") == "hybrid"
         }
 
         for name, pipeline in hybrid_pipelines.items():
@@ -417,9 +397,7 @@ class HybridValidator:
                 if n in context.nodes_config
             )
             if not (has_streaming and has_ml):
-                errors.append(
-                    f"Hybrid pipeline '{name}' must contain both streaming and ML nodes"
-                )
+                errors.append(f"Hybrid pipeline '{name}' must contain both streaming and ML nodes")
 
         if errors:
             raise ConfigValidationError("\n".join(errors))

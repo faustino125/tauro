@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Set
 
 from loguru import logger  # type: ignore
 
-from tauro.exec.utils import extract_dependency_name as _extract_dependency_name
-from tauro.exec.utils import normalize_dependencies as _normalize_dependencies
+from tauro.core.exec.utils import extract_dependency_name as _extract_dependency_name
+from tauro.core.exec.utils import normalize_dependencies as _normalize_dependencies
 
 
 class DependencyResolver:

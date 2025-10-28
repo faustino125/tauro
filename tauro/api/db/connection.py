@@ -1,13 +1,11 @@
-"""MongoDB Connection Management for Tauro API
-
-This module provides connection management for MongoDB using Motor for async operations.
 """
-
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import AsyncGenerator, Optional
-from motor.motor_asyncio import AsyncClient, AsyncDatabase  # type: ignore
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure  # type: ignore
 from loguru import logger
-import os
 from contextlib import asynccontextmanager
 
 
@@ -31,10 +29,10 @@ class MongoDBClient:
         self.uri = uri
         self.db_name = db_name
         self.timeout_seconds = timeout_seconds
-        self._client: Optional[AsyncClient] = None
-        self._db: Optional[AsyncDatabase] = None
+        self._client: Optional[AsyncIOMotorClient] = None
+        self._db: Optional[AsyncIOMotorDatabase] = None
 
-    async def connect(self) -> AsyncDatabase:
+    async def connect(self) -> AsyncIOMotorDatabase:
         """
         Connect to MongoDB
 
@@ -51,7 +49,7 @@ class MongoDBClient:
         try:
             logger.info(f"Connecting to MongoDB: {self.uri}")
 
-            self._client = AsyncClient(
+            self._client = AsyncIOMotorClient(
                 self.uri,
                 serverSelectionTimeoutMS=self.timeout_seconds * 1000,
                 connectTimeoutMS=self.timeout_seconds * 1000,
@@ -103,12 +101,12 @@ class MongoDBClient:
             logger.warning(f"Connection health check failed: {e}")
             return False
 
-    def get_database(self) -> AsyncDatabase:
+    def get_database(self) -> AsyncIOMotorDatabase:
         """
         Get the current database instance
 
         Returns:
-            AsyncDatabase instance
+            AsyncIOMotorDatabase instance
 
         Raises:
             RuntimeError: If not connected
@@ -118,12 +116,12 @@ class MongoDBClient:
         return self._db
 
     @asynccontextmanager
-    async def session(self) -> AsyncGenerator[AsyncDatabase, None]:
+    async def session(self) -> AsyncGenerator[AsyncIOMotorDatabase, None]:
         """
         Context manager for database operations
 
         Yields:
-            AsyncDatabase instance
+            AsyncIOMotorDatabase instance
         """
         db = self.get_database()
         try:
@@ -162,12 +160,12 @@ def init_mongodb(
     return _mongodb_client
 
 
-async def get_database() -> AsyncGenerator[AsyncDatabase, None]:
+async def get_database() -> AsyncGenerator[AsyncIOMotorDatabase, None]:
     """
-    FastAPI dependency for getting database instance
+    FastAPI dependency for getting MongoDB database
 
     Yields:
-        AsyncDatabase instance
+        AsyncIOMotorDatabase instance
     """
     global _mongodb_client
 

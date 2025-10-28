@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 import hashlib
 import json
 from datetime import datetime, timedelta
@@ -61,15 +65,11 @@ class ConfigChange(BaseModel):
 class ConfigSnapshot(BaseModel):
     """Complete configuration snapshot at a point in time"""
 
-    project_config: Dict[str, Any] = Field(
-        ..., description="Full project configuration"
-    )
+    project_config: Dict[str, Any] = Field(..., description="Full project configuration")
     pipeline_configs: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict, description="Pipeline configurations by pipeline_id"
     )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
     def calculate_hash(self) -> str:
         """Calculate SHA256 hash of snapshot for integrity verification"""
@@ -179,42 +179,6 @@ class SnapshotIntegrityError(ConfigVersionError):
 class ConfigVersionService:
     """
     Service for managing configuration versions with full audit trail.
-
-    Features:
-    - Version tracking with automatic numbering
-    - Snapshot storage with integrity verification
-    - Change history with detailed metadata
-    - Rollback capability with validation
-    - Promotion across environments
-    - Comparison and diff capabilities
-
-    Example:
-        >>> service = ConfigVersionService(db)
-        >>>
-        >>> # Create a version
-        >>> version = await service.create_version(
-        ...     project_id=proj_id,
-        ...     snapshot=ConfigSnapshot(project_config={...}),
-        ...     change_reason="Performance optimization",
-        ...     created_by="user@example.com"
-        ... )
-        >>>
-        >>> # List all versions for a project
-        >>> versions = await service.list_versions(project_id=proj_id)
-        >>>
-        >>> # Rollback to previous version
-        >>> rolled_back = await service.rollback(
-        ...     project_id=proj_id,
-        ...     target_version=version.version_number - 1,
-        ...     reason="Performance regression detected"
-        ... )
-        >>>
-        >>> # Promote to production
-        >>> promoted = await service.promote_version(
-        ...     version_id=version.id,
-        ...     target_environment=EnvironmentType.PRODUCTION,
-        ...     approved_by="admin@example.com"
-        ... )
     """
 
     def __init__(self, db, collection_name: str = "config_versions"):
@@ -229,9 +193,7 @@ class ConfigVersionService:
         self.collection_name = collection_name
         self.collection = db[collection_name]
 
-        logger.info(
-            f"ConfigVersionService initialized with collection: {collection_name}"
-        )
+        logger.info(f"ConfigVersionService initialized with collection: {collection_name}")
 
     async def _ensure_indexes(self) -> None:
         """Ensure required indexes exist on collection"""
@@ -271,40 +233,12 @@ class ConfigVersionService:
     ) -> ConfigVersionResponse:
         """
         Create a new configuration version with full snapshot and metadata.
-
-        Args:
-            project_id: ID of the project
-            snapshot: ConfigSnapshot with current state
-            change_reason: Human-readable reason for change
-            created_by: User creating the version
-            pipeline_id: Optional specific pipeline ID
-            changes: List of ConfigChange detailing what changed
-            tags: Optional metadata tags
-
-        Returns:
-            ConfigVersionResponse with version details
-
-        Raises:
-            ConfigVersionError: If version creation fails
-
-        Example:
-            >>> version = await service.create_version(
-            ...     project_id=UUID("12345..."),
-            ...     snapshot=ConfigSnapshot(
-            ...         project_config={"name": "etl_v2", "max_nodes": 16},
-            ...         pipeline_configs={"pipe1": {"nodes": 8}}
-            ...     ),
-            ...     change_reason="Increased parallelism",
-            ...     created_by="alice@example.com"
-            ... )
         """
         await self._ensure_indexes()
 
         try:
             # Calculate next version number
-            version_number = await self._get_next_version_number(
-                project_id, pipeline_id
-            )
+            version_number = await self._get_next_version_number(project_id, pipeline_id)
 
             # Calculate snapshot hash for integrity
             snapshot_hash = snapshot.calculate_hash()
@@ -365,23 +299,6 @@ class ConfigVersionService:
     ) -> List[ConfigVersionResponse]:
         """
         List configuration versions with optional filtering.
-
-        Args:
-            project_id: Filter by project ID
-            pipeline_id: Optional filter by pipeline ID
-            limit: Maximum number of versions to return
-            offset: Pagination offset
-            promotion_status: Filter by promotion status
-
-        Returns:
-            List of ConfigVersionResponse sorted by version number (descending)
-
-        Example:
-            >>> versions = await service.list_versions(
-            ...     project_id=proj_id,
-            ...     promotion_status=PromotionStatus.PROMOTED,
-            ...     limit=10
-            ... )
         """
         await self._ensure_indexes()
 
@@ -397,10 +314,7 @@ class ConfigVersionService:
 
             # Query with pagination
             cursor = (
-                self.collection.find(query)
-                .sort("version_number", -1)
-                .skip(offset)
-                .limit(limit)
+                self.collection.find(query).sort("version_number", -1).skip(offset).limit(limit)
             )
 
             versions = []
@@ -420,20 +334,6 @@ class ConfigVersionService:
     ) -> ConfigVersionResponse:
         """
         Get a specific version by ID with optional integrity verification.
-
-        Args:
-            version_id: Version ID to retrieve
-            verify_hash: Verify snapshot integrity
-
-        Returns:
-            ConfigVersionResponse with full snapshot
-
-        Raises:
-            VersionNotFoundError: If version not found
-            SnapshotIntegrityError: If hash verification fails
-
-        Example:
-            >>> version = await service.get_version(version_id)
         """
         try:
             doc = await self.collection.find_one({"id": version_id})
@@ -447,9 +347,7 @@ class ConfigVersionService:
                 calculated_hash = snapshot.calculate_hash()
 
                 if calculated_hash != doc["snapshot_hash"]:
-                    raise SnapshotIntegrityError(
-                        f"Snapshot hash mismatch for version {version_id}"
-                    )
+                    raise SnapshotIntegrityError(f"Snapshot hash mismatch for version {version_id}")
 
                 logger.debug(f"Snapshot integrity verified for version {version_id}")
 
@@ -473,28 +371,6 @@ class ConfigVersionService:
     ) -> ConfigVersionResponse:
         """
         Rollback configuration to a previous version.
-
-        Args:
-            project_id: Project to rollback
-            target_version: Version number to rollback to
-            reason: Reason for rollback
-            rolled_back_by: User performing rollback
-            pipeline_id: Optional specific pipeline
-
-        Returns:
-            ConfigVersionResponse of the newly created rollback version
-
-        Raises:
-            VersionNotFoundError: If target version not found
-            RollbackFailedError: If rollback fails
-
-        Example:
-            >>> rolled_back = await service.rollback(
-            ...     project_id=proj_id,
-            ...     target_version=3,
-            ...     reason="Performance regression detected",
-            ...     rolled_back_by="ops@example.com"
-            ... )
         """
         try:
             # Find target version
@@ -520,9 +396,7 @@ class ConfigVersionService:
             # Create new version marked as rollback
             rollback_doc = {
                 "id": uuid4(),
-                "version_number": await self._get_next_version_number(
-                    project_id, pipeline_id
-                ),
+                "version_number": await self._get_next_version_number(project_id, pipeline_id),
                 "project_id": str(project_id),
                 "pipeline_id": str(pipeline_id) if pipeline_id else None,
                 "snapshot": target_snapshot.dict(),
@@ -574,27 +448,6 @@ class ConfigVersionService:
     ) -> ConfigVersionResponse:
         """
         Promote a configuration version to next environment.
-
-        Args:
-            version_id: Version to promote
-            target_environment: Target environment (dev, staging, prod)
-            approved_by: User approving promotion
-            approval_reason: Optional approval notes
-
-        Returns:
-            Updated ConfigVersionResponse with promotion info
-
-        Raises:
-            VersionNotFoundError: If version not found
-            PromotionFailedError: If promotion fails
-
-        Example:
-            >>> promoted = await service.promote_version(
-            ...     version_id=version.id,
-            ...     target_environment=EnvironmentType.PRODUCTION,
-            ...     approved_by="admin@example.com",
-            ...     approval_reason="All tests passed"
-            ... )
         """
         try:
             # Get version (ensure it exists)
@@ -618,8 +471,7 @@ class ConfigVersionService:
                 raise VersionNotFoundError(f"Version {version_id} not found")
 
             logger.info(
-                f"Version {version_id} promoted to {target_environment.value} "
-                f"by {approved_by}"
+                f"Version {version_id} promoted to {target_environment.value} " f"by {approved_by}"
             )
 
             # Retrieve updated document
@@ -637,20 +489,6 @@ class ConfigVersionService:
     ) -> VersionComparisonResult:
         """
         Compare two configuration versions and generate diff.
-
-        Args:
-            from_version_id: Source version
-            to_version_id: Target version
-
-        Returns:
-            VersionComparisonResult with changes between versions
-
-        Example:
-            >>> comparison = await service.compare_versions(
-            ...     from_version_id=version1.id,
-            ...     to_version_id=version2.id
-            ... )
-            >>> print(comparison.summary)
         """
         try:
             from_version = await self.get_version(from_version_id, verify_hash=False)
@@ -679,8 +517,7 @@ class ConfigVersionService:
 
         except Exception as e:
             logger.error(
-                f"Comparison failed between {from_version_id} and "
-                f"{to_version_id}: {e}"
+                f"Comparison failed between {from_version_id} and " f"{to_version_id}: {e}"
             )
             raise ConfigVersionError(f"Version comparison failed: {str(e)}")
 
@@ -689,19 +526,6 @@ class ConfigVersionService:
     ) -> Dict[str, Any]:
         """
         Get statistics about version history.
-
-        Args:
-            project_id: Project to analyze
-            pipeline_id: Optional specific pipeline
-            days: Number of days to analyze
-
-        Returns:
-            Dictionary with version statistics
-
-        Example:
-            >>> stats = await service.get_version_stats(project_id)
-            >>> print(f"Total versions: {stats['total_versions']}")
-            >>> print(f"Most changed fields: {stats['most_changed_fields']}")
         """
         try:
             cutoff_date = datetime.now(datetime.timezone.utc) - timedelta(days=days)
@@ -761,9 +585,7 @@ class ConfigVersionService:
         if pipeline_id:
             query["pipeline_id"] = str(pipeline_id)
 
-        last_version = await self.collection.find_one(
-            query, sort=[("version_number", -1)]
-        )
+        last_version = await self.collection.find_one(query, sort=[("version_number", -1)])
 
         if last_version:
             return last_version["version_number"] + 1

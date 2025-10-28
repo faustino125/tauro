@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger  # type: ignore
 
-from tauro.io.constants import DEFAULT_CSV_OPTIONS, WriteMode
-from tauro.io.exceptions import ConfigurationError, WriteOperationError
-from tauro.io.validators import ConfigValidator, DataValidator
+from tauro.core.io.constants import DEFAULT_CSV_OPTIONS, WriteMode
+from tauro.core.io.exceptions import ConfigurationError, WriteOperationError
+from tauro.core.io.validators import ConfigValidator, DataValidator
 
 DESTINATION_EMPTY_ERROR = "Destination path cannot be empty"
 
@@ -123,9 +123,7 @@ class SparkWriterMixin:
         config = normalize_partition_config(config)
         predicate = config.get("replace_predicate")
         if predicate:
-            writer = writer.option("replaceWhere", predicate).option(
-                "overwriteSchema", "false"
-            )
+            writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
             logger.debug(f"replaceWhere applied with custom predicate: {predicate}")
             return writer
 
@@ -142,9 +140,7 @@ class SparkWriterMixin:
                 }.items()
                 if not v
             ]
-            raise ConfigurationError(
-                f"replaceWhere requires: {', '.join(missing)}"
-            ) from None
+            raise ConfigurationError(f"replaceWhere requires: {', '.join(missing)}") from None
 
         cfg_validator = ConfigValidator()
         if not (
@@ -156,9 +152,7 @@ class SparkWriterMixin:
             ) from None
 
         predicate = f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
-        writer = writer.option("replaceWhere", predicate).option(
-            "overwriteSchema", "false"
-        )
+        writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
         logger.debug(f"replaceWhere applied: {predicate}")
         return writer
 
@@ -215,9 +209,7 @@ class ParquetWriter(SparkWriterMixin):
         except WriteOperationError:
             raise
         except Exception as e:
-            raise WriteOperationError(
-                f"Failed to write Parquet to {destination}: {e}"
-            ) from e
+            raise WriteOperationError(f"Failed to write Parquet to {destination}: {e}") from e
 
 
 class CSVWriter(SparkWriterMixin):
@@ -247,9 +239,7 @@ class CSVWriter(SparkWriterMixin):
         except WriteOperationError:
             raise
         except Exception as e:
-            raise WriteOperationError(
-                f"Failed to write CSV to {destination}: {e}"
-            ) from e
+            raise WriteOperationError(f"Failed to write CSV to {destination}: {e}") from e
 
 
 class JSONWriter(SparkWriterMixin):
@@ -271,9 +261,7 @@ class JSONWriter(SparkWriterMixin):
         except WriteOperationError:
             raise
         except Exception as e:
-            raise WriteOperationError(
-                f"Failed to write JSON to {destination}: {e}"
-            ) from e
+            raise WriteOperationError(f"Failed to write JSON to {destination}: {e}") from e
 
 
 class ORCWriter(SparkWriterMixin):
@@ -295,6 +283,4 @@ class ORCWriter(SparkWriterMixin):
         except WriteOperationError:
             raise
         except Exception as e:
-            raise WriteOperationError(
-                f"Failed to write ORC to {destination}: {e}"
-            ) from e
+            raise WriteOperationError(f"Failed to write ORC to {destination}: {e}") from e

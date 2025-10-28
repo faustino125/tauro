@@ -38,9 +38,7 @@ def test_find_best_match_scores_by_layer_and_type(tmp_path: Path):
     discovery.discover()
 
     # Prefer layer name 'bronze'
-    best = discovery.find_best_match(
-        layer_name="bronze", use_case=None, config_type="json"
-    )
+    best = discovery.find_best_match(layer_name="bronze", use_case=None, config_type="json")
     assert best is not None
     config_dir, config_file = best
     assert config_file.endswith(".json")

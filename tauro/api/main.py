@@ -1,11 +1,18 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
+import sys
+from contextlib import asynccontextmanager
+
+# Third-party
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
 from loguru import logger
-import sys
 
-from core.api.core.config import settings
-from core.api.core.middleware import setup_middleware
+# Local
+from tauro.api.core.config import settings
+from tauro.api.core.middleware import setup_middleware
 from tauro.api.routes import (
     pipelines_router,
     scheduling_router,
@@ -62,7 +69,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize MongoDB
     try:
-        from core.api.core.deps import initialize_mongodb
+        from tauro.api.core.deps import initialize_mongodb
 
         db = await initialize_mongodb(settings)
         app.state.db = db
@@ -73,7 +80,7 @@ async def lifespan(app: FastAPI):
 
     # Run migrations
     try:
-        from core.api.db.migrations import MigrationRunner
+        from tauro.api.db.migrations import MigrationRunner
 
         logger.info("Running database migrations...")
         runner = MigrationRunner(db)
@@ -88,7 +95,7 @@ async def lifespan(app: FastAPI):
 
     # Attempt to initialize OrchestratorRunner (if available) during startup
     try:
-        from core.api.core.deps import resolve_orchestrator_runner
+        from tauro.api.core.deps import resolve_orchestrator_runner
 
         orchestrator = resolve_orchestrator_runner()
         if orchestrator:
@@ -101,7 +108,7 @@ async def lifespan(app: FastAPI):
 
     # Attempt to start scheduler service (if available) during startup
     try:
-        from core.api.core.deps import resolve_scheduler_service
+        from tauro.api.core.deps import resolve_scheduler_service
 
         scheduler = resolve_scheduler_service()
         if scheduler and settings.scheduler_enabled:
@@ -135,7 +142,7 @@ async def lifespan(app: FastAPI):
 
     # Close MongoDB connection
     try:
-        from core.api.core.deps import close_mongodb
+        from tauro.api.core.deps import close_mongodb
 
         close_mongodb()
     except Exception as e:

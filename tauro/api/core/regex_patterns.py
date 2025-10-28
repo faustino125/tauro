@@ -1,10 +1,7 @@
 """
-Pre-compiled regex patterns for validation.
-
-Pre-compiling regex patterns improves performance by avoiding
-recompilation on every validation call.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 import re
 from functools import lru_cache
 
@@ -29,9 +26,7 @@ UUID_PATTERN = re.compile(
 )
 
 # ISO datetime pattern
-ISO_DATETIME_PATTERN = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?$"
-)
+ISO_DATETIME_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?$")
 
 # Cron expression pattern (simplified)
 CRON_PATTERN = re.compile(

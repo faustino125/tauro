@@ -1,4 +1,9 @@
-from pydantic import BaseSettings, Field, validator
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
 from typing import Optional, List
 from pathlib import Path
 
@@ -6,9 +11,6 @@ from pathlib import Path
 class Settings(BaseSettings):
     """
     Global application configuration.
-
-    Environment variables have precedence over default values.
-    Prefix: TAURO_ (example: TAURO_API_HOST)
     """
 
     # =========================================================================
@@ -52,7 +54,8 @@ class Settings(BaseSettings):
     mongo_db: Optional[str] = Field(default=None, env="MONGO_DB")
     mongo_ca_file: Optional[str] = Field(default=None, env="MONGO_CA_FILE")
 
-    @validator("base_path", pre=True)
+    @field_validator("base_path", mode="before")
+    @classmethod
     def parse_base_path(cls, v):
         """Convert string to Path"""
         if isinstance(v, str):
@@ -94,7 +97,8 @@ class Settings(BaseSettings):
     )
     log_file: Optional[str] = Field(default=None, env="LOG_FILE")
 
-    @validator("log_level")
+    @field_validator("log_level")
+    @classmethod
     def validate_log_level(cls, v):
         """Validate log level"""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -102,7 +106,8 @@ class Settings(BaseSettings):
             raise ValueError(f"Log level must be one of: {valid_levels}")
         return v.upper()
 
-    @validator("config_source")
+    @field_validator("config_source")
+    @classmethod
     def validate_config_source(cls, v):
         """Ensure config source is supported."""
         if not isinstance(v, str):
@@ -129,9 +134,7 @@ class Settings(BaseSettings):
         env="RATE_LIMIT_EXEMPT_PATHS",
     )
 
-    max_request_size: int = Field(
-        default=10 * 1024 * 1024, env="MAX_REQUEST_SIZE"
-    )  # 10MB
+    max_request_size: int = Field(default=10 * 1024 * 1024, env="MAX_REQUEST_SIZE")  # 10MB
 
     # Security headers
     enable_security_headers: bool = Field(default=True, env="ENABLE_SECURITY_HEADERS")
@@ -157,10 +160,11 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, env="DEBUG")
     testing: bool = Field(default=False, env="TESTING")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+    }
 
     def is_development(self) -> bool:
         """Check if running in development mode"""

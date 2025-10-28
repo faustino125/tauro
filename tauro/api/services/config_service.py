@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -6,8 +10,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
-from tauro.config.exceptions import ConfigRepositoryError
-from core.config.providers import ActiveConfigRecord, IConfigRepository
+from tauro.core.config.exceptions import ConfigRepositoryError
+from tauro.core.config.providers import ActiveConfigRecord, IConfigRepository
 
 
 @dataclass
@@ -27,9 +31,7 @@ class ContextBundle:
 
     def as_tuple(
         self,
-    ) -> Tuple[
-        Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]
-    ]:
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
         return (
             self.global_settings,
             self.pipelines_config,
@@ -79,9 +81,7 @@ class ConfigService:
 
     def load_context_dicts(
         self, project_id: str, environment: Optional[str] = None
-    ) -> Tuple[
-        Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]
-    ]:
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
         bundle = self.get_active_context(project_id, environment)
         return bundle.as_tuple()
 
@@ -153,9 +153,7 @@ class ConfigService:
             return value
         if value is None:
             return {}
-        raise ConfigRepositoryError(
-            f"Expected dict but received {type(value).__name__}"
-        )
+        raise ConfigRepositoryError(f"Expected dict but received {type(value).__name__}")
 
     @staticmethod
     def _apply_overrides(
@@ -170,11 +168,7 @@ class ConfigService:
     @staticmethod
     def _deep_update(target: Dict[str, Any], updates: Dict[str, Any]) -> None:
         for key, value in updates.items():
-            if (
-                key in target
-                and isinstance(target[key], dict)
-                and isinstance(value, dict)
-            ):
+            if key in target and isinstance(target[key], dict) and isinstance(value, dict):
                 ConfigService._deep_update(target[key], value)
             else:
                 target[key] = value

@@ -1,25 +1,22 @@
 """
-RunService: Pipeline run management (pipeline executions)
-
-This service implements business logic for creating, tracking and managing
-pipeline executions (runs).
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 import logging
 from typing import List, Optional, Dict, Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncDatabase  # type: ignore
 
-from core.api.schemas.models import (
+from tauro.api.schemas.models import (
     RunCreate,
     RunResponse,
     RunState,
     TaskState,
     RunProgress,
 )
-from core.api.db.models import PipelineRunDocument, TaskRunDocument
-from core.api.schemas.project_validators import ProjectValidator
+from tauro.api.db.models import PipelineRunDocument, TaskRunDocument
+from tauro.api.schemas.project_validators import ProjectValidator
 
 
 logger = logging.getLogger(__name__)
@@ -46,13 +43,6 @@ class InvalidRunError(Exception):
 class RunService:
     """
     Pipeline run management service.
-
-    Responsibilities:
-    - CRUD operations on runs (Create, Read, Update, Delete)
-    - Run state management
-    - Progress tracking
-    - Task management within runs
-    - Execution cancellation
     """
 
     def __init__(self, db: AsyncDatabase):
@@ -74,34 +64,18 @@ class RunService:
     ) -> RunResponse:
         """
         Create a new run (pipeline execution).
-
-        Args:
-            run_data: Run data to create
-            created_by: User creating the run (email or ID)
-
-        Returns:
-            RunResponse with created run
-
-        Raises:
-            InvalidRunError: If data is invalid
         """
         try:
             # Validate that the project exists
-            project = await self.projects_collection.find_one(
-                {"id": str(run_data.project_id)}
-            )
+            project = await self.projects_collection.find_one({"id": str(run_data.project_id)})
             if not project:
                 raise InvalidRunError(f"Project {run_data.project_id} not found")
 
             # Validate that the pipeline exists in the project
             pipelines = project.get("pipelines", [])
-            pipeline_found = any(
-                str(p.get("id")) == str(run_data.pipeline_id) for p in pipelines
-            )
+            pipeline_found = any(str(p.get("id")) == str(run_data.pipeline_id) for p in pipelines)
             if not pipeline_found:
-                raise InvalidRunError(
-                    f"Pipeline {run_data.pipeline_id} not found in project"
-                )
+                raise InvalidRunError(f"Pipeline {run_data.pipeline_id} not found in project")
 
             # Create run document
             run_id = str(uuid4())
@@ -146,15 +120,6 @@ class RunService:
     async def get_run(self, run_id: str) -> RunResponse:
         """
         Get a run by ID.
-
-        Args:
-            run_id: ID of the run
-
-        Returns:
-            RunResponse with run data
-
-        Raises:
-            RunNotFoundError: If run does not exist
         """
         run_doc = await self.runs_collection.find_one({"id": run_id})
 
@@ -174,16 +139,6 @@ class RunService:
     ) -> tuple[List[RunResponse], int]:
         """
         List runs with optional filters.
-
-        Args:
-            project_id: Filter by project
-            pipeline_id: Filter by pipeline
-            state: Filter by state
-            limit: Maximum number of results
-            offset: Number of results to skip
-
-        Returns:
-            Tuple of (list of runs, total records)
         """
         # Build filter
         query = {}
@@ -201,12 +156,7 @@ class RunService:
         total = await self.runs_collection.count_documents(query)
 
         # Get page sorted by most recent first
-        cursor = (
-            self.runs_collection.find(query)
-            .sort("created_at", -1)
-            .skip(offset)
-            .limit(limit)
-        )
+        cursor = self.runs_collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
 
         runs = []
         async for doc in cursor:
@@ -228,18 +178,6 @@ class RunService:
     ) -> RunResponse:
         """
         Update the state of a run.
-
-        Args:
-            run_id: ID of the run
-            new_state: New state (PENDING, RUNNING, SUCCESS, FAILED, CANCELLED)
-            error: Error message (if applicable)
-
-        Returns:
-            Updated RunResponse
-
-        Raises:
-            RunNotFoundError: If run does not exist
-            RunStateError: If state transition is invalid
         """
         # Get current run
         run = await self.get_run(run_id)
@@ -260,13 +198,8 @@ class RunService:
             RunState.CANCELLED.value: [],
         }
 
-        if (
-            new_state not in valid_transitions.get(run.state, [])
-            and new_state != run.state
-        ):
-            raise RunStateError(
-                f"Invalid state transition from {run.state} to {new_state}"
-            )
+        if new_state not in valid_transitions.get(run.state, []) and new_state != run.state:
+            raise RunStateError(f"Invalid state transition from {run.state} to {new_state}")
 
         # Prepare update
         update_dict = {"state": new_state}
@@ -296,27 +229,13 @@ class RunService:
         if result.matched_count == 0:
             raise RunNotFoundError(f"Run {run_id} not found")
 
-        logger.info(
-            f"Run {run_id} transitioned to state {new_state}. "
-            f"Error: {error or 'None'}"
-        )
+        logger.info(f"Run {run_id} transitioned to state {new_state}. " f"Error: {error or 'None'}")
 
         return await self.get_run(run_id)
 
     async def cancel_run(self, run_id: str, reason: str = "") -> RunResponse:
         """
         Cancel a run.
-
-        Args:
-            run_id: ID of the run to cancel
-            reason: Reason for cancellation
-
-        Returns:
-            Updated RunResponse
-
-        Raises:
-            RunNotFoundError: If run does not exist
-            RunStateError: If run cannot be cancelled
         """
         run_data = await self.get_run(run_id)
 
@@ -334,15 +253,6 @@ class RunService:
     async def get_run_progress(self, run_id: str) -> RunProgress:
         """
         Get the current progress of a run.
-
-        Args:
-            run_id: ID of the run
-
-        Returns:
-            RunProgress with progress statistics
-
-        Raises:
-            RunNotFoundError: If run does not exist
         """
         await self.get_run(run_id)
 
@@ -360,9 +270,7 @@ class RunService:
         # Calculate progress
         total_tasks = len(tasks)
         completed_tasks = sum(
-            1
-            for t in tasks
-            if t.get("state") in [TaskState.SUCCESS.value, TaskState.FAILED.value]
+            1 for t in tasks if t.get("state") in [TaskState.SUCCESS.value, TaskState.FAILED.value]
         )
         failed_tasks = sum(1 for t in tasks if t.get("state") == TaskState.FAILED.value)
 
@@ -381,17 +289,6 @@ class RunService:
     ) -> str:
         """
         Add a task to a run.
-
-        Args:
-            run_id: ID of the run
-            task_name: Name of the task
-            node_id: ID of the node executing the task
-
-        Returns:
-            ID of the created task
-
-        Raises:
-            RunNotFoundError: If run does not exist
         """
         # Verify that the run exists
         run = await self.get_run(run_id)
@@ -427,15 +324,6 @@ class RunService:
     ) -> Dict[str, Any]:
         """
         Update the state of a task.
-
-        Args:
-            task_id: ID of the task
-            new_state: New state (PENDING, RUNNING, SUCCESS, FAILED)
-            error: Error message (if applicable)
-            output: Task output (if applicable)
-
-        Returns:
-            Updated task document
         """
         update_dict = {"state": new_state}
 
@@ -467,15 +355,6 @@ class RunService:
     async def get_run_tasks(self, run_id: str) -> List[Dict[str, Any]]:
         """
         Get all tasks for a run.
-
-        Args:
-            run_id: ID of the run
-
-        Returns:
-            List of task documents
-
-        Raises:
-            RunNotFoundError: If run does not exist
         """
         # Verify that the run exists
         await self.get_run(run_id)
@@ -499,25 +378,6 @@ class RunService:
     ) -> RunResponse:
         """
         Start the execution of a run that is in PENDING state.
-
-        This method delegates actual execution to ExecutionService,
-        which handles:
-        1. Changing state to RUNNING
-        2. Executing in background (non-blocking)
-        3. Updating progress in MongoDB
-        4. Changing to SUCCESS/FAILED when complete
-
-        Args:
-            run_id: ID of the run to start
-            timeout_seconds: Timeout for execution
-
-        Returns:
-            RunResponse with run in RUNNING state
-
-        Raises:
-            RunNotFoundError: If run does not exist
-            RunStateError: If run is not in PENDING
-            InvalidRunError: If there are errors
         """
         try:
             logger.info(f"Starting execution of run {run_id}")
@@ -564,23 +424,6 @@ class RunService:
     ) -> RunResponse:
         """
         Cancel a run that is in execution.
-
-        This method delegates actual cancellation to ExecutionService,
-        which handles:
-        1. Changing state to CANCELLED
-        2. Signal to OrchestratorRunner
-        3. Marking async tasks as cancelled
-
-        Args:
-            run_id: ID of the run to cancel
-            reason: Reason for cancellation
-
-        Returns:
-            RunResponse with run in CANCELLED state
-
-        Raises:
-            RunNotFoundError: If run does not exist
-            InvalidRunError: If there are errors
         """
         try:
             logger.info(f"Cancelling run {run_id}: {reason}")
@@ -604,5 +447,3 @@ class RunService:
         except Exception as e:
             logger.error(f"Error cancelling run {run_id}: {e}", exc_info=True)
             raise InvalidRunError(f"Error cancelling run: {str(e)}")
-
-        return tasks

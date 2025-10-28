@@ -1,30 +1,36 @@
-from fastapi import APIRouter, Depends, Query, status
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import Optional
 from uuid import UUID
+
+# Third-party
+from fastapi import APIRouter, Depends, Query, status
 from loguru import logger
 
-from core.api.services.project_service import (
-    ProjectService,
-    ProjectNotFoundError,
-    ProjectAlreadyExistsError,
-    InvalidProjectError,
-)
-from core.api.core.deps import get_project_service
-from core.api.core.responses import (
+# Local
+from tauro.api.core.deps import get_project_service
+from tauro.api.core.responses import (
     APIResponse,
     ListResponse,
-    success_response,
     error_response,
     list_response,
+    success_response,
+)
+from tauro.api.schemas.models import (
+    ProjectCreate,
+    ProjectUpdate,
+)
+from tauro.api.services.project_service import (
+    InvalidProjectError,
+    ProjectAlreadyExistsError,
+    ProjectNotFoundError,
+    ProjectService,
 )
 
 # Constants
 DEFAULT_USER = "user@example.com"
-from core.api.schemas.models import (
-    ProjectCreate,
-    ProjectResponse,
-    ProjectUpdate,
-)
 
 
 # Router configuration
@@ -50,23 +56,7 @@ async def create_project(
     current_user: str = DEFAULT_USER,
 ):
     """
-    Create a new project
-
-    Request body:
-    ```json
-    {
-        "name": "my_project",
-        "description": "Project description",
-        "global_settings": {
-            "input_path": "s3://bucket/",
-            "output_path": "s3://bucket/output/",
-            "mode": "batch",
-            "max_parallel_nodes": 4
-        }
-    }
-    ```
-
-    Response: 201 Created with project details
+    Create a new project.
     """
     try:
         logger.info(f"Creating project: {data.name} (user: {current_user})")
@@ -76,9 +66,7 @@ async def create_project(
 
     except ProjectAlreadyExistsError as e:
         logger.warning(f"Project creation failed: {e}")
-        return error_response(
-            code="PROJECT_EXISTS", message=str(e), details={"name": data.name}
-        )
+        return error_response(code="PROJECT_EXISTS", message=str(e), details={"name": data.name})
 
     except InvalidProjectError as e:
         logger.warning(f"Invalid project data: {e}")
@@ -101,27 +89,16 @@ async def list_projects(
     service: ProjectService = Depends(get_project_service),
 ):
     """
-    List all projects with optional filtering
-
-    Query parameters:
-    - skip: Number of items to skip (default: 0)
-    - limit: Maximum items to return (default: 50, max: 100)
-    - status: Filter by status (active, archived, draft)
-
-    Example: GET /api/v1/projects?status=active&limit=10
+    List all projects with optional filtering.
     """
     try:
-        logger.debug(
-            f"Listing projects: skip={skip}, limit={limit}, status={status_filter}"
-        )
+        logger.debug(f"Listing projects: skip={skip}, limit={limit}, status={status_filter}")
 
         filters = {}
         if status_filter:
             filters["status"] = status_filter
 
-        projects, total = await service.list_projects(
-            offset=skip, limit=limit, **filters
-        )
+        projects, total = await service.list_projects(offset=skip, limit=limit, **filters)
 
         logger.debug(f"Found {len(projects)} projects (total: {total})")
 
@@ -142,9 +119,7 @@ async def get_project(
     service: ProjectService = Depends(get_project_service),
 ):
     """
-    Get a specific project by ID
-
-    Example: GET /api/v1/projects/550e8400-e29b-41d4-a716-446655440000
+    Get a specific project by ID.
     """
     try:
         logger.debug(f"Getting project: {project_id}")
@@ -176,9 +151,7 @@ async def update_project(
     current_user: str = DEFAULT_USER,
 ):
     """
-    Update a project
-
-    Example: PUT /api/v1/projects/{project_id}
+    Update a project.
     """
     try:
         logger.info(f"Updating project: {project_id} (user: {current_user})")
@@ -208,19 +181,13 @@ async def update_project(
         )
 
 
-@router.delete(
-    "/{project_id}", response_model=APIResponse, status_code=status.HTTP_200_OK
-)
+@router.delete("/{project_id}", response_model=APIResponse, status_code=status.HTTP_200_OK)
 async def delete_project(
     project_id: str,
     service: ProjectService = Depends(get_project_service),
 ):
     """
-    Delete a project (soft delete - marks as archived)
-
-    Example: DELETE /api/v1/projects/{project_id}
-
-    Returns: 200 OK with success message
+    Delete a project (soft delete - marks as archived).
     """
     try:
         logger.info(f"Deleting project: {project_id}")
@@ -260,14 +227,10 @@ async def duplicate_project(
     current_user: str = DEFAULT_USER,
 ):
     """
-    Duplicate an existing project with a new name
-
-    Example: POST /api/v1/projects/{project_id}/duplicate?new_name=my_copy
+    Duplicate an existing project with a new name.
     """
     try:
-        logger.info(
-            f"Duplicating project: {project_id} → {new_name} (user: {current_user})"
-        )
+        logger.info(f"Duplicating project: {project_id} → {new_name} (user: {current_user})")
 
         # Validate UUID format
         try:
@@ -291,9 +254,7 @@ async def duplicate_project(
 
     except ProjectAlreadyExistsError as e:
         logger.warning(f"Duplicate project creation failed: {e}")
-        return error_response(
-            code="PROJECT_EXISTS", message=f"Project '{new_name}' already exists"
-        )
+        return error_response(code="PROJECT_EXISTS", message=f"Project '{new_name}' already exists")
 
     except InvalidProjectError as e:
         logger.warning(f"Invalid project data: {e}")

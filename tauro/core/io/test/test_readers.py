@@ -20,9 +20,7 @@ class TestCSVReader:
         assert result == mock_df
         # CSVReader adds default options, we should expect this configuration
         expected_config = {"options": DEFAULT_CSV_OPTIONS}
-        csv_reader._spark_read.assert_called_once_with(
-            "csv", "test.csv", expected_config
-        )
+        csv_reader._spark_read.assert_called_once_with("csv", "test.csv", expected_config)
 
     def test_read_failure(self, csv_reader):
         csv_reader._spark_read = MagicMock(side_effect=Exception("Read error"))
@@ -42,9 +40,7 @@ class TestCSVReader:
         # Custom options should be merged with default options
         expected_options = {**DEFAULT_CSV_OPTIONS, **config["options"]}
         expected_config = {"options": expected_options}
-        csv_reader._spark_read.assert_called_once_with(
-            "csv", "test.csv", expected_config
-        )
+        csv_reader._spark_read.assert_called_once_with("csv", "test.csv", expected_config)
 
 
 class TestQueryReader:

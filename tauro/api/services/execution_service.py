@@ -1,10 +1,14 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 import logging
 import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncDatabase  # type: ignore
 
-from core.api.schemas.models import RunCreate, RunState
+from tauro.api.schemas.models import RunCreate, RunState
 
 
 logger = logging.getLogger(__name__)
@@ -31,15 +35,6 @@ class InvalidExecutionError(Exception):
 class ExecutionService:
     """
     Centralized orchestration service.
-
-    Responsibilities:
-    - Receive execution requests
-    - Validate preconditions
-    - Delegate to OrchestratorRunner
-    - Track execution state
-    - Handle cancellations
-    - Resource cleanup
-    - Execute asynchronously in background
     """
 
     def __init__(self, db: AsyncDatabase):
@@ -64,9 +59,6 @@ class ExecutionService:
     def set_orchestrator_runner(self, orchestrator_runner):
         """
         Inject the OrchestratorRunner instance.
-
-        Args:
-            orchestrator_runner: Instance of the centralized executor
         """
         self.orchestrator_runner = orchestrator_runner
         logger.info("OrchestratorRunner injected into ExecutionService")
@@ -78,32 +70,6 @@ class ExecutionService:
     ) -> Dict[str, Any]:
         """
         Submit a run for centralized execution.
-
-        IMPORTANT: This method returns 202 ACCEPTED immediately.
-        Execution occurs in background in a separate async task.
-
-        State transitions:
-        1. PENDING → RUNNING (immediately in this method)
-        2. RUNNING → SUCCESS/FAILED (in background in _execute_run_async)
-
-        Args:
-            run_id: ID of the run to execute
-            timeout_seconds: Timeout for execution
-
-        Returns:
-            Dictionary with acceptance status (202):
-            {
-                "status": "accepted",
-                "run_id": run_id,
-                "status_url": "/api/v1/runs/{run_id}",
-                "timestamp": datetime.now().isoformat(),
-                "message": "Pipeline execution started in background"
-            }
-
-        Raises:
-            ExecutionNotFoundError: If the run does not exist
-            ExecutionAlreadyRunningError: If already executing
-            InvalidExecutionError: If validation errors occur
         """
         logger.info(f"Submit execution for run {run_id}")
 
@@ -164,23 +130,16 @@ class ExecutionService:
         ):
             raise
         except Exception as e:
-            logger.error(
-                f"Error submitting execution for run {run_id}: {e}", exc_info=True
-            )
+            logger.error(f"Error submitting execution for run {run_id}: {e}", exc_info=True)
             raise InvalidExecutionError(f"Error submitting execution: {str(e)}")
 
     # =========================================================================
     # ASYNC EXECUTION (BACKGROUND)
     # =========================================================================
 
-    async def _execute_run_async(
-        self, run_id: str, timeout_seconds: Optional[int] = None
-    ) -> None:
+    async def _execute_run_async(self, run_id: str, timeout_seconds: Optional[int] = None) -> None:
         """
         Execute the run asynchronously in background.
-
-        IMPORTANT: This method runs in a separate async task
-        and does NOT block the HTTP endpoint response.
         """
         logger.info(f"Starting async execution of run {run_id}")
 
@@ -242,22 +201,16 @@ class ExecutionService:
         if not run_doc:
             raise ExecutionNotFoundError(f"Run {rid} disappeared")
 
-        project_doc = await self.projects_collection.find_one(
-            {"id": run_doc.get("project_id")}
-        )
+        project_doc = await self.projects_collection.find_one({"id": run_doc.get("project_id")})
         if not project_doc:
-            raise InvalidExecutionError(
-                f"Project {run_doc.get('project_id')} not found"
-            )
+            raise InvalidExecutionError(f"Project {run_doc.get('project_id')} not found")
         return run_doc, project_doc
 
     async def _invoke_orchestrator(
         self, ctx, pid, prms, rid: str, timeout_seconds: Optional[int] = None
     ):
         if not self.orchestrator_runner:
-            logger.warning(
-                f"OrchestratorRunner not available, simulating execution for {rid}"
-            )
+            logger.warning(f"OrchestratorRunner not available, simulating execution for {rid}")
             await asyncio.sleep(1)
             return {
                 "progress": {
@@ -281,20 +234,14 @@ class ExecutionService:
 
     async def _handle_timeout(self, run_id: str, timeout_seconds: Optional[int]):
         # Try to cancel operations in OrchestratorRunner
-        if self.orchestrator_runner and hasattr(
-            self.orchestrator_runner, "cancel_execution"
-        ):
+        if self.orchestrator_runner and hasattr(self.orchestrator_runner, "cancel_execution"):
             try:
                 await self.orchestrator_runner.cancel_execution(run_id)
                 logger.info(f"Cancelled in OrchestratorRunner due to timeout: {run_id}")
             except Exception as e:
-                logger.warning(
-                    f"Error cancelling in OrchestratorRunner due to timeout: {e}"
-                )
+                logger.warning(f"Error cancelling in OrchestratorRunner due to timeout: {e}")
 
-        await self._mark_run_failed(
-            run_id, f"Execution timeout after {timeout_seconds} seconds"
-        )
+        await self._mark_run_failed(run_id, f"Execution timeout after {timeout_seconds} seconds")
 
     # =========================================================================
     # GET EXECUTION STATUS
@@ -306,24 +253,6 @@ class ExecutionService:
     ) -> Dict[str, Any]:
         """
         Get the current status of an execution.
-
-        Used for polling the API:
-        GET /api/v1/runs/{run_id}
-
-        Returns:
-        - state: PENDING, RUNNING, SUCCESS, FAILED, CANCELLED
-        - progress: total, completed, failed tasks
-        - timestamps: started_at, completed_at
-        - error: error message if failed
-
-        Args:
-            run_id: ID of the run
-
-        Returns:
-            Dict with current status
-
-        Raises:
-            ExecutionNotFoundError: If run does not exist
         """
         run = await self.runs_collection.find_one({"id": run_id})
 
@@ -347,27 +276,9 @@ class ExecutionService:
     # CANCEL EXECUTION
     # =========================================================================
 
-    async def cancel_execution(
-        self, run_id: str, reason: str = "User cancelled"
-    ) -> bool:
+    async def cancel_execution(self, run_id: str, reason: str = "User cancelled") -> bool:
         """
         Cancel an execution in progress.
-
-        Flow:
-        1. Validate that run exists
-        2. If in RUNNING/PENDING state, change to CANCELLED
-        3. Signal OrchestratorRunner if possible
-        4. Cancel the associated async task (if exists)
-
-        Args:
-            run_id: ID of the run to cancel
-            reason: Reason for cancellation
-
-        Returns:
-            True if cancelled, False if not executing
-
-        Raises:
-            ExecutionNotFoundError: If run does not exist
         """
         logger.info(f"Cancelling execution run {run_id}: {reason}")
 
@@ -380,8 +291,7 @@ class ExecutionService:
         # Only cancel if in RUNNING or PENDING
         if current_state not in [RunState.RUNNING.value, RunState.PENDING.value]:
             logger.warning(
-                f"Cannot cancel run {run_id}: "
-                f"state is {current_state}, not RUNNING/PENDING"
+                f"Cannot cancel run {run_id}: " f"state is {current_state}, not RUNNING/PENDING"
             )
             return False
 
@@ -452,24 +362,11 @@ class ExecutionService:
     def _build_execution_context(self, project: Dict[str, Any]) -> Any:
         """
         Build a Tauro context for execution.
-
-        The context needs:
-        - Input paths
-        - Output paths
-        - Global settings
-        - Environment variables
-
-        Args:
-            project: Project document from MongoDB
-
-        Returns:
-            Context object from Tauro (can be simulated or real)
         """
         logger.debug(f"Building context for project {project.get('id')}")
 
         try:
-            # If tauro.config.contexts available
-            from tauro.config.contexts import Context
+            from tauro.core.config.contexts import Context
 
             # Create context from project settings
             settings = project.get("global_settings", {})
@@ -493,10 +390,6 @@ class ExecutionService:
     async def _mark_run_failed(self, run_id: str, error_message: str) -> None:
         """
         Mark a run as FAILED with error message.
-
-        Args:
-            run_id: ID of the run
-            error_message: Error message
         """
         await self.runs_collection.update_one(
             {"id": run_id},
@@ -513,25 +406,14 @@ class ExecutionService:
     async def check_execution_health(self) -> Dict[str, Any]:
         """
         Check the health of the execution service.
-
-        Returns:
-            Dictionary with health information
         """
         try:
             # Contar runs por estado
-            running = await self.runs_collection.count_documents(
-                {"state": RunState.RUNNING.value}
-            )
-            pending = await self.runs_collection.count_documents(
-                {"state": RunState.PENDING.value}
-            )
-            failed = await self.runs_collection.count_documents(
-                {"state": RunState.FAILED.value}
-            )
+            running = await self.runs_collection.count_documents({"state": RunState.RUNNING.value})
+            pending = await self.runs_collection.count_documents({"state": RunState.PENDING.value})
+            failed = await self.runs_collection.count_documents({"state": RunState.FAILED.value})
 
-            orchestrator_status = (
-                "available" if self.orchestrator_runner else "unavailable"
-            )
+            orchestrator_status = "available" if self.orchestrator_runner else "unavailable"
 
             return {
                 "status": "healthy",

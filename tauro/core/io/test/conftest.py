@@ -12,11 +12,7 @@ def spark_session() -> Generator[Any, None, None]:
         pytest.skip("pyspark not available in test environment")
 
     try:
-        spark = (
-            SparkSession.builder.master("local[1]")
-            .appName("pytest-pyspark")
-            .getOrCreate()
-        )
+        spark = SparkSession.builder.master("local[1]").appName("pytest-pyspark").getOrCreate()
     except Exception:
         pytest.skip("Could not initialize SparkSession in this test environment")
 
@@ -41,9 +37,7 @@ def mock_output_context() -> Dict[str, Any]:
     return {
         "spark": mock_spark,
         "output_path": "/test/output",
-        "output_config": {
-            "test_output": {"format": "parquet", "filepath": "/test/path.parquet"}
-        },
+        "output_config": {"test_output": {"format": "parquet", "filepath": "/test/path.parquet"}},
         "global_settings": {"fail_on_error": True},
     }
 

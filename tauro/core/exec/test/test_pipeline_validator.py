@@ -76,9 +76,7 @@ def test_validate_dataframe_schema_pandas_like():
 def test_check_batch_stream_compatibility_path_mismatch_and_incompatibility():
     # Build simple configs to test compatibility helper
     batch_config = {"output": {"format": "parquet", "path": "/tmp/batch"}}
-    streaming_config = {
-        "input": {"format": "file_stream", "options": {"path": "/tmp/other"}}
-    }
+    streaming_config = {"input": {"format": "file_stream", "options": {"path": "/tmp/other"}}}
 
     issues = []
     pv.PipelineValidator._check_batch_stream_compatibility(

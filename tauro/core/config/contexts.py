@@ -9,15 +9,15 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from loguru import logger  # type: ignore
 
-from tauro.config.exceptions import ConfigLoadError, ConfigValidationError
-from tauro.config.interpolator import VariableInterpolator
-from tauro.config.loaders import (
+from tauro.core.config.exceptions import ConfigLoadError, ConfigValidationError
+from tauro.core.config.interpolator import VariableInterpolator
+from tauro.core.config.loaders import (
     ConfigLoaderFactory,
     DSLConfigLoader,
     PythonConfigLoader,
 )
-from tauro.config.session import SparkSessionFactory
-from tauro.config.validators import (
+from tauro.core.config.session import SparkSessionFactory
+from tauro.core.config.validators import (
     ConfigValidator,
     FormatPolicy,
     HybridValidator,
@@ -38,17 +38,13 @@ class PipelineManager:
     @cached_property
     def pipelines(self) -> Dict[str, Dict[str, Any]]:
         """Return all loaded and validated pipeline configurations."""
-        self._validator.validate_pipeline_nodes(
-            self.pipelines_config, self.nodes_config
-        )
+        self._validator.validate_pipeline_nodes(self.pipelines_config, self.nodes_config)
         return {
             name: self._generate_pipeline_config(name, contents)
             for name, contents in self.pipelines_config.items()
         }
 
-    def _generate_pipeline_config(
-        self, name: str, contents: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _generate_pipeline_config(self, name: str, contents: Dict[str, Any]) -> Dict[str, Any]:
         """Generate complete configuration for a specific pipeline."""
         return {
             "nodes": [
@@ -115,9 +111,7 @@ class Context:
         )
         self._process_configurations()
 
-        self._pipeline_manager = PipelineManager(
-            self.pipelines_config, self.nodes_config
-        )
+        self._pipeline_manager = PipelineManager(self.pipelines_config, self.nodes_config)
 
     @staticmethod
     def _prepare_sources(
@@ -166,9 +160,7 @@ class Context:
         output_config: Union[str, Dict],
     ) -> None:
         """Load all configuration sources and validate global settings."""
-        self.global_settings = self._load_and_validate_config(
-            global_settings, "global settings"
-        )
+        self.global_settings = self._load_and_validate_config(global_settings, "global settings")
         self._validator.validate_required_keys(
             self.global_settings, self.REQUIRED_GLOBAL_SETTINGS, "global settings"
         )
@@ -177,18 +169,12 @@ class Context:
         self.input_path = self.global_settings.get("input_path")
         self.output_path = self.global_settings.get("output_path")
 
-        self.pipelines_config = self._load_and_validate_config(
-            pipelines_config, "pipelines config"
-        )
+        self.pipelines_config = self._load_and_validate_config(pipelines_config, "pipelines config")
         self.nodes_config = self._load_and_validate_config(nodes_config, "nodes config")
         self.input_config = self._load_and_validate_config(input_config, "input config")
-        self.output_config = self._load_and_validate_config(
-            output_config, "output config"
-        )
+        self.output_config = self._load_and_validate_config(output_config, "output config")
 
-    def _load_ml_info(
-        self, ml_info_source: Optional[Union[str, Dict[str, Any], Path]]
-    ) -> None:
+    def _load_ml_info(self, ml_info_source: Optional[Union[str, Dict[str, Any], Path]]) -> None:
         """Load and apply ML info configuration with interpolation and defaults.
 
         Consolidates the ML info loading pipeline:
@@ -261,9 +247,7 @@ class Context:
         # Interpolate variables from global settings
         try:
             logger.debug("Interpolating ML info variables")
-            VariableInterpolator.interpolate_structure(
-                ml_info_data, self.global_settings
-            )
+            VariableInterpolator.interpolate_structure(ml_info_data, self.global_settings)
             logger.debug("ML info interpolation completed")
         except Exception as e:
             logger.debug(f"ML info interpolation skipped: {e}")
@@ -312,22 +296,14 @@ class Context:
 
             # Interpolate input/output config file paths
             logger.debug("Step 1: Interpolating config file paths")
-            self._interpolator.interpolate_config_paths(
-                self.input_config, self.global_settings
-            )
-            self._interpolator.interpolate_config_paths(
-                self.output_config, self.global_settings
-            )
+            self._interpolator.interpolate_config_paths(self.input_config, self.global_settings)
+            self._interpolator.interpolate_config_paths(self.output_config, self.global_settings)
             logger.debug("  ✓ Config file paths interpolated")
 
             # Interpolate all string values in input/output configs
             logger.debug("Step 2: Interpolating string values in input/output configs")
-            VariableInterpolator.interpolate_structure(
-                self.input_config, self.global_settings
-            )
-            VariableInterpolator.interpolate_structure(
-                self.output_config, self.global_settings
-            )
+            VariableInterpolator.interpolate_structure(self.input_config, self.global_settings)
+            VariableInterpolator.interpolate_structure(self.output_config, self.global_settings)
             logger.debug("  ✓ String values interpolated")
 
             # Interpolate input/output data paths
@@ -383,9 +359,7 @@ class Context:
         merged_hyper.update(pconf.get("hyperparams", {}) or {})
 
         model_version = (
-            pconf.get("model_version")
-            or base.get("model_version")
-            or self.default_model_version
+            pconf.get("model_version") or base.get("model_version") or self.default_model_version
         )
 
         return {
@@ -408,9 +382,7 @@ class Context:
             "description": node.get("description", ""),
         }
 
-    def _merge_hyperparams(
-        self, pipeline_hyperparams: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _merge_hyperparams(self, pipeline_hyperparams: Dict[str, Any]) -> Dict[str, Any]:
         """Merge default hyperparams with pipeline-specific ones."""
         merged = self.default_hyperparams.copy()
         merged.update(pipeline_hyperparams)
@@ -594,9 +566,7 @@ class MLContext(BaseSpecializedContext):
     @cached_property
     def ml_nodes(self) -> Dict[str, Dict[str, Any]]:
         return {
-            name: node
-            for name, node in self.nodes_config.items()
-            if self._is_compatible_node(node)
+            name: node for name, node in self.nodes_config.items() if self._is_compatible_node(node)
         }
 
     def _create_validator(self):
@@ -615,10 +585,7 @@ class MLContext(BaseSpecializedContext):
     def _validate_configurations(self) -> None:
         super()._validate_configurations()
         strict_ml = bool(
-            (self.global_settings or {})
-            .get("validators", {})
-            .get("ml", {})
-            .get("strict", True)
+            (self.global_settings or {}).get("validators", {}).get("ml", {}).get("strict", True)
         )
         self._validator.validate_ml_pipeline_config(
             self.ml_pipelines, self.nodes_config, strict=strict_ml
@@ -681,9 +648,7 @@ class StreamingContext(BaseSpecializedContext):
     @cached_property
     def streaming_nodes(self) -> Dict[str, Dict[str, Any]]:
         return {
-            name: node
-            for name, node in self.nodes_config.items()
-            if self._is_streaming_node(node)
+            name: node for name, node in self.nodes_config.items() if self._is_streaming_node(node)
         }
 
     def _create_validator(self):
@@ -758,12 +723,8 @@ class StreamingContext(BaseSpecializedContext):
         input_conf = node_config.get("input", {})
         output_conf = node_config.get("output", {})
 
-        input_format = (
-            input_conf.get("format", "") if isinstance(input_conf, dict) else ""
-        )
-        output_format = (
-            output_conf.get("format", "") if isinstance(output_conf, dict) else ""
-        )
+        input_format = input_conf.get("format", "") if isinstance(input_conf, dict) else ""
+        output_format = output_conf.get("format", "") if isinstance(output_conf, dict) else ""
 
         return self._validator.policy.is_supported_input(
             input_format

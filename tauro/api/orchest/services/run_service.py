@@ -1,12 +1,7 @@
 """
 Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
-
-Run execution service - centralized business logic for pipeline runs.
-
-This service is independent of CLI/API and can be consumed by both.
 """
-
 from __future__ import annotations
 from typing import Dict, Optional, List, Any
 from datetime import datetime, timezone
@@ -17,11 +12,11 @@ from collections import deque
 
 from loguru import logger
 
-from tauro.config.contexts import Context
-from tauro.orchest.models import PipelineRun, TaskRun, RunState
-from tauro.orchest.store import OrchestratorStore
-from tauro.orchest.executor.local import LocalDagExecutor
-from tauro.orchest.resilience import (
+from tauro.core.config.contexts import Context
+from tauro.api.orchest.models import PipelineRun, TaskRun, RunState
+from tauro.api.orchest.store import OrchestratorStore
+from tauro.api.orchest.executor.local import LocalDagExecutor
+from tauro.api.orchest.resilience import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     get_resilience_manager,
@@ -31,9 +26,6 @@ from tauro.orchest.resilience import (
 class RunService:
     """
     Centralized service for managing pipeline runs.
-
-    This service encapsulates all business logic related to pipeline execution
-    and can be consumed independently by CLI or API without coupling.
     """
 
     def __init__(
@@ -46,13 +38,6 @@ class RunService:
     ):
         """
         Initialize the run service.
-
-        Args:
-            context: Execution context with configuration
-            store: Orchestrator store for persistence
-            max_workers: Maximum number of concurrent workers
-            enable_circuit_breaker: Enable circuit breaker pattern
-            circuit_breaker_config: Custom circuit breaker configuration
         """
         self.context = context
         self.store = store or OrchestratorStore(context=context)
@@ -104,9 +89,7 @@ class RunService:
 
         logger.debug("RunService initialized")
 
-    def create_run(
-        self, pipeline_id: str, params: Optional[Dict] = None
-    ) -> PipelineRun:
+    def create_run(self, pipeline_id: str, params: Optional[Dict] = None) -> PipelineRun:
         """
         Create a new pipeline run.
 
@@ -279,9 +262,7 @@ class RunService:
             self._update_metrics(execution_time, success=False)
             return RunState.FAILED
 
-    def start_run_async(
-        self, pipeline_id: str, params: Optional[Dict] = None, **kwargs
-    ) -> str:
+    def start_run_async(self, pipeline_id: str, params: Optional[Dict] = None, **kwargs) -> str:
         """
         Create and start a run asynchronously in background.
 
@@ -381,9 +362,7 @@ class RunService:
             created_before=created_before,
         )
 
-    def list_task_runs(
-        self, run_id: str, state: Optional[RunState] = None
-    ) -> List[TaskRun]:
+    def list_task_runs(self, run_id: str, state: Optional[RunState] = None) -> List[TaskRun]:
         """
         List task runs for a pipeline run.
 
@@ -413,9 +392,7 @@ class RunService:
             return False
 
         if pr.state.is_terminal():
-            logger.warning(
-                f"PipelineRun '{run_id}' is already in terminal state {pr.state}"
-            )
+            logger.warning(f"PipelineRun '{run_id}' is already in terminal state {pr.state}")
             return False
 
         with self._lock:
@@ -503,9 +480,7 @@ class RunService:
         # Recent execution metrics
         if self._recent_executions:
             recent_list = list(self._recent_executions)
-            recent_success_rate = sum(1 for e in recent_list if e["success"]) / len(
-                recent_list
-            )
+            recent_success_rate = sum(1 for e in recent_list if e["success"]) / len(recent_list)
             metrics["recent_success_rate"] = recent_success_rate
 
         return metrics
@@ -572,9 +547,7 @@ class RunService:
             futures = list(self._futures.values())
             future_count = len(futures)
 
-        logger.info(
-            f"Stopping {active_count} active executors and {future_count} futures"
-        )
+        logger.info(f"Stopping {active_count} active executors and {future_count} futures")
 
         # Cancel all pending futures
         for f in futures:

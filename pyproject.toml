@@ -1,0 +1,99 @@
+[tool.poetry]
+name = "tauro"
+version = "0.1.2"
+description = "Tauro - Unified data pipeline framework for batch, streaming, and hybrid workflows"
+authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
+readme = "tauro/README.md"
+license = "MIT"
+homepage = "https://github.com/faustino125/tauro"
+repository = "https://github.com/faustino125/tauro"
+keywords = ["data-pipeline", "etl", "spark", "streaming", "orchestration", "workflow"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Systems Administration",
+]
+
+packages = [
+    { include = "tauro" }
+]
+
+# Exclude the FastAPI server package from distribution
+exclude = [
+  "tauro/api",
+  "tauro/api/*",
+  "tauro/api/**",
+]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+loguru = "^0.7.0"
+PyYAML = "^6.0"
+pandas = "^2.0.0"
+pyspark = { version = "^3.5.0", optional = true }
+fastapi = { version = "^0.100.0", optional = true }
+uvicorn = { version = "^0.23.0", optional = true }
+motor = { version = "^3.3.0", optional = true }
+pymongo = { version = "^4.4.0", optional = true }
+prometheus-client = { version = "^0.17.0", optional = true }
+
+[tool.poetry.extras]
+spark = ["pyspark"]
+api = ["fastapi", "uvicorn", "motor", "pymongo"]
+monitoring = ["prometheus-client"]
+all = ["pyspark", "fastapi", "uvicorn", "motor", "pymongo", "prometheus-client"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+black = "^23.12.0"
+isort = "^5.13.0"
+mypy = "^1.8.0"
+ruff = "^0.1.0"
+
+[tool.poetry.scripts]
+tauro = "tauro.cli.cli:main"
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311', 'py312']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["tauro"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+# Point pytest to the repo's test folders
+testpaths = [
+  "tauro/cli/test",
+  "tauro/core/test",
+  "tauro/core/config/test",
+  "tauro/core/exec/test",
+]
+addopts = ["-ra", "--cov=tauro", "--cov-report=term-missing"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "W", "F", "I"]
+ignore = ["E501"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,19 +1,12 @@
-"""MongoDB Migrations and Index Management for Tauro API
-
-This module handles MongoDB collection creation and index management using
-a versioning system. Each migration is versioned and tracked in the _migrations
-collection to ensure consistency and enable rollbacks.
-
-Usage:
-    runner = MigrationRunner(db)
-    await runner.run_migrations()
 """
-
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncDatabase  # type: ignore
 from loguru import logger
-from typing import List, Optional
+from typing import List
 
 
 class Migration(ABC):
@@ -139,9 +132,7 @@ class MigrationRunner:
 
     async def get_current_version(self) -> int:
         """Get current migration version"""
-        async for doc in (
-            self.migrations_collection.find().sort("version", -1).limit(1)
-        ):
+        async for doc in (self.migrations_collection.find().sort("version", -1).limit(1)):
             return doc["version"]
         return 0
 
@@ -179,9 +170,7 @@ class MigrationRunner:
                 logger.info(f"✓ Migration {migration.version} completed")
 
             except Exception as e:
-                logger.error(
-                    f"✗ Migration {migration.version} failed: {e}", exc_info=True
-                )
+                logger.error(f"✗ Migration {migration.version} failed: {e}", exc_info=True)
 
                 # Record failure
                 await self.migrations_collection.insert_one(
@@ -424,9 +413,7 @@ class MigrationManager:
 
         existing_collections = await self.db.list_collection_names()
 
-        missing_collections = [
-            c for c in required_collections if c not in existing_collections
-        ]
+        missing_collections = [c for c in required_collections if c not in existing_collections]
 
         if missing_collections:
             logger.warning(

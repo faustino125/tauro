@@ -1,12 +1,3 @@
-"""
-Standard API Response Models
-
-All endpoints must return one of these models:
-- APIResponse: Normal responses (success/error)
-- AsyncResponse: Async operations (202 Accepted)
-- ListResponse: Paginated responses
-"""
-
 from typing import Any, Optional, Dict, List
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
@@ -29,18 +20,14 @@ class ErrorDetail(BaseModel):
 
     code: str = Field(..., description="Error code (e.g., RESOURCE_NOT_FOUND)")
     message: str = Field(..., description="Human-readable error message")
-    details: Optional[Dict[str, Any]] = Field(
-        default=None, description="Additional error details"
-    )
+    details: Optional[Dict[str, Any]] = Field(default=None, description="Additional error details")
 
 
 class APIResponse(BaseModel):
     """Standard API response for success or error"""
 
     status: ResponseStatus
-    data: Optional[Any] = Field(
-        default=None, description="Response data (null for errors)"
-    )
+    data: Optional[Any] = Field(default=None, description="Response data (null for errors)")
     error: Optional[ErrorDetail] = Field(
         default=None, description="Error details (null for success)"
     )
@@ -166,9 +153,7 @@ def async_response(task_id: str, status_url: str, message: str = "") -> AsyncRes
     )
 
 
-def list_response(
-    items: List[Any], total: int, limit: int, offset: int
-) -> ListResponse:
+def list_response(items: List[Any], total: int, limit: int, offset: int) -> ListResponse:
     """Create list response"""
     return ListResponse(
         data=items,

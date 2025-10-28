@@ -1,16 +1,9 @@
 """
-Error handling utilities for orchest module.
-
-Provides:
-- Structured error logging with correlation IDs
-- Error metrics tracking
-- Silent failure prevention
-- Fallback operation logging
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from typing import Any, Dict, Optional, Callable, TypeVar
 from datetime import datetime, timezone
-import time
 from functools import wraps
 
 from loguru import logger  # type: ignore
@@ -90,12 +83,6 @@ def log_operation_error(
 ) -> None:
     """
     Log operation error with structured context.
-
-    Args:
-        operation_name: Name of the operation that failed
-        error_type: Type of error for categorization
-        entity_id: ID of the entity being operated on
-        **context: Additional context fields
     """
     log_context = {
         "operation": operation_name,
@@ -123,13 +110,6 @@ def log_fallback_used(
 ) -> None:
     """
     Log when fallback action is used instead of primary operation.
-
-    Args:
-        operation_name: Name of the operation
-        fallback_action: Description of fallback taken
-        entity_id: ID of the entity
-        reason: Why fallback was used
-        **context: Additional context
     """
     log_context = {
         "operation": operation_name,
@@ -156,21 +136,6 @@ def with_error_handling(
 ) -> Callable:
     """
     Decorator for operations with structured error handling and logging.
-
-    Args:
-        operation_name: Name of operation for logging
-        error_type: Error category for metrics
-        metrics: ErrorMetrics instance to update
-
-    Returns:
-        Decorator function
-
-    Example:
-        ```python
-        @with_error_handling("parse_cron", error_type="parsing_errors")
-        def parse_schedule_expression(expr: str) -> datetime:
-            return croniter(expr).get_next(datetime)
-        ```
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
@@ -222,36 +187,6 @@ def safe_fallback(
 ) -> T:
     """
     Execute primary function with fallback on error.
-
-    Logs fallback usage for visibility.
-
-    Args:
-        primary_func: Function to execute
-        fallback_value: Value to return on error
-        operation_name: Name of operation for logging
-        entity_id: ID of entity being operated on
-        metrics: ErrorMetrics to update
-        error_type: Error type for metrics
-        log_error: Whether to log the error
-        *args: Arguments to pass to primary_func
-        **kwargs: Keyword arguments to pass to primary_func
-
-    Returns:
-        Result from primary_func or fallback_value
-
-    Example:
-        ```python
-        next_run = safe_fallback(
-            parse_cron,
-            fallback_value=now + timedelta(seconds=60),
-            operation_name="parse_schedule_cron",
-            entity_id=schedule.id,
-            metrics=self._error_metrics,
-            error_type="parsing_errors",
-            cron_expr,
-            base_time,
-        )
-        ```
     """
     try:
         return primary_func(*args, **kwargs)
@@ -281,9 +216,6 @@ def safe_fallback(
 class ContextLogger:
     """
     Helper for maintaining correlation context across async operations.
-
-    Useful for tracking a single pipeline run or schedule execution
-    across multiple threads/operations.
     """
 
     def __init__(self, **context: Any):

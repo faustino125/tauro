@@ -3,7 +3,7 @@ Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
 """
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
 class VariableInterpolator:
@@ -11,12 +11,7 @@ class VariableInterpolator:
 
     @staticmethod
     def interpolate(string: str, variables: Dict[str, Any]) -> str:
-        """Replace variables in a string with their corresponding values.
-
-        Precedence:
-        1) Environment variables (${VAR}) if set
-        2) Provided 'variables' mapping (fallback)
-        """
+        """Replace variables in a string with their corresponding values."""
         if not string:
             return string
 
@@ -46,9 +41,7 @@ class VariableInterpolator:
         return result
 
     @staticmethod
-    def interpolate_config_paths(
-        config: Dict[str, Any], variables: Dict[str, Any]
-    ) -> None:
+    def interpolate_config_paths(config: Dict[str, Any], variables: Dict[str, Any]) -> None:
         """Recursively interpolate variables in configuration file paths in-place."""
 
         def _rec(node: Any):
@@ -68,9 +61,7 @@ class VariableInterpolator:
         _rec(config)
 
     @staticmethod
-    def interpolate_structure(
-        value: Any, variables: Dict[str, Any], *, copy: bool = False
-    ) -> Any:
+    def interpolate_structure(value: Any, variables: Dict[str, Any], *, copy: bool = False) -> Any:
         """Recursively interpolate variables in any nested structure of dicts/lists/strings."""
         if isinstance(value, str):
             return VariableInterpolator.interpolate(value, variables)
@@ -88,14 +79,10 @@ class VariableInterpolator:
         if isinstance(value, dict):
             if copy:
                 return {
-                    k: VariableInterpolator.interpolate_structure(
-                        v, variables, copy=True
-                    )
+                    k: VariableInterpolator.interpolate_structure(v, variables, copy=True)
                     for k, v in value.items()
                 }
-            for k, v in list(value.items()):
-                value[k] = VariableInterpolator.interpolate_structure(
-                    v, variables, copy=False
-                )
+            for k, v in value.items():
+                value[k] = VariableInterpolator.interpolate_structure(v, variables, copy=False)
             return value
         return value

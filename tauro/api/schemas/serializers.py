@@ -1,19 +1,18 @@
-"""Serializers and Deserializers for MongoDB Documents
-
-Converts between Pydantic models and MongoDB documents.
 """
-
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from uuid import UUID
-from core.api.schemas.models import (
+from tauro.api.schemas.models import (
     ProjectCreate,
     ProjectResponse,
     RunResponse,
     ScheduleResponse,
     ConfigVersionResponse,
 )
-from core.api.db.models import (
+from tauro.api.db.models import (
     ProjectDocument,
     PipelineRunDocument,
     ScheduleDocument,
@@ -31,15 +30,7 @@ class ProjectSerializer:
         created_by: str,
     ) -> ProjectDocument:
         """
-        Convert ProjectCreate to MongoDB document
-
-        Args:
-            project: ProjectCreate instance
-            project_id: Generated UUID
-            created_by: User email
-
-        Returns:
-            ProjectDocument for MongoDB
+        Convert ProjectCreate to MongoDB document.
         """
         now = datetime.now(timezone.utc)
 
@@ -61,13 +52,7 @@ class ProjectSerializer:
     @staticmethod
     def from_document(doc: Dict[str, Any]) -> ProjectResponse:
         """
-        Convert MongoDB document to ProjectResponse
-
-        Args:
-            doc: MongoDB document
-
-        Returns:
-            ProjectResponse instance
+        Convert MongoDB document to ProjectResponse.
         """
         return ProjectResponse(
             id=UUID(doc["id"]),
@@ -89,14 +74,7 @@ class ProjectSerializer:
         update_data: Dict[str, Any],
     ) -> ProjectDocument:
         """
-        Update ProjectDocument with new data
-
-        Args:
-            doc: Existing ProjectDocument
-            update_data: Data to update
-
-        Returns:
-            Updated ProjectDocument
+        Update ProjectDocument with new data.
         """
         doc["updated_at"] = datetime.now(timezone.utc)
 
@@ -170,13 +148,7 @@ class RunSerializer:
     @staticmethod
     def from_document(doc: Dict[str, Any]) -> RunResponse:
         """
-        Convert MongoDB document to RunResponse
-
-        Args:
-            doc: MongoDB document
-
-        Returns:
-            RunResponse instance
+        Convert MongoDB document to RunResponse.
         """
         return RunResponse(
             id=UUID(doc["id"]),
@@ -254,13 +226,7 @@ class ScheduleSerializer:
     @staticmethod
     def from_document(doc: Dict[str, Any]) -> ScheduleResponse:
         """
-        Convert MongoDB document to ScheduleResponse
-
-        Args:
-            doc: MongoDB document
-
-        Returns:
-            ScheduleResponse instance
+        Convert MongoDB document to ScheduleResponse.
         """
         return ScheduleResponse(
             id=UUID(doc["id"]),
@@ -297,20 +263,7 @@ class ConfigVersionSerializer:
         change_reason: Optional[str] = None,
     ) -> ConfigVersionDocument:
         """
-        Create ConfigVersionDocument
-
-        Args:
-            project_id: Project UUID
-            pipeline_id: Pipeline UUID
-            version_number: Version number
-            config_hash: SHA256 hash of config
-            config_snapshot: Full config snapshot
-            changes: Changes made in this version
-            created_by: User email
-            change_reason: Reason for change
-
-        Returns:
-            ConfigVersionDocument
+        Create ConfigVersionDocument.
         """
         doc: ConfigVersionDocument = {
             "project_id": str(project_id),
@@ -330,13 +283,7 @@ class ConfigVersionSerializer:
     @staticmethod
     def from_document(doc: Dict[str, Any]) -> ConfigVersionResponse:
         """
-        Convert MongoDB document to ConfigVersionResponse
-
-        Args:
-            doc: MongoDB document
-
-        Returns:
-            ConfigVersionResponse instance
+        Convert MongoDB document to ConfigVersionResponse.
         """
         return ConfigVersionResponse(
             version_number=doc["version_number"],

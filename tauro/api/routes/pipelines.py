@@ -1,8 +1,12 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
-from core.api.core import (
+from tauro.api.core import (
     get_config_manager,
     get_orchestrator_store,
     get_current_settings,
@@ -10,8 +14,8 @@ from core.api.core import (
     get_db_context_initializer,
     validate_identifier,
 )
-from core.api.core.pagination import paginate_list
-from core.api.schemas import (
+from tauro.api.core.pagination import paginate_list
+from tauro.api.schemas import (
     PipelineInfo,
     PipelineListResponse,
     PipelineRunRequest,
@@ -21,7 +25,7 @@ from core.api.schemas import (
     MessageResponse,
     RunState,
 )
-from tauro.config.exceptions import ActiveConfigNotFound, ConfigRepositoryError
+from tauro.core.config.exceptions import ActiveConfigNotFound, ConfigRepositoryError
 
 try:  # pragma: no cover - optional in certain deployments
     from tauro.cli.execution import ContextInitializer
@@ -29,7 +33,7 @@ except ImportError:
     ContextInitializer = None  # type: ignore
 
 try:  # pragma: no cover - optional en ciertas instalaciones
-    from tauro.orchest import OrchestratorRunner
+    from tauro.api.orchest import OrchestratorRunner
 except ImportError:
     OrchestratorRunner = None  # type: ignore
 
@@ -159,9 +163,7 @@ def _build_execution_context(
 @router.get("", response_model=PipelineListResponse)
 async def list_pipelines(
     project_id: str,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     config_service=Depends(get_config_service),
     config_manager=Depends(get_config_manager),
@@ -204,9 +206,7 @@ async def list_pipelines(
 async def get_pipeline(
     project_id: str,
     pipeline_id: str,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     config_service=Depends(get_config_service),
     config_manager=Depends(get_config_manager),
@@ -262,9 +262,7 @@ async def run_pipeline(
     project_id: str,
     pipeline_id: str,
     request: PipelineRunRequest,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     db_initializer=Depends(get_db_context_initializer),
     config_manager=Depends(get_config_manager),
@@ -338,9 +336,7 @@ async def run_pipeline(
 async def list_runs(
     project_id: str,
     pipeline_id: str,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     state: Optional[RunState] = None,
@@ -387,18 +383,14 @@ async def list_runs(
 
     except Exception as e:
         logger.error(f"Error listing runs for pipeline {pipeline_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.get("/runs/{run_id}", response_model=PipelineRunResponse)
 async def get_run(
     project_id: str,
     run_id: str,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     store=Depends(get_orchestrator_store),
 ):
@@ -445,9 +437,7 @@ async def cancel_run(
     project_id: str,
     run_id: str,
     request: RunCancelRequest = RunCancelRequest(),
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     db_initializer=Depends(get_db_context_initializer),
     config_manager=Depends(get_config_manager),

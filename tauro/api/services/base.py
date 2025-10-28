@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -68,9 +72,7 @@ class BaseService(ABC):
     - Event handling
     """
 
-    def __init__(
-        self, config: Optional[ServiceConfig] = None, name: Optional[str] = None
-    ):
+    def __init__(self, config: Optional[ServiceConfig] = None, name: Optional[str] = None):
         self.config = config or ServiceConfig()
         self.name = name or self.__class__.__name__
         self.state = ServiceState.INITIALIZING
@@ -135,9 +137,7 @@ class BaseService(ABC):
         if self._health_check_task:
             self._health_check_task.cancel()
             # Await task using gather to capture CancelledError as a returned exception
-            results = await asyncio.gather(
-                self._health_check_task, return_exceptions=True
-            )
+            results = await asyncio.gather(self._health_check_task, return_exceptions=True)
             for res in results:
                 if isinstance(res, asyncio.CancelledError):
                     logger.debug(f"Health check task for {self.name} cancelled")
@@ -262,9 +262,7 @@ class BaseService(ABC):
             "uptime_seconds": time.time() - self.metrics.start_time,
         }
 
-    async def _emit_event(
-        self, event: str, data: Optional[Dict[str, Any]] = None
-    ) -> None:
+    async def _emit_event(self, event: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Emit service event to registered handlers"""
         if event in self._event_handlers:
             tasks = []
@@ -274,9 +272,7 @@ class BaseService(ABC):
                         tasks.append(handler(data or {}))
                     else:
                         tasks.append(
-                            asyncio.get_event_loop().run_in_executor(
-                                None, handler, data or {}
-                            )
+                            asyncio.get_event_loop().run_in_executor(None, handler, data or {})
                         )
                 except Exception as e:
                     logger.error(f"Event handler error for {event}: {e}")

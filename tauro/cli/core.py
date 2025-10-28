@@ -180,18 +180,14 @@ class SecurityValidator:
             # If permissive and target is absolute and not relative to base, allow after checks
             if permissive and resolved_target.is_absolute():
                 SecurityValidator._check_sensitive_dirs(resolved_target)
-                SecurityValidator._check_file_permissions(
-                    resolved_target, permissive=permissive
-                )
+                SecurityValidator._check_file_permissions(resolved_target, permissive=permissive)
                 return resolved_target
 
             # Strict behavior: ensure target is inside base
             SecurityValidator._check_relative_to_base(resolved_base, resolved_target)
             SecurityValidator._check_relative_parts(resolved_base, resolved_target)
             SecurityValidator._check_sensitive_dirs(resolved_target)
-            SecurityValidator._check_file_permissions(
-                resolved_target, permissive=permissive
-            )
+            SecurityValidator._check_file_permissions(resolved_target, permissive=permissive)
 
             return resolved_target
         except Exception as e:
@@ -215,9 +211,7 @@ class SecurityValidator:
             raise SecurityError(f"Path contains '..': {resolved_target}")
         # Hidden files check can be disabled in permissive mode by caller (we check permissive in validate_path)
         if any(part.startswith(".") for part in relative.parts):
-            raise SecurityError(
-                f"Hidden file/directory access denied: {resolved_target}"
-            )
+            raise SecurityError(f"Hidden file/directory access denied: {resolved_target}")
 
     @staticmethod
     def _check_sensitive_dirs(resolved_target: Path) -> None:
@@ -226,22 +220,16 @@ class SecurityValidator:
             try:
                 # is_relative_to available in py>=3.9
                 if resolved_target.is_relative_to(sensitive_dir):
-                    raise SecurityError(
-                        f"Access to sensitive directory '{sensitive_dir}' denied"
-                    )
+                    raise SecurityError(f"Access to sensitive directory '{sensitive_dir}' denied")
             except AttributeError:
                 try:
                     resolved_target.relative_to(sensitive_dir)
-                    raise SecurityError(
-                        f"Access to sensitive directory '{sensitive_dir}' denied"
-                    )
+                    raise SecurityError(f"Access to sensitive directory '{sensitive_dir}' denied")
                 except Exception:
                     pass
 
     @staticmethod
-    def _check_file_permissions(
-        resolved_target: Path, permissive: bool = False
-    ) -> None:
+    def _check_file_permissions(resolved_target: Path, permissive: bool = False) -> None:
         """Check file permissions and ownership.
 
         In permissive mode ownership and some permission checks are skipped.
@@ -251,9 +239,7 @@ class SecurityValidator:
         try:
             stat_info = os.stat(resolved_target)
             if os.name == "posix":
-                SecurityValidator._check_posix_permissions(
-                    resolved_target, stat_info, permissive
-                )
+                SecurityValidator._check_posix_permissions(resolved_target, stat_info, permissive)
         except OSError:
             pass
 
@@ -349,9 +335,7 @@ class PathManager:
             return
 
         try:
-            validated_dir = SecurityValidator.validate_path(
-                self.original_cwd, self.config_dir
-            )
+            validated_dir = SecurityValidator.validate_path(self.original_cwd, self.config_dir)
 
             paths_to_add = [
                 validated_dir,
@@ -400,9 +384,7 @@ def parse_iso_date(date_str: Optional[str]) -> Optional[str]:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         return dt.strftime("%Y-%m-%d")
     except ValueError as e:
-        raise ValidationError(
-            f"Invalid date format '{date_str}'. Use YYYY-MM-DD"
-        ) from e
+        raise ValidationError(f"Invalid date format '{date_str}'. Use YYYY-MM-DD") from e
 
 
 def validate_date_range(start_date: Optional[str], end_date: Optional[str]) -> None:
@@ -414,9 +396,7 @@ def validate_date_range(start_date: Optional[str], end_date: Optional[str]) -> N
         except ValueError:
             raise ValidationError("Dates must be in YYYY-MM-DD format")
         if sd > ed:
-            raise ValidationError(
-                f"Start date {start_date} must be <= end date {end_date}"
-            )
+            raise ValidationError(f"Start date {start_date} must be <= end date {end_date}")
 
 
 def is_sandbox_environment(env_name: str) -> bool:

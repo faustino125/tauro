@@ -1,12 +1,7 @@
 """
 Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
-
-Metrics aggregation service - centralized metrics collection.
-
-This service is independent of CLI/API and can be consumed by both.
 """
-
 from __future__ import annotations
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
@@ -14,8 +9,8 @@ from threading import RLock
 
 from loguru import logger
 
-from tauro.orchest.store import OrchestratorStore
-from tauro.orchest.models import RunState
+from tauro.api.orchest.store import OrchestratorStore
+from tauro.api.orchest.models import RunState
 
 
 class MetricsService:
@@ -64,9 +59,7 @@ class MetricsService:
 
         try:
             # Get run statistics
-            all_runs = self.store.list_pipeline_runs(
-                pipeline_id=pipeline_id, limit=1000
-            )
+            all_runs = self.store.list_pipeline_runs(pipeline_id=pipeline_id, limit=1000)
 
             total_runs = len(all_runs)
             successful = sum(1 for r in all_runs if r.state == RunState.SUCCESS)
@@ -82,8 +75,7 @@ class MetricsService:
             completed_runs = [r for r in all_runs if r.finished_at and r.started_at]
             if completed_runs:
                 execution_times = [
-                    (r.finished_at - r.started_at).total_seconds()
-                    for r in completed_runs
+                    (r.finished_at - r.started_at).total_seconds() for r in completed_runs
                 ]
                 avg_execution_time = sum(execution_times) / len(execution_times)
                 max_execution_time = max(execution_times)
@@ -242,9 +234,7 @@ class MetricsService:
             # Get dead letter queue entries
             try:
                 dlq_entries = self.store.get_schedule_failures(limit=10)
-                schedule_failures = [
-                    e for e in dlq_entries if e.get("schedule_id") == schedule_id
-                ]
+                schedule_failures = [e for e in dlq_entries if e.get("schedule_id") == schedule_id]
             except Exception:
                 schedule_failures = []
 
@@ -254,9 +244,7 @@ class MetricsService:
                 "enabled": schedule.enabled,
                 "kind": schedule.kind.value,
                 "expression": schedule.expression,
-                "next_run_at": schedule.next_run_at.isoformat()
-                if schedule.next_run_at
-                else None,
+                "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
                 "total_runs": total_runs,
                 "successful_runs": successful,
                 "failed_runs": failed,
@@ -290,15 +278,11 @@ class MetricsService:
                 self._cache_expiry.clear()
                 logger.debug("Cleared all metrics cache")
             else:
-                keys_to_remove = [
-                    k for k in self._cache.keys() if self._match_pattern(k, pattern)
-                ]
+                keys_to_remove = [k for k in self._cache.keys() if self._match_pattern(k, pattern)]
                 for key in keys_to_remove:
                     self._cache.pop(key, None)
                     self._cache_expiry.pop(key, None)
-                logger.debug(
-                    f"Cleared {len(keys_to_remove)} cache entries matching {pattern}"
-                )
+                logger.debug(f"Cleared {len(keys_to_remove)} cache entries matching {pattern}")
 
     def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
         """Get value from cache if not expired."""

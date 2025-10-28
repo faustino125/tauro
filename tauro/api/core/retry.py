@@ -1,9 +1,7 @@
 """
-Retry logic utilities for handling transient failures.
-
-Provides decorators and utilities for exponential backoff retry.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 import asyncio
 import time
 from functools import wraps
@@ -92,9 +90,7 @@ def retry(
         func_name = name or func.__name__
 
         async def async_wrapper(*args, **kwargs):
-            return await _retry_async_impl(
-                func, config, func_name, retry_on, *args, **kwargs
-            )
+            return await _retry_async_impl(func, config, func_name, retry_on, *args, **kwargs)
 
         def sync_wrapper(*args, **kwargs):
             return _retry_sync_impl(func, config, func_name, retry_on, *args, **kwargs)
@@ -132,9 +128,7 @@ async def _retry_async_impl(
                 )
                 await asyncio.sleep(delay)
             else:
-                logger.error(
-                    f"[{func_name}] All {config.max_retries + 1} attempts failed"
-                )
+                logger.error(f"[{func_name}] All {config.max_retries + 1} attempts failed")
         except Exception as e:
             logger.error(f"[{func_name}] Non-retryable error: {e}")
             raise
@@ -166,9 +160,7 @@ def _retry_sync_impl(
                 )
                 time.sleep(delay)
             else:
-                logger.error(
-                    f"[{func_name}] All {config.max_retries + 1} attempts failed"
-                )
+                logger.error(f"[{func_name}] All {config.max_retries + 1} attempts failed")
         except Exception as e:
             logger.error(f"[{func_name}] Non-retryable error: {e}")
             raise

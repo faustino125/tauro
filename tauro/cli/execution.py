@@ -9,8 +9,8 @@ from loguru import logger  # type: ignore
 
 from tauro.cli.config import AppConfigManager, ConfigManager
 from tauro.cli.core import ConfigurationError, ExecutionError, PathManager
-from tauro.config.contexts import Context
-from tauro.exec.executor import PipelineExecutor as ExternalPipelineExecutor
+from tauro.core.config.contexts import Context
+from tauro.core.exec.executor import PipelineExecutor as ExternalPipelineExecutor
 
 
 class ContextInitializer:
@@ -178,9 +178,7 @@ class PipelineExecutor:
                 pipeline_config = pipelines.get(pipeline_name, {})
                 nodes = pipeline_config.get("nodes", [])
                 if isinstance(nodes, list):
-                    node_names = [
-                        n.get("name") if isinstance(n, dict) else n for n in nodes
-                    ]
+                    node_names = [n.get("name") if isinstance(n, dict) else n for n in nodes]
                     return node_name in node_names
             return True
         except Exception:
@@ -200,13 +198,9 @@ class PipelineExecutor:
                 pipelines = getattr(self.context, "pipelines_config", {})
                 if hasattr(pipelines, "get"):
                     pipeline_config = pipelines.get(pipeline_name, {})
-                    info["description"] = pipeline_config.get(
-                        "description", info["description"]
-                    )
+                    info["description"] = pipeline_config.get("description", info["description"])
                     nodes = pipeline_config.get("nodes", [])
-                    info["nodes"] = [
-                        n.get("name") if isinstance(n, dict) else n for n in nodes
-                    ]
+                    info["nodes"] = [n.get("name") if isinstance(n, dict) else n for n in nodes]
 
             return info
         except Exception:
@@ -235,9 +229,7 @@ class PipelineExecutor:
                 "context_type": type(self.context).__name__,
                 "has_path_manager": self.path_manager is not None,
                 "available_pipelines": self.list_pipelines(),
-                "config_dir": (
-                    str(self.path_manager.config_dir) if self.path_manager else None
-                ),
+                "config_dir": (str(self.path_manager.config_dir) if self.path_manager else None),
             }
 
             if hasattr(self.context, "global_settings"):

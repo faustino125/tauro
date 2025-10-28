@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union, Callable, TypeVar
 from abc import ABC, abstractmethod
@@ -112,9 +116,7 @@ class LengthRule(ValidationRule):
 
     @property
     def error_message(self) -> str:
-        return (
-            f"Length must be between {self.min_length} and {self.max_length} characters"
-        )
+        return f"Length must be between {self.min_length} and {self.max_length} characters"
 
 
 class RegexRule(ValidationRule):
@@ -139,9 +141,7 @@ class RegexRule(ValidationRule):
 class RangeRule(ValidationRule):
     """Rule for numeric range validation"""
 
-    def __init__(
-        self, min_value: Union[int, float] = None, max_value: Union[int, float] = None
-    ):
+    def __init__(self, min_value: Union[int, float] = None, max_value: Union[int, float] = None):
         self.min_value = min_value
         self.max_value = max_value
 
@@ -150,14 +150,10 @@ class RangeRule(ValidationRule):
             return
 
         if self.min_value is not None and value < self.min_value:
-            raise CustomValidationError(
-                f"Field '{field_name}' must be at least {self.min_value}"
-            )
+            raise CustomValidationError(f"Field '{field_name}' must be at least {self.min_value}")
 
         if self.max_value is not None and value > self.max_value:
-            raise CustomValidationError(
-                f"Field '{field_name}' must be at most {self.max_value}"
-            )
+            raise CustomValidationError(f"Field '{field_name}' must be at most {self.max_value}")
 
     @property
     def error_message(self) -> str:
@@ -345,9 +341,7 @@ class DataValidator:
         data_json = self._hash_data(data)
         return self._validate_cached(schema_name, data_json)
 
-    def _validate_data_uncached(
-        self, schema_name: str, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _validate_data_uncached(self, schema_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate data without caching"""
         if schema_name not in self.schemas:
             return {
@@ -412,19 +406,13 @@ def validate_cron_expression(v):
 # Helper functions extracted to top-level scope to reduce cognitive complexity of the main validator
 def _check_string_length(s: str, path: str, limits: Dict[str, Any]) -> None:
     if len(s) > limits["max_string_length"]:
-        raise ValueError(
-            f"String too long at {path}: {len(s)} > {limits['max_string_length']}"
-        )
+        raise ValueError(f"String too long at {path}: {len(s)} > {limits['max_string_length']}")
 
 
-def _push_dict_items(
-    d: dict, path: str, depth: int, limits: Dict[str, Any], stack: List
-) -> None:
+def _push_dict_items(d: dict, path: str, depth: int, limits: Dict[str, Any], stack: List) -> None:
     count = len(d)
     if count > limits["max_array_length"]:
-        raise ValueError(
-            f"Object too large at {path}: {count} > {limits['max_array_length']}"
-        )
+        raise ValueError(f"Object too large at {path}: {count} > {limits['max_array_length']}")
     for key, value in d.items():
         if len(str(key)) > limits["max_key_length"]:
             raise ValueError(
@@ -433,14 +421,10 @@ def _push_dict_items(
         stack.append((value, f"{path}.{key}", depth + 1))
 
 
-def _push_list_items(
-    lst: list, path: str, depth: int, limits: Dict[str, Any], stack: List
-) -> None:
+def _push_list_items(lst: list, path: str, depth: int, limits: Dict[str, Any], stack: List) -> None:
     count = len(lst)
     if count > limits["max_array_length"]:
-        raise ValueError(
-            f"Array too large at {path}: {count} > {limits['max_array_length']}"
-        )
+        raise ValueError(f"Array too large at {path}: {count} > {limits['max_array_length']}")
     for i, item in enumerate(lst):
         stack.append((item, f"{path}[{i}]", depth + 1))
 
@@ -496,9 +480,7 @@ def create_pipeline_run_schema() -> ValidationSchema:
     schema.add_rule("pipeline_id", LengthRule(min_length=1, max_length=255))
     schema.add_rule(
         "pipeline_id",
-        RegexRule(
-            r"^[a-zA-Z0-9_-]+$", "Only alphanumeric, underscore, and dash allowed"
-        ),
+        RegexRule(r"^[a-zA-Z0-9_-]+$", "Only alphanumeric, underscore, and dash allowed"),
     )
 
     # Parameters validation

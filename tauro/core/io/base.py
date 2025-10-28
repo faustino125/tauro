@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
-from tauro.io.validators import ConfigValidator
-from tauro.io.exceptions import ConfigurationError
-from tauro.io.context_manager import ContextManager
-from tauro.io.sql import SQLSanitizer
-from tauro.io.constants import CLOUD_URI_PREFIXES
+from tauro.core.io.validators import ConfigValidator
+from tauro.core.io.exceptions import ConfigurationError
+from tauro.core.io.context_manager import ContextManager
+from tauro.core.io.sql import SQLSanitizer
+from tauro.core.io.constants import CLOUD_URI_PREFIXES
 
 
 class BaseIO:
@@ -85,20 +85,14 @@ class BaseIO:
         structure for local filesystem paths, regardless of execution_mode.
         """
         try:
-            if "://" in path or any(
-                str(path).startswith(pfx) for pfx in CLOUD_URI_PREFIXES
-            ):
-                logger.debug(
-                    f"Skipping local directory creation for non-local path: {path}"
-                )
+            if "://" in path or any(str(path).startswith(pfx) for pfx in CLOUD_URI_PREFIXES):
+                logger.debug(f"Skipping local directory creation for non-local path: {path}")
                 return
 
             p = Path(path)
             # If it looks like a directory (no suffix or endswith slash), create it.
             # Otherwise create the parent directory of the file path.
-            dir_path = (
-                p if (p.suffix == "" or str(path).endswith(("/", "\\"))) else p.parent
-            )
+            dir_path = p if (p.suffix == "" or str(path).endswith(("/", "\\"))) else p.parent
 
             if dir_path and not dir_path.exists():
                 logger.debug(f"Creating directory: {dir_path}")
@@ -124,9 +118,7 @@ class BaseIO:
         try:
             return self.config_validator.validate_output_key(out_key)
         except Exception as e:
-            raise ConfigurationError(
-                f"Failed to parse output key '{out_key}': {e}"
-            ) from e
+            raise ConfigurationError(f"Failed to parse output key '{out_key}': {e}") from e
 
     @staticmethod
     def sanitize_sql_query(query: str) -> str:

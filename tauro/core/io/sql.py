@@ -6,7 +6,7 @@ from typing import ClassVar, Set, List
 import re
 from loguru import logger  # type: ignore
 
-from tauro.io.exceptions import ConfigurationError
+from tauro.core.io.exceptions import ConfigurationError
 
 
 class SQLSanitizer:
@@ -59,9 +59,7 @@ class SQLSanitizer:
         query = query.strip()
 
         if not query:
-            raise ConfigurationError(
-                "Query cannot be empty after stripping whitespace"
-            ) from None
+            raise ConfigurationError("Query cannot be empty after stripping whitespace") from None
 
         normalized_query = re.sub(r"\s+", " ", query)
 
@@ -236,9 +234,7 @@ class SQLSanitizer:
             elif char == ";" and not in_string:
                 semicolon_count += 1
 
-        if semicolon_count > 1 or (
-            semicolon_count == 1 and not clean_query.rstrip().endswith(";")
-        ):
+        if semicolon_count > 1 or (semicolon_count == 1 and not clean_query.rstrip().endswith(";")):
             raise ConfigurationError(
                 "Multiple SQL statements are not allowed. Only single SELECT queries are permitted."
             ) from None

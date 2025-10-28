@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
-from .core import ConfigFormat, ExitCode, TauroError
+from tauro.cli.core import ConfigFormat, ExitCode, TauroError
 
 try:
     import yaml  # type: ignore
@@ -37,9 +37,7 @@ class TemplateError(TauroError):
 class BaseTemplate(ABC):
     """Abstract base class for configuration templates."""
 
-    def __init__(
-        self, project_name: str, config_format: ConfigFormat = ConfigFormat.YAML
-    ):
+    def __init__(self, project_name: str, config_format: ConfigFormat = ConfigFormat.YAML):
         self.project_name = project_name
         self.config_format = config_format
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -131,7 +129,6 @@ class BaseTemplate(ABC):
         }
 
 
-_BRONZE_STREAMING_MODULE = "pipelines.bronze.streaming"
 _TEMPLATE_CANCELLED_MSG = "Template generation cancelled"
 
 
@@ -151,187 +148,151 @@ class MedallionBasicTemplate(BaseTemplate):
                 "bronze_path": "data/bronze",
                 "silver_path": "data/silver",
                 "gold_path": "data/gold",
+                "spark_master": "local[*]",
+                "spark_config": {
+                    "spark.sql.shuffle.partitions": "4",
+                    "spark.default.parallelism": "4",
+                    "spark.sql.adaptive.enabled": "true",
+                },
+                "validation": {
+                    "check_required_columns": True,
+                    "check_empty_dataframes": True,
+                    "fail_on_validation_error": True,
+                },
+                "logging": {
+                    "level": "INFO",
+                    "format": "structured",
+                },
+                "max_retries": 3,
+                "retry_wait_seconds": 5,
             }
         )
         return base_settings
 
     def generate_pipelines_config(self) -> Dict[str, Any]:
-        # Batch pipelines and a simple streaming pipeline that lands in Bronze
+        """Simplified pipeline configuration with clear dependencies."""
         return {
-            "bronze_batch_ingestion": {
-                "description": "Batch ingestion from CSV files to Bronze layer",
+            "load": {
+                "description": "Load raw data from source to Bronze layer",
                 "type": "batch",
-                "nodes": ["ingest_sales_data", "ingest_customer_data"],
-                "inputs": ["sales_source_csv", "customer_source_csv"],
-                "outputs": ["bronze_sales", "bronze_customers"],
+                "nodes": ["load_raw_data"],
+                "inputs": ["raw_data_source"],
+                "outputs": ["bronze_data"],
             },
-            "silver_transform": {
-                "description": "Clean and transform Bronze data into Silver",
+            "transform": {
+                "description": "Transform Bronze to Silver (data quality, enrichment)",
                 "type": "batch",
-                "nodes": ["clean_sales_data", "clean_customer_data"],
-                "inputs": ["bronze_sales", "bronze_customers"],
-                "outputs": ["silver_sales", "silver_customers"],
+                "nodes": ["validate_data", "clean_data"],
+                "inputs": ["bronze_data"],
+                "outputs": ["silver_data"],
             },
-            "gold_aggregation": {
-                "description": "Aggregate data in Gold layer for analytics",
+            "aggregate": {
+                "description": "Aggregate Silver to Gold (business metrics)",
                 "type": "batch",
-                "nodes": ["aggregate_sales"],
-                "inputs": ["silver_sales"],
-                "outputs": ["gold_sales_agg"],
-            },
-            "bronze_streaming_ingestion": {
-                "description": "Streaming ingestion from Kafka to Bronze",
-                "type": "streaming",
-                "nodes": ["stream_from_kafka", "process_stream", "write_stream"],
-                "inputs": ["kafka_topic_sales"],
-                "outputs": ["bronze_stream"],
+                "nodes": ["calculate_metrics"],
+                "inputs": ["silver_data"],
+                "outputs": ["gold_metrics"],
             },
         }
 
     def generate_nodes_config(self) -> Dict[str, Any]:
-        # Minimal node definitions with module/function placeholders
+        """Minimal, focused node definitions with clear data flow."""
         return {
-            # Bronze batch
-            "ingest_sales_data": {
-                "description": "Ingest sales CSV into Bronze",
-                "module": "pipelines.bronze.ingestion",
-                "function": "ingest_sales_data",
-                "input": ["sales_source_csv"],
-                "output": ["bronze_sales"],
+            # Bronze: Load raw data
+            "load_raw_data": {
+                "description": "Load raw data from source files",
+                "module": "pipelines.load",
+                "function": "load_raw_data",
+                "input": ["raw_data_source"],
+                "output": ["bronze_data"],
                 "dependencies": [],
             },
-            "ingest_customer_data": {
-                "description": "Ingest customer CSV into Bronze",
-                "module": "pipelines.bronze.ingestion",
-                "function": "ingest_customer_data",
-                "input": ["customer_source_csv"],
-                "output": ["bronze_customers"],
-                "dependencies": [],
+            # Silver: Validate
+            "validate_data": {
+                "description": "Validate data quality and schema",
+                "module": "pipelines.transform",
+                "function": "validate_data",
+                "input": ["bronze_data"],
+                "output": ["validated_data"],
+                "dependencies": ["load_raw_data"],
             },
-            # Silver
-            "clean_sales_data": {
-                "description": "Clean and standardize Bronze sales data",
-                "module": "pipelines.silver.transform",
-                "function": "clean_sales_data",
-                "input": ["bronze_sales"],
-                "output": ["silver_sales"],
-                "dependencies": ["ingest_sales_data"],
+            # Silver: Clean
+            "clean_data": {
+                "description": "Clean and standardize data",
+                "module": "pipelines.transform",
+                "function": "clean_data",
+                "input": ["validated_data"],
+                "output": ["silver_data"],
+                "dependencies": ["validate_data"],
             },
-            "clean_customer_data": {
-                "description": "Clean and standardize Bronze customer data",
-                "module": "pipelines.silver.transform",
-                "function": "clean_customer_data",
-                "input": ["bronze_customers"],
-                "output": ["silver_customers"],
-                "dependencies": ["ingest_customer_data"],
-            },
-            # Gold
-            "aggregate_sales": {
-                "description": "Aggregate sales for analytics",
-                "module": "pipelines.gold.aggregation",
-                "function": "aggregate_sales",
-                "input": ["silver_sales"],
-                "output": ["gold_sales_agg"],
-                "dependencies": ["clean_sales_data"],
-            },
-            # Streaming to Bronze
-            "stream_from_kafka": {
-                "description": "Read sales events from Kafka",
-                "module": _BRONZE_STREAMING_MODULE,
-                "function": "stream_from_kafka",
-                "input": ["kafka_topic_sales"],
-                "output": ["raw_stream"],
-                "dependencies": [],
-            },
-            "process_stream": {
-                "description": "Parse and filter streaming events",
-                "module": _BRONZE_STREAMING_MODULE,
-                "function": "process_stream",
-                "input": ["raw_stream"],
-                "output": ["processed_stream"],
-                "dependencies": ["stream_from_kafka"],
-            },
-            "write_stream": {
-                "description": "Write streaming data to Bronze (Delta/Parquet)",
-                "module": _BRONZE_STREAMING_MODULE,
-                "function": "write_stream",
-                "input": ["processed_stream"],
-                "output": ["bronze_stream"],
-                "dependencies": ["process_stream"],
+            # Gold: Calculate metrics
+            "calculate_metrics": {
+                "description": "Calculate business metrics and aggregations",
+                "module": "pipelines.aggregate",
+                "function": "calculate_metrics",
+                "input": ["silver_data"],
+                "output": ["gold_metrics"],
+                "dependencies": ["clean_data"],
             },
         }
 
     def generate_input_config(self) -> Dict[str, Any]:
+        """Input configuration with format validation."""
         return {
-            "sales_source_csv": {
-                "description": "Sales CSV input (batch)",
+            "raw_data_source": {
+                "description": "Raw data from CSV source",
                 "format": "csv",
-                "filepath": "data/raw/sales/*.csv",
-                "options": {"header": True, "inferSchema": True},
-            },
-            "customer_source_csv": {
-                "description": "Customer CSV input (batch)",
-                "format": "csv",
-                "filepath": "data/raw/customers/*.csv",
-                "options": {"header": True, "inferSchema": True},
-            },
-            "kafka_topic_sales": {
-                "description": "Kafka topic for sales events (streaming)",
-                "format": "kafka",
-                "kafka.bootstrap.servers": "localhost:9092",
-                "subscribe": "sales_events",
-                "startingOffsets": "latest",
+                "filepath": "data/raw/input.csv",
+                "options": {
+                    "header": True,
+                    "inferSchema": True,
+                    "encoding": "utf-8",
+                },
+                "validation": {
+                    "required_columns": ["id", "name", "value"],
+                    "check_empty": True,
+                },
             },
         }
 
     def generate_output_config(self) -> Dict[str, Any]:
+        """Output configuration with multiple format support."""
         return {
-            # Bronze batch outputs
-            "bronze_sales": {
-                "description": "Bronze sales table",
+            # Bronze layer
+            "bronze_data": {
+                "description": "Raw data ingested to Bronze",
                 "format": "delta",
-                "filepath": "data/bronze/sales",
+                "filepath": "data/bronze",
                 "write_mode": "append",
+                "partitioned_by": [],
                 "vacuum": True,
             },
-            "bronze_customers": {
-                "description": "Bronze customers table",
+            # Silver layer
+            "validated_data": {
+                "description": "Intermediate validated data",
                 "format": "delta",
-                "filepath": "data/bronze/customers",
-                "write_mode": "append",
-                "vacuum": True,
-            },
-            # Silver
-            "silver_sales": {
-                "description": "Silver sales table",
-                "format": "delta",
-                "filepath": "data/silver/sales",
+                "filepath": "data/silver/validated",
                 "write_mode": "overwrite",
                 "vacuum": True,
             },
-            "silver_customers": {
-                "description": "Silver customers table",
+            "silver_data": {
+                "description": "Cleaned data in Silver layer",
                 "format": "delta",
-                "filepath": "data/silver/customers",
+                "filepath": "data/silver",
                 "write_mode": "overwrite",
+                "partitioned_by": [],
                 "vacuum": True,
+                "optimize": True,
             },
-            # Gold
-            "gold_sales_agg": {
-                "description": "Gold aggregated sales table",
+            # Gold layer
+            "gold_metrics": {
+                "description": "Business metrics in Gold layer",
                 "format": "delta",
-                "filepath": "data/gold/sales_agg",
+                "filepath": "data/gold",
                 "write_mode": "overwrite",
+                "partitioned_by": [],
                 "vacuum": True,
-            },
-            # Streaming sink into Bronze
-            "bronze_stream": {
-                "description": "Bronze streaming sink (Delta)",
-                "format": "delta",
-                "filepath": "data/bronze/stream_sales",
-                "checkpointLocation": "data/checkpoints/stream_sales",
-                "outputMode": "append",
-                "trigger": {"processingTime": "10 seconds"},
+                "optimize": True,
             },
         }
 
@@ -375,9 +336,7 @@ class TemplateFactory:
 class TemplateGenerator:
     """Generates complete project templates with directory structure."""
 
-    def __init__(
-        self, output_path: Path, config_format: ConfigFormat = ConfigFormat.YAML
-    ):
+    def __init__(self, output_path: Path, config_format: ConfigFormat = ConfigFormat.YAML):
         self.output_path = Path(output_path)
         self.config_format = config_format
         self._file_extension = self._get_file_extension()
@@ -408,14 +367,10 @@ class TemplateGenerator:
         developer_sandboxes: Optional[List[str]] = None,
     ) -> None:
         """Generate complete project structure from template."""
-        logger.info(
-            f"Generating {template_type.value} template for project '{project_name}'"
-        )
+        logger.info(f"Generating {template_type.value} template for project '{project_name}'")
 
         # Create template instance
-        template = TemplateFactory.create_template(
-            template_type, project_name, self.config_format
-        )
+        template = TemplateFactory.create_template(template_type, project_name, self.config_format)
 
         # Create directory structure
         self._create_directory_structure(developer_sandboxes)
@@ -430,13 +385,9 @@ class TemplateGenerator:
         # Generate additional project files
         self._generate_project_files(template)
 
-        logger.success(
-            f"Project '{project_name}' generated successfully at {self.output_path}"
-        )
+        logger.success(f"Project '{project_name}' generated successfully at {self.output_path}")
 
-    def _create_directory_structure(
-        self, developer_sandboxes: Optional[List[str]] = None
-    ) -> None:
+    def _create_directory_structure(self, developer_sandboxes: Optional[List[str]] = None) -> None:
         """Create project directory structure."""
         directories = [
             "config",
@@ -444,11 +395,10 @@ class TemplateGenerator:
             "config/sandbox",
             "config/prod",
             "pipelines",
-            "pipelines/bronze",
-            "pipelines/silver",
-            "pipelines/gold",
             "src",
             "tests",
+            "tests/unit",
+            "tests/integration",
             "docs",
             "notebooks",
             "data",
@@ -470,7 +420,11 @@ class TemplateGenerator:
             dir_path.mkdir(parents=True, exist_ok=True)
 
             # Create __init__.py files for Python packages
-            if directory.startswith("pipelines") or directory == "src":
+            if (
+                directory.startswith("pipelines")
+                or directory == "src"
+                or directory.startswith("tests")
+            ):
                 (dir_path / "__init__.py").touch()
 
     def _generate_config_files(
@@ -521,9 +475,7 @@ class TemplateGenerator:
     def _write_yaml_file(self, file_path: Path, data: Dict[str, Any]) -> None:
         """Write YAML file."""
         if not HAS_YAML:
-            raise TemplateError(
-                "PyYAML not available. Install with: pip install PyYAML"
-            )
+            raise TemplateError("PyYAML not available. Install with: pip install PyYAML")
 
         with open(file_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, indent=2)
@@ -572,183 +524,477 @@ class TemplateGenerator:
         return f'"{s}"'
 
     def _generate_sample_code(self) -> None:
-        """Generate minimal sample Python code for batch and streaming."""
-        # Bronze batch ingestion
-        bronze_ingestion_code = '''"""Bronze layer batch ingestion functions."""
+        """Generate functional sample Python code with Tauro integration."""
+        # Load module
+        load_code = '''"""Load layer: Read raw data from sources."""
+from typing import Any, Dict, Optional
 from loguru import logger
 
-def ingest_sales_data(start_date: str, end_date: str):
-    """Ingest raw sales data (CSV) into Bronze."""
-    logger.info(f"Ingesting sales from {start_date} to {end_date}")
-    # TODO: implement reading CSV and writing to Bronze (Delta/Parquet)
-    pass
 
-def ingest_customer_data(start_date: str, end_date: str):
-    """Ingest raw customer data (CSV) into Bronze."""
-    logger.info(f"Ingesting customers from {start_date} to {end_date}")
-    # TODO: implement reading CSV and writing to Bronze (Delta/Parquet)
-    pass
+def load_raw_data(
+    raw_data_source: Any,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Any:
+    """
+    Load raw data from source.
+    
+    Args:
+        raw_data_source: DataFrame from input config
+        start_date: Start date for filtering (ISO format)
+        end_date: End date for filtering (ISO format)
+    
+    Returns:
+        DataFrame with loaded raw data
+    """
+    logger.info(f"Loading raw data from {start_date} to {end_date}")
+    
+    # Tauro automatically loads data via InputLoader
+    # This function receives the loaded DataFrame
+    if raw_data_source is None:
+        logger.warning("No data provided")
+        return None
+    
+    # Optional: Add filtering logic
+    # if start_date and end_date:
+    #     raw_data_source = raw_data_source.filter(
+    #         (col("date") >= start_date) & (col("date") <= end_date)
+    #     )
+    
+    row_count = raw_data_source.count() if hasattr(raw_data_source, "count") else 0
+    logger.info(f"Loaded {row_count} rows")
+    
+    return raw_data_source
 '''
-        bronze_ingestion_file = (
-            self.output_path / "pipelines" / "bronze" / "ingestion.py"
-        )
-        self._write_text_file(bronze_ingestion_file, bronze_ingestion_code)
+        load_file = self.output_path / "pipelines" / "load.py"
+        self._write_text_file(load_file, load_code)
 
-        # Silver transformations
-        silver_transform_code = '''"""Silver layer transformation functions."""
+        # Transform module
+        transform_code = '''"""Transform layer: Data validation and cleaning."""
+from typing import Any, Optional
 from loguru import logger
 
-def clean_sales_data(start_date: str, end_date: str):
-    """Clean and standardize Bronze sales data into Silver."""
-    logger.info(f"Cleaning sales from {start_date} to {end_date}")
-    # TODO: implement transformations and write to Silver
-    pass
 
-def clean_customer_data(start_date: str, end_date: str):
-    """Clean and standardize Bronze customer data into Silver."""
-    logger.info(f"Cleaning customers from {start_date} to {end_date}")
-    # TODO: implement transformations and write to Silver
-    pass
+def validate_data(
+    bronze_data: Any,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Any:
+    """
+    Validate data quality and schema.
+    
+    Args:
+        bronze_data: DataFrame from Bronze layer
+        start_date: Start date (not used here, included for CLI compatibility)
+        end_date: End date (not used here, included for CLI compatibility)
+    
+    Returns:
+        Validated DataFrame
+    """
+    logger.info("Validating data quality")
+    
+    if bronze_data is None:
+        raise ValueError("bronze_data cannot be None")
+    
+    # Check for required columns
+    required_cols = {"id", "name", "value"}
+    if hasattr(bronze_data, "columns"):
+        available_cols = set(bronze_data.columns)
+        missing_cols = required_cols - available_cols
+        if missing_cols:
+            logger.warning(f"Missing columns: {missing_cols}")
+    
+    # Check for null values in critical columns
+    if hasattr(bronze_data, "filter"):
+        null_count = bronze_data.filter("id IS NULL").count()
+        if null_count > 0:
+            logger.warning(f"Found {null_count} rows with null IDs")
+            # Optionally filter out nulls: bronze_data = bronze_data.filter("id IS NOT NULL")
+    
+    logger.info("Data validation complete")
+    return bronze_data
+
+
+def clean_data(
+    validated_data: Any,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Any:
+    """
+    Clean and standardize data.
+    
+    Args:
+        validated_data: Validated DataFrame
+        start_date: Start date for filtering
+        end_date: End date for filtering
+    
+    Returns:
+        Cleaned DataFrame
+    """
+    logger.info(f"Cleaning data from {start_date} to {end_date}")
+    
+    if validated_data is None:
+        raise ValueError("validated_data cannot be None")
+    
+    # Example transformations:
+    # - Trim whitespace from string columns
+    # - Convert data types
+    # - Handle missing values
+    
+    # For PySpark/Pandas compatibility, keep it generic
+    # validated_data = validated_data.withColumn("name", trim(col("name")))
+    
+    logger.info("Data cleaning complete")
+    return validated_data
 '''
-        silver_transform_file = (
-            self.output_path / "pipelines" / "silver" / "transform.py"
-        )
-        self._write_text_file(silver_transform_file, silver_transform_code)
+        transform_file = self.output_path / "pipelines" / "transform.py"
+        self._write_text_file(transform_file, transform_code)
 
-        # Gold aggregations
-        gold_aggregation_code = '''"""Gold layer aggregation functions."""
+        # Aggregate module
+        aggregate_code = '''"""Aggregate layer: Business metrics and aggregations."""
+from typing import Any, Optional
 from loguru import logger
 
-def aggregate_sales(start_date: str, end_date: str):
-    """Aggregate Silver sales for analytics into Gold."""
-    logger.info(f"Aggregating sales from {start_date} to {end_date}")
-    # TODO: implement aggregations and write to Gold
-    pass
+
+def calculate_metrics(
+    silver_data: Any,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Any:
+    """
+    Calculate business metrics and aggregations.
+    
+    Args:
+        silver_data: Cleaned DataFrame from Silver layer
+        start_date: Start date for metrics
+        end_date: End date for metrics
+    
+    Returns:
+        Aggregated metrics DataFrame
+    """
+    logger.info(f"Calculating metrics from {start_date} to {end_date}")
+    
+    if silver_data is None:
+        raise ValueError("silver_data cannot be None")
+    
+    # Example aggregations:
+    # - Count by category
+    # - Sum values
+    # - Calculate ratios
+    # 
+    # For PySpark:
+    # from pyspark.sql.functions import col, count, sum, avg
+    # metrics = silver_data.groupBy("name").agg(
+    #     count("id").alias("count"),
+    #     sum("value").alias("total_value"),
+    #     avg("value").alias("avg_value")
+    # )
+    
+    logger.info("Metrics calculation complete")
+    return silver_data
 '''
-        gold_aggregation_file = (
-            self.output_path / "pipelines" / "gold" / "aggregation.py"
-        )
-        self._write_text_file(gold_aggregation_file, gold_aggregation_code)
-
-        # Streaming ingestion into Bronze
-        bronze_streaming_code = '''"""Bronze layer streaming ingestion functions."""
-from loguru import logger
-
-def stream_from_kafka():
-    """Read events from Kafka (source)."""
-    logger.info("Starting Kafka source stream")
-    # TODO: implement Kafka source creation
-    return None
-
-def process_stream(raw_stream=None):
-    """Parse/filter streaming events."""
-    logger.info("Processing streaming data")
-    # TODO: implement streaming transformations
-    return None
-
-def write_stream(processed_stream=None):
-    """Write streaming data to Bronze (Delta/Parquet) with checkpoints."""
-    logger.info("Writing streaming data to Bronze")
-    # TODO: implement sink with checkpointing
-    pass
-'''
-        bronze_streaming_file = (
-            self.output_path / "pipelines" / "bronze" / "streaming.py"
-        )
-        self._write_text_file(bronze_streaming_file, bronze_streaming_code)
+        aggregate_file = self.output_path / "pipelines" / "aggregate.py"
+        self._write_text_file(aggregate_file, aggregate_code)
 
     def _generate_project_files(self, template: BaseTemplate) -> None:
         """Generate additional project files."""
         # README.md
         readme_content = f"""# {template.project_name}
 
-Generated using Tauro {template.get_template_type().value} template.
+Generated using **Tauro** {template.get_template_type().value} template.
 
-## What you get
+## What's included
 
-- Medallion architecture (Bronze, Silver, Gold)
-- Batch pipelines:
-  - bronze_batch_ingestion
-  - silver_transform
-  - gold_aggregation
-- Streaming pipeline:
-  - bronze_streaming_ingestion (Kafka -> Bronze)
+A production-ready data pipeline with:
+
+- **Medallion Architecture** (Bronze → Silver → Gold)
+  - Bronze: Raw data ingestion
+  - Silver: Data validation and cleaning
+  - Gold: Business metrics and aggregations
+
+- **Tauro Features**
+  - Multi-format I/O support (CSV, Delta, Parquet, JSON, etc.)
+  - Automatic data validation
+  - Structured logging
+  - Environment-aware configuration (dev, sandbox, prod)
+  - Dependency management
+  - Parallel node execution
+
+- **Production-Ready**
+  - Type hints throughout
+  - Error handling
+  - Logging integration
+  - Security path validation
 
 ## Quick start
 
-1. Install dependencies:
-   pip install -r requirements.txt
+### 1. Install dependencies
 
-2. Inspect and adjust config files under ./config and settings_*.json
+```bash
+pip install -r requirements.txt
+```
 
-3. Run a batch pipeline:
-   tauro --env dev --pipeline bronze_batch_ingestion
+### 2. Configure your environment
 
-4. Run streaming (from streaming CLI):
-   tauro --streaming --streaming-command run --streaming-config ./settings_json.json --streaming-pipeline bronze_streaming_ingestion
+Edit the configuration files under `./config/` and update:
+- `settings_*.json` - Environment mapping
+- `global_settings.yaml` - Global settings
+- `pipelines.yaml` - Pipeline definitions
+- `nodes.yaml` - Node definitions
+- `input.yaml` - Input data sources
+- `output.yaml` - Output configurations
+
+### 3. Run a pipeline
+
+```bash
+# Show available pipelines
+tauro --env dev --list-pipelines
+
+# Run the complete pipeline
+tauro --env dev --pipeline load
+
+# Run a specific node
+tauro --env dev --pipeline load --node load_raw_data
+
+# Run with date range
+tauro --env dev --pipeline transform --start-date 2025-01-01 --end-date 2025-01-31
+```
+
+## Project structure
+
+```
+{template.project_name}/
+├── config/                  # Configuration files by environment
+│   ├── global_settings.yaml
+│   ├── pipelines.yaml
+│   ├── nodes.yaml
+│   ├── input.yaml
+│   ├── output.yaml
+│   ├── dev/                # Dev environment overrides
+│   ├── sandbox/            # Sandbox environment overrides
+│   └── prod/               # Prod environment overrides
+├── pipelines/              # Pipeline implementations
+│   ├── load.py
+│   ├── transform.py
+│   └── aggregate.py
+├── data/                   # Data directories
+│   ├── raw/                # Raw input data
+│   ├── bronze/             # Bronze layer
+│   ├── silver/             # Silver layer
+│   └── gold/               # Gold layer
+├── tests/                  # Test suites
+├── docs/                   # Documentation
+├── notebooks/              # Jupyter notebooks
+├── logs/                   # Execution logs
+└── requirements.txt        # Python dependencies
+```
+
+## Pipeline flow
+
+```
+raw_data_source
+    ↓
+[load_raw_data] → bronze_data
+    ↓
+[validate_data] → validated_data
+    ↓
+[clean_data] → silver_data
+    ↓
+[calculate_metrics] → gold_metrics
+```
+
+## Common tasks
+
+### List available pipelines
+
+```bash
+tauro --env dev --list-pipelines
+```
+
+### Validate configuration
+
+```bash
+tauro --env dev --validate-config
+```
+
+### Run with debug logging
+
+```bash
+tauro --env dev --pipeline load --log-level DEBUG
+```
+
+### Dry run (don't execute)
+
+```bash
+tauro --env dev --pipeline load --dry-run
+```
+
+## Tauro features used
+
+- ✅ Configuration discovery and loading (YAML/JSON/DSL)
+- ✅ Multi-environment support (base, dev, sandbox, prod)
+- ✅ Input validation and data loading
+- ✅ Automatic output management with format support
+- ✅ Dependency resolution and execution
+- ✅ Structured logging with loguru
+- ✅ Security path validation
+- ✅ Error handling and retries
+
+## Next steps
+
+1. Implement your business logic in `pipelines/`
+2. Update input/output configurations for your data sources
+3. Add tests under `tests/`
+4. Create additional pipelines as needed
+5. Deploy to your target environment
+
+## For more information
+
+- See `config/` for detailed configuration examples
+- Check `pipelines/` for implementation templates
+- Review Tauro documentation for advanced features
 
 Generated on: {template.timestamp}
 """
         readme_file = self.output_path / "README.md"
-        # Use 4 backticks escaping for Markdown outside this function when needed by the platform
         self._write_text_file(readme_file, readme_content)
 
-        # requirements.txt (minimal)
-        requirements = """# Tauro framework (core CLI integration)
-tauro-framework>=0.1.0
+        # requirements.txt with focused dependencies
+        requirements = """# Tauro framework
+tauro>=0.1.0
 
-# Data processing (choose what you need)
+# Data processing (Spark optional)
 pyspark>=3.4.0
-pandas>=1.5.0
-
-# Optional: Delta Lake for tables
 delta-spark>=2.4.0
 
-# Streaming (Kafka)
-kafka-python>=2.0.2
+# Data manipulation
+pandas>=1.5.0
+numpy>=1.23.0
 
 # Utilities
 loguru>=0.7.0
 pyyaml>=6.0
+python-dateutil>=2.8.2
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: Kafka for streaming
+# kafka-python>=2.0.2
 """
         requirements_file = self.output_path / "requirements.txt"
         self._write_text_file(requirements_file, requirements)
+
+        # pyproject.toml for modern Python packaging
+        pyproject_content = f"""[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{template.project_name.lower().replace(' ', '_')}"
+version = "0.1.0"
+description = "Data pipeline built with Tauro"
+requires-python = ">=3.9"
+dependencies = [
+    "tauro>=0.1.0",
+    "pyspark>=3.4.0",
+    "delta-spark>=2.4.0",
+    "pandas>=1.5.0",
+    "numpy>=1.23.0",
+    "loguru>=0.7.0",
+    "pyyaml>=6.0",
+    "python-dateutil>=2.8.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0", "pytest-cov>=4.1.0", "black>=23.0", "flake8>=6.0"]
+streaming = ["kafka-python>=2.0.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "--cov=pipelines --cov-report=term-missing"
+"""
+        pyproject_file = self.output_path / "pyproject.toml"
+        self._write_text_file(pyproject_file, pyproject_content)
 
         # .gitignore
         gitignore = """# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 env/
 venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Data
+# Data and artifacts
 data/raw/*
 data/bronze/*
 data/silver/*
 data/gold/*
+data/checkpoints/*
 !data/raw/.gitkeep
 
 # Logs
 logs/*.log
 
-# Notebooks checkpoints
+# Notebooks
 .ipynb_checkpoints/
+*.ipynb
 
 # IDE
 .vscode/
 .idea/
-
-# OS
+*.swp
+*.swo
+*~
 .DS_Store
-Thumbs.db
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
 
 # Spark
 metastore_db/
 spark-warehouse/
+*.jar
+
+# Environment variables
+.env
+.env.local
 """
         gitignore_file = self.output_path / ".gitignore"
         self._write_text_file(gitignore_file, gitignore)
+
+        # Create sample data file
+        sample_data = """id,name,value
+1,Item A,100
+2,Item B,200
+3,Item C,150
+4,Item D,300
+5,Item E,250
+"""
+        sample_data_file = self.output_path / "data" / "raw" / "input.csv"
+        self._write_text_file(sample_data_file, sample_data)
 
     def _write_text_file(self, file_path: Path, content: str) -> None:
         """Write text file."""
@@ -818,9 +1064,7 @@ class TemplateCommand:
         logger.info("")
         logger.info("Examples:")
         logger.info("  tauro --template medallion_basic --project-name my_pipeline")
-        logger.info(
-            "  tauro --template medallion_basic --project-name my_pipeline --format json"
-        )
+        logger.info("  tauro --template medallion_basic --project-name my_pipeline --format json")
 
         return ExitCode.SUCCESS.value
 
@@ -843,9 +1087,7 @@ class TemplateCommand:
                             selected_template = templates[index]
                             break
                     # Invalid selection -> prompt again
-                    print(
-                        "Invalid selection. Please try again or press Ctrl+C to cancel."
-                    )
+                    print("Invalid selection. Please try again or press Ctrl+C to cancel.")
                     continue
                 except (KeyboardInterrupt, EOFError):
                     logger.info(_TEMPLATE_CANCELLED_MSG)
@@ -926,9 +1168,7 @@ class TemplateCommand:
 
             # Check if directory exists
             if output_dir.exists() and any(output_dir.iterdir()):
-                logger.warning(
-                    f"Directory {output_dir} already exists and is not empty"
-                )
+                logger.warning(f"Directory {output_dir} already exists and is not empty")
                 logger.info(_TEMPLATE_CANCELLED_MSG)
                 return ExitCode.VALIDATION_ERROR.value
 
@@ -956,20 +1196,40 @@ class TemplateCommand:
         logger.info(f"🏗️  Template: {template_type.value}")
 
         logger.info("\n📋 Next steps:")
-        logger.info(f"1. cd {output_dir}")
-        logger.info("2. pip install -r requirements.txt")
-        logger.info("3. Review and customize configuration files under ./config")
-        logger.info("4. Implement pipeline functions in the pipelines/ directory")
+        logger.info(f"1️⃣  cd {output_dir}")
+        logger.info("2️⃣  pip install -r requirements.txt")
+        logger.info("3️⃣  Review and customize config files in ./config")
+        logger.info("4️⃣  Implement pipeline functions in ./pipelines")
+        logger.info("5️⃣  Update input/output config with your data sources")
 
-        logger.info("\n🚀 Example usage (batch):")
-        logger.info("   tauro --env dev --pipeline bronze_batch_ingestion")
-        logger.info("   tauro --env dev --pipeline silver_transform")
-        logger.info("   tauro --env dev --pipeline gold_aggregation")
-
-        logger.info("\n🟢 Example usage (streaming):")
+        logger.info("\n🚀 Quick start commands:")
+        logger.info("   # List pipelines")
+        logger.info("   tauro --env dev --list-pipelines")
+        logger.info("")
+        logger.info("   # Run the load pipeline")
+        logger.info("   tauro --env dev --pipeline load")
+        logger.info("")
+        logger.info("   # Run with specific date range")
         logger.info(
-            "   tauro --streaming --streaming-command run --streaming-config ./settings_json.json --streaming-pipeline bronze_streaming_ingestion"
+            "   tauro --env dev --pipeline load --start-date 2025-01-01 --end-date 2025-01-31"
         )
+        logger.info("")
+        logger.info("   # Run with debug logging")
+        logger.info("   tauro --env dev --pipeline load --log-level DEBUG")
+
+        logger.info("\n� Features already configured:")
+        logger.info("   ✓ Multi-environment support (dev, sandbox, prod)")
+        logger.info("   ✓ Input/output validation")
+        logger.info("   ✓ Automatic data type handling (CSV, Delta, Parquet)")
+        logger.info("   ✓ Structured logging")
+        logger.info("   ✓ Error handling and retries")
+        logger.info("   ✓ Dependency management")
+
+        logger.info("\n💡 Tips:")
+        logger.info("   • Check README.md for detailed documentation")
+        logger.info("   • Review config/global_settings.yaml for environment settings")
+        logger.info("   • See pipelines/ for implementation examples")
+        logger.info("   • Run 'tauro --help' for all available commands")
 
 
 # Integration with CLI system

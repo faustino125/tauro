@@ -1,9 +1,8 @@
-"""Pydantic Models for Tauro API
-
-Complete data models for projects, pipelines, runs, and related entities.
 """
-
-from pydantic import BaseModel, Field, validator, root_validator
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -14,6 +13,11 @@ import re
 VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z_]\w*$")
 MAX_NAME_LENGTH = 63
 RESERVED_NAMES = {"admin", "system", "root", "api", "health", "metrics"}
+
+EXAMPLE_TIMESTAMP = "2025-01-15T10:30:00Z"
+
+# Common example user for schema examples
+DEFAULT_CREATED_BY = "user@example.com"
 
 
 # =============================================================================
@@ -95,15 +99,16 @@ class RetryPolicy(BaseModel):
         default="exponential", description="exponential, linear, or fixed"
     )
 
-    @validator("backoff_strategy")
+    @field_validator("backoff_strategy")
+    @classmethod
     def validate_backoff_strategy(cls, v):
         allowed = ["exponential", "linear", "fixed"]
         if v not in allowed:
             raise ValueError(f"backoff_strategy must be one of {allowed}")
         return v
 
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "max_retries": 3,
                 "initial_delay": 60,
@@ -111,6 +116,7 @@ class RetryPolicy(BaseModel):
                 "backoff_strategy": "exponential",
             }
         }
+    }
 
 
 # =============================================================================
@@ -200,15 +206,9 @@ class NodeConfig(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str = Field(..., min_length=1, max_length=255)
     type: NodeType = Field(..., description="Node type: source, transform, or sink")
-    implementation: str = Field(
-        ..., description="Implementation reference (module path, SQL, etc)"
-    )
-    config: Dict[str, Any] = Field(
-        default_factory=dict, description="Node-specific configuration"
-    )
-    dependencies: Optional[List[str]] = Field(
-        default=None, description="Names of dependent nodes"
-    )
+    implementation: str = Field(..., description="Implementation reference (module path, SQL, etc)")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Node-specific configuration")
+    dependencies: Optional[List[str]] = Field(default=None, description="Names of dependent nodes")
 
     @validator("name")
     def validate_name(cls, v):
@@ -275,12 +275,8 @@ class PipelineConfig(BaseModel):
     type: PipelineType = Field(..., description="Pipeline type")
     description: Optional[str] = Field(None, max_length=1000)
     nodes: List[NodeConfig] = Field(..., min_items=1, description="Pipeline nodes")
-    inputs: List[InputOutput] = Field(
-        default_factory=list, description="Pipeline inputs"
-    )
-    outputs: List[InputOutput] = Field(
-        default_factory=list, description="Pipeline outputs"
-    )
+    inputs: List[InputOutput] = Field(default_factory=list, description="Pipeline inputs")
+    outputs: List[InputOutput] = Field(default_factory=list, description="Pipeline outputs")
 
     @validator("name")
     def validate_name(cls, v):
@@ -290,9 +286,7 @@ class PipelineConfig(BaseModel):
                 "alphanumeric characters and underscores"
             )
         if len(v) > MAX_NAME_LENGTH:
-            raise ValueError(
-                f"Pipeline name must be {MAX_NAME_LENGTH} characters or less"
-            )
+            raise ValueError(f"Pipeline name must be {MAX_NAME_LENGTH} characters or less")
         return v
 
     @validator("nodes")
@@ -330,9 +324,7 @@ class ProjectCreate(BaseModel):
     pipelines: Optional[List[PipelineConfig]] = Field(
         default_factory=list, description="Initial pipelines"
     )
-    tags: Optional[Dict[str, str]] = Field(
-        default_factory=dict, description="Project tags"
-    )
+    tags: Optional[Dict[str, str]] = Field(default_factory=dict, description="Project tags")
     status: Optional[ProjectStatus] = Field(
         default=ProjectStatus.ACTIVE, description="Initial project status"
     )
@@ -345,9 +337,7 @@ class ProjectCreate(BaseModel):
                 "alphanumeric characters and underscores"
             )
         if len(v) > MAX_NAME_LENGTH:
-            raise ValueError(
-                f"Project name must be {MAX_NAME_LENGTH} characters or less"
-            )
+            raise ValueError(f"Project name must be {MAX_NAME_LENGTH} characters or less")
         if v.lower() in RESERVED_NAMES:
             raise ValueError(f"Project name '{v}' is reserved and cannot be used")
         return v
@@ -392,19 +382,15 @@ class ProjectResponse(ProjectCreate):
     """Project response with metadata"""
 
     id: UUID = Field(..., description="Project UUID")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-    created_by: str = Field(..., description="User who created the project")
-    run_count: int = Field(default=0, description="Number of runs")
 
     class Config:
         schema_extra = {
             "example": {
                 "id": "550e8400-e29b-41d4-a716-446655440003",
                 "name": "etl_pipeline_v2",
-                "created_at": "2025-01-15T10:30:00Z",
+                "created_at": EXAMPLE_TIMESTAMP,
                 "updated_at": "2025-01-15T11:00:00Z",
-                "created_by": "user@example.com",
+                "created_by": DEFAULT_CREATED_BY,
                 "run_count": 42,
             }
         }
@@ -425,12 +411,7 @@ class RunProgress(BaseModel):
 
     @property
     def pending_tasks(self) -> int:
-        return (
-            self.total_tasks
-            - self.completed_tasks
-            - self.failed_tasks
-            - self.skipped_tasks
-        )
+        return self.total_tasks - self.completed_tasks - self.failed_tasks - self.skipped_tasks
 
     @property
     def progress_percentage(self) -> float:
@@ -486,10 +467,6 @@ class RunResponse(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     created_by: str
-    progress: Optional[RunProgress] = None
-    tasks: Optional[List[TaskRunResponse]] = None
-    error: Optional[str] = None
-    retry_count: int = 0
 
     class Config:
         schema_extra = {
@@ -501,9 +478,9 @@ class RunResponse(BaseModel):
                 "params": {},
                 "priority": "normal",
                 "tags": {},
-                "created_at": "2025-01-15T10:30:00Z",
+                "created_at": EXAMPLE_TIMESTAMP,
                 "started_at": "2025-01-15T10:31:00Z",
-                "created_by": "user@example.com",
+                "created_by": DEFAULT_CREATED_BY,
             }
         }
 
@@ -545,10 +522,6 @@ class ScheduleResponse(ScheduleCreate):
     id: UUID
     created_at: datetime
     updated_at: datetime
-    created_by: str
-    next_run_at: Optional[datetime] = None
-    last_run_at: Optional[datetime] = None
-    last_run_id: Optional[UUID] = None
 
     class Config:
         schema_extra = {
@@ -560,9 +533,9 @@ class ScheduleResponse(ScheduleCreate):
                 "expression": "0 2 * * *",
                 "enabled": True,
                 "max_concurrency": 2,
-                "created_at": "2025-01-15T10:30:00Z",
-                "updated_at": "2025-01-15T10:30:00Z",
-                "created_by": "user@example.com",
+                "created_at": EXAMPLE_TIMESTAMP,
+                "updated_at": EXAMPLE_TIMESTAMP,
+                "created_by": DEFAULT_CREATED_BY,
                 "next_run_at": "2025-01-16T02:00:00Z",
             }
         }
@@ -582,8 +555,6 @@ class ConfigVersionResponse(BaseModel):
     created_at: datetime
     created_by: str
     change_reason: Optional[str] = None
-    promoted: bool = False
-    promoted_at: Optional[datetime] = None
 
     class Config:
         schema_extra = {
@@ -592,7 +563,7 @@ class ConfigVersionResponse(BaseModel):
                 "config_hash": "sha256-abc123...",
                 "changes": {"global_settings.max_parallel_nodes": {"from": 4, "to": 8}},
                 "created_at": "2025-01-15T11:00:00Z",
-                "created_by": "user@example.com",
+                "created_by": DEFAULT_CREATED_BY,
                 "change_reason": "Increase parallelism for performance",
                 "promoted": False,
             }

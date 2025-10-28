@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
-from tauro.streaming.constants import (
+from tauro.core.streaming.constants import (
     STREAMING_FORMAT_CONFIGS,
     STREAMING_VALIDATIONS,
     PipelineType,
@@ -15,7 +15,7 @@ from tauro.streaming.constants import (
     StreamingOutputMode,
     StreamingTrigger,
 )
-from tauro.streaming.exceptions import StreamingValidationError, handle_streaming_error
+from tauro.core.streaming.exceptions import StreamingValidationError, handle_streaming_error
 
 # Common field name constants
 INPUT_OPTIONS_FIELD = "input.options"
@@ -34,9 +34,7 @@ class StreamingValidator:
         self.policy = format_policy
 
     @handle_streaming_error
-    def validate_streaming_pipeline_config(
-        self, pipeline_config: Dict[str, Any]
-    ) -> None:
+    def validate_streaming_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:
         """Validate streaming pipeline configuration with comprehensive checks."""
         try:
             self._ensure_pipeline_is_dict(pipeline_config)
@@ -159,15 +157,11 @@ class StreamingValidator:
                 f"Unexpected error during node validation: {str(e)}", cause=e
             )
 
-    def _validate_node_structure(
-        self, node_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_node_structure(self, node_config: Dict[str, Any], node_name: str) -> None:
         """Validate basic node structure (Phase 1)."""
         try:
             required_fields = ["input", "output"]
-            missing_fields = [
-                field for field in required_fields if field not in node_config
-            ]
+            missing_fields = [field for field in required_fields if field not in node_config]
             if missing_fields:
                 raise StreamingValidationError(
                     f"Node '{node_name}' missing required fields: {missing_fields}",
@@ -182,9 +176,7 @@ class StreamingValidator:
                 f"Error validating node structure for '{node_name}': {str(e)}", cause=e
             )
 
-    def _validate_node_io_config(
-        self, node_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_node_io_config(self, node_config: Dict[str, Any], node_name: str) -> None:
         """Validate input/output configuration (Phase 2)."""
         try:
             # Validate input configuration
@@ -196,9 +188,7 @@ class StreamingValidator:
             e.add_context("validation_phase", "I/O")
             raise
 
-    def _validate_node_streaming_config(
-        self, node_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_node_streaming_config(self, node_config: Dict[str, Any], node_name: str) -> None:
         """Validate streaming-specific configuration (Phase 3)."""
         try:
             streaming_config = node_config.get("streaming", {})
@@ -208,9 +198,7 @@ class StreamingValidator:
             e.add_context("validation_phase", "streaming")
             raise
 
-    def _validate_node_function_config(
-        self, node_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_node_function_config(self, node_config: Dict[str, Any], node_name: str) -> None:
         """Validate function configuration if present (Phase 4)."""
         try:
             function_config = node_config.get("function")
@@ -334,9 +322,7 @@ class StreamingValidator:
             # Delegate checks to specialized helpers
             file_formats = ["delta", "parquet", "json", "csv"]
             if format_type in file_formats:
-                self._validate_file_output_path(
-                    output_config.get("path"), node_name, format_type
-                )
+                self._validate_file_output_path(output_config.get("path"), node_name, format_type)
             elif format_type == "kafka":
                 self._validate_kafka_output_options(output_config, node_name)
             elif format_type == "foreachBatch":
@@ -374,9 +360,7 @@ class StreamingValidator:
                 actual=str(path),
             )
 
-    def _validate_foreach_batch(
-        self, output_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_foreach_batch(self, output_config: Dict[str, Any], node_name: str) -> None:
         """Validate foreachBatch configuration (helper)."""
         batch_function = output_config.get("batch_function")
         if not batch_function:
@@ -397,9 +381,7 @@ class StreamingValidator:
                 actual=str(type(partition_by)),
             )
 
-    def _validate_streaming_config(
-        self, streaming_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_streaming_config(self, streaming_config: Dict[str, Any], node_name: str) -> None:
         """Validate streaming-specific configuration with detailed checks."""
         try:
             if not isinstance(streaming_config, dict):
@@ -455,9 +437,7 @@ class StreamingValidator:
                 cause=e,
             )
 
-    def _validate_function_config(
-        self, function_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_function_config(self, function_config: Dict[str, Any], node_name: str) -> None:
         """Validate function configuration for transformations."""
         try:
             if not isinstance(function_config, dict):
@@ -470,9 +450,7 @@ class StreamingValidator:
 
             # Validate required fields
             required_fields = ["module", "function"]
-            missing_fields = [
-                field for field in required_fields if field not in function_config
-            ]
+            missing_fields = [field for field in required_fields if field not in function_config]
             if missing_fields:
                 raise StreamingValidationError(
                     f"Node '{node_name}' function config missing required fields: {missing_fields}",
@@ -507,9 +485,7 @@ class StreamingValidator:
                 cause=e,
             )
 
-    def _validate_pipeline_streaming_config(
-        self, streaming_config: Dict[str, Any]
-    ) -> None:
+    def _validate_pipeline_streaming_config(self, streaming_config: Dict[str, Any]) -> None:
         """Validate pipeline-level streaming configuration."""
         try:
             if not isinstance(streaming_config, dict):
@@ -547,9 +523,7 @@ class StreamingValidator:
         try:
             # Check mutually exclusive subscription options
             subscription_options = ["subscribe", "subscribePattern", "assign"]
-            provided_subscriptions = [
-                opt for opt in subscription_options if opt in options
-            ]
+            provided_subscriptions = [opt for opt in subscription_options if opt in options]
 
             if len(provided_subscriptions) == 0:
                 raise StreamingValidationError(
@@ -603,17 +577,13 @@ class StreamingValidator:
                 cause=e,
             )
 
-    def _validate_kafka_output_options(
-        self, output_config: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_kafka_output_options(self, output_config: Dict[str, Any], node_name: str) -> None:
         """Validate Kafka output-specific options."""
         try:
             options = output_config.get("options", {})
 
             required_kafka_options = ["kafka.bootstrap.servers", "topic"]
-            missing_options = [
-                opt for opt in required_kafka_options if opt not in options
-            ]
+            missing_options = [opt for opt in required_kafka_options if opt not in options]
             if missing_options:
                 raise StreamingValidationError(
                     f"Node '{node_name}' Kafka output missing required options: {missing_options}",
@@ -640,9 +610,7 @@ class StreamingValidator:
                 cause=e,
             )
 
-    def _validate_file_stream_options(
-        self, options: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_file_stream_options(self, options: Dict[str, Any], node_name: str) -> None:
         """Validate file stream specific options."""
         try:
             path = options.get("path")
@@ -682,9 +650,7 @@ class StreamingValidator:
                 cause=e,
             )
 
-    def _validate_kinesis_options(
-        self, options: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_kinesis_options(self, options: Dict[str, Any], node_name: str) -> None:
         """Validate Kinesis-specific options."""
         try:
             required_options = ["streamName", "region"]
@@ -725,9 +691,7 @@ class StreamingValidator:
                 cause=e,
             )
 
-    def _validate_watermark_config(
-        self, watermark: Dict[str, Any], node_name: str
-    ) -> None:
+    def _validate_watermark_config(self, watermark: Dict[str, Any], node_name: str) -> None:
         """Validate watermark configuration with enhanced checks."""
         try:
             if not isinstance(watermark, dict):
@@ -933,9 +897,7 @@ class StreamingValidator:
             batch_outputs = self._extract_output_paths(batch_nodes)
             streaming_outputs = self._extract_output_paths(streaming_nodes)
 
-            self._append_shared_output_warning(
-                warnings, batch_outputs, streaming_outputs
-            )
+            self._append_shared_output_warning(warnings, batch_outputs, streaming_outputs)
             self._append_duplicate_checkpoint_warnings(warnings, streaming_nodes)
             self._append_resource_usage_warning(warnings, batch_nodes, streaming_nodes)
 
@@ -994,9 +956,7 @@ class StreamingValidator:
                 f"{len(streaming_nodes)} streaming nodes. Consider resource allocation."
             )
 
-    def validate_resource_requirements(
-        self, pipeline_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def validate_resource_requirements(self, pipeline_config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and estimate resource requirements for the pipeline."""
         try:
             nodes = pipeline_config.get("nodes", [])
@@ -1024,14 +984,10 @@ class StreamingValidator:
 
                     # Check for high-resource operations
                     if node.get("input", {}).get("format") == "kafka":
-                        estimated_resources[
-                            "estimated_memory_mb"
-                        ] += 256  # Additional for Kafka
+                        estimated_resources["estimated_memory_mb"] += 256  # Additional for Kafka
 
                     if node.get("output", {}).get("format") == "delta":
-                        estimated_resources[
-                            "estimated_memory_mb"
-                        ] += 128  # Additional for Delta
+                        estimated_resources["estimated_memory_mb"] += 128  # Additional for Delta
 
             # Generate recommendations
             if estimated_resources["streaming_nodes"] > 10:

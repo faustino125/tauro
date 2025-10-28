@@ -45,7 +45,7 @@ def _load_context_from_dsl(config_path: Optional[Union[str, Path]]) -> Any:
         raise ValidationError("Configuration path must be provided")
     # Normalize to str
     config_path_str = str(config_path)
-    from tauro.config.contexts import Context, ContextFactory
+    from tauro.core.config.contexts import Context, ContextFactory
 
     base_ctx = Context.from_dsl(config_path_str)
     return ContextFactory.create_context(base_ctx)
@@ -74,7 +74,7 @@ def _run_streaming_impl(
     try:
         context = _load_context_from_dsl(config)
 
-        from tauro.exec.executor import PipelineExecutor
+        from tauro.core.exec.executor import PipelineExecutor
 
         executor = PipelineExecutor(context)
 
@@ -94,9 +94,7 @@ def _run_streaming_impl(
             hyperparams=parsed_hyperparams,
         )
 
-        logger.info(
-            f"Streaming pipeline '{pipeline}' started with execution ID: {execution_id}"
-        )
+        logger.info(f"Streaming pipeline '{pipeline}' started with execution ID: {execution_id}")
         return ExitCode.SUCCESS.value
 
     except Exception as e:
@@ -114,14 +112,12 @@ def status_cli_impl(
     return _status_streaming_impl(config_str, execution_id, format)
 
 
-def _status_streaming_impl(
-    config: str, execution_id: Optional[str], format: str
-) -> int:
+def _status_streaming_impl(config: str, execution_id: Optional[str], format: str) -> int:
     """Core implementation for 'status' that returns an exit code."""
     try:
         context = _load_context_from_dsl(config)
 
-        from tauro.exec.executor import PipelineExecutor
+        from tauro.core.exec.executor import PipelineExecutor
 
         executor = PipelineExecutor(context)
 
@@ -166,7 +162,7 @@ def _stop_streaming_impl(config: str, execution_id: str, timeout: int) -> int:
     try:
         context = _load_context_from_dsl(config)
 
-        from tauro.exec.executor import PipelineExecutor
+        from tauro.core.exec.executor import PipelineExecutor
 
         executor = PipelineExecutor(context)
 
@@ -201,9 +197,7 @@ def _list_all_pipelines_status(executor: Any) -> List[Dict[str, Any]]:
     return _fallback_running_ids(executor)
 
 
-def _try_method_candidates(
-    executor: Any, candidates: List[str]
-) -> Optional[List[Dict[str, Any]]]:
+def _try_method_candidates(executor: Any, candidates: List[str]) -> Optional[List[Dict[str, Any]]]:
     for name in candidates:
         if not hasattr(executor, name):
             continue
@@ -512,9 +506,7 @@ class UnifiedArgumentParser:
         run_parser.add_argument(
             "--verbose", action="store_true", help="Enable verbose output (DEBUG)"
         )
-        run_parser.add_argument(
-            "--quiet", action="store_true", help="Reduce output (ERROR only)"
-        )
+        run_parser.add_argument("--quiet", action="store_true", help="Reduce output (ERROR only)")
 
         # Execution modes
         run_parser.add_argument(
@@ -545,9 +537,7 @@ class UnifiedArgumentParser:
         # stream run
         run_parser = stream_subparsers.add_parser("run", help="Run streaming pipeline")
         run_parser.add_argument("--config", "-c", required=True, help=HELP_CONFIG_FILE)
-        run_parser.add_argument(
-            "--pipeline", "-p", required=True, help="Pipeline name to execute"
-        )
+        run_parser.add_argument("--pipeline", "-p", required=True, help="Pipeline name to execute")
         run_parser.add_argument(
             "--mode",
             "-m",
@@ -555,21 +545,15 @@ class UnifiedArgumentParser:
             choices=["sync", "async"],
             help="Execution mode for streaming pipelines",
         )
-        run_parser.add_argument(
-            "--model-version", help="Model version for ML pipelines"
-        )
+        run_parser.add_argument("--model-version", help="Model version for ML pipelines")
         run_parser.add_argument("--hyperparams", help="Hyperparameters as JSON string")
 
         # stream status
         status_parser = stream_subparsers.add_parser(
             "status", help="Check streaming pipeline status"
         )
-        status_parser.add_argument(
-            "--config", "-c", required=True, help=HELP_CONFIG_FILE
-        )
-        status_parser.add_argument(
-            "--execution-id", "-e", help="Specific execution ID to check"
-        )
+        status_parser.add_argument("--config", "-c", required=True, help=HELP_CONFIG_FILE)
+        status_parser.add_argument("--execution-id", "-e", help="Specific execution ID to check")
         status_parser.add_argument(
             "--format",
             "-f",
@@ -579,16 +563,10 @@ class UnifiedArgumentParser:
         )
 
         # stream stop
-        stop_parser = stream_subparsers.add_parser(
-            "stop", help="Stop streaming pipeline"
-        )
+        stop_parser = stream_subparsers.add_parser("stop", help="Stop streaming pipeline")
         stop_parser.add_argument("--config", "-c", required=True, help=HELP_CONFIG_FILE)
-        stop_parser.add_argument(
-            "--execution-id", "-e", required=True, help="Execution ID to stop"
-        )
-        stop_parser.add_argument(
-            "--timeout", "-t", type=int, default=60, help=HELP_TIMEOUT_SECONDS
-        )
+        stop_parser.add_argument("--execution-id", "-e", required=True, help="Execution ID to stop")
+        stop_parser.add_argument("--timeout", "-t", type=int, default=60, help=HELP_TIMEOUT_SECONDS)
 
     @staticmethod
     def _add_template_subcommand(subparsers):
@@ -601,9 +579,7 @@ class UnifiedArgumentParser:
 
         template_parser.add_argument("--template", help="Template type to generate")
         template_parser.add_argument("--project-name", help="Project name for template")
-        template_parser.add_argument(
-            "--output-path", help="Output path for generated files"
-        )
+        template_parser.add_argument("--output-path", help="Output path for generated files")
         template_parser.add_argument(
             "--format",
             choices=["yaml", "json", "dsl"],
@@ -645,17 +621,13 @@ class UnifiedArgumentParser:
         list_pipelines_parser = config_subparsers.add_parser(
             "list-pipelines", help="List available pipelines"
         )
-        list_pipelines_parser.add_argument(
-            "--env", help="Environment to use for listing"
-        )
+        list_pipelines_parser.add_argument("--env", help="Environment to use for listing")
 
         # config pipeline-info
         pipeline_info_parser = config_subparsers.add_parser(
             "pipeline-info", help="Show pipeline information"
         )
-        pipeline_info_parser.add_argument(
-            "--pipeline", required=True, help=HELP_PIPELINE_NAME
-        )
+        pipeline_info_parser.add_argument("--pipeline", required=True, help=HELP_PIPELINE_NAME)
         pipeline_info_parser.add_argument("--env", help="Environment to use")
 
         # config clear-cache
@@ -664,9 +636,7 @@ class UnifiedArgumentParser:
         # Global config options
         config_parser.add_argument("--base-path", help=HELP_BASE_PATH)
         config_parser.add_argument("--layer-name", help=HELP_LAYER_NAME)
-        config_parser.add_argument(
-            "--use-case", dest="use_case_name", help=HELP_USE_CASE
-        )
+        config_parser.add_argument("--use-case", dest="use_case_name", help=HELP_USE_CASE)
         config_parser.add_argument(
             "--config-type",
             choices=["yaml", "json", "dsl"],
@@ -696,9 +666,7 @@ class UnifiedCLI:
         else:
             parsed = parsed_args
 
-        base_path = (
-            Path(parsed.base_path) if getattr(parsed, "base_path", None) else None
-        )
+        base_path = Path(parsed.base_path) if getattr(parsed, "base_path", None) else None
         log_file = Path(parsed.log_file) if getattr(parsed, "log_file", None) else None
         output_path = (
             Path(parsed.output_path)
@@ -708,17 +676,13 @@ class UnifiedCLI:
 
         try:
             start_date = (
-                parse_iso_date(parsed.start_date)
-                if getattr(parsed, "start_date", None)
-                else None
+                parse_iso_date(parsed.start_date) if getattr(parsed, "start_date", None) else None
             )
         except Exception:
             start_date = parsed.start_date
         try:
             end_date = (
-                parse_iso_date(parsed.end_date)
-                if getattr(parsed, "end_date", None)
-                else None
+                parse_iso_date(parsed.end_date) if getattr(parsed, "end_date", None) else None
             )
         except Exception:
             end_date = parsed.end_date
@@ -944,9 +908,7 @@ class UnifiedCLI:
             env = getattr(parsed_args, "env", "dev")
             context_init = ContextInitializer(self.config_manager)
             context = context_init.initialize(env)
-            executor = PipelineExecutor(
-                context, self.config_manager.get_config_directory()
-            )
+            executor = PipelineExecutor(context, self.config_manager.get_config_directory())
             pipelines = executor.list_pipelines()
 
             if pipelines:
@@ -967,9 +929,7 @@ class UnifiedCLI:
             env = getattr(parsed_args, "env", "dev")
             context_init = ContextInitializer(self.config_manager)
             context = context_init.initialize(env)
-            executor = PipelineExecutor(
-                context, self.config_manager.get_config_directory()
-            )
+            executor = PipelineExecutor(context, self.config_manager.get_config_directory())
             info = executor.get_pipeline_info(parsed_args.pipeline)
 
             logger.info(f"Pipeline: {parsed_args.pipeline}")
@@ -1014,9 +974,7 @@ class UnifiedCLI:
             else:
                 logger.warning("Could not validate pipeline existence")
 
-        if self.config.node and not executor.validate_node(
-            self.config.pipeline, self.config.node
-        ):
+        if self.config.node and not executor.validate_node(self.config.pipeline, self.config.node):
             logger.warning(
                 f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
             )

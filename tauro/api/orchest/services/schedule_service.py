@@ -1,12 +1,7 @@
 """
 Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
-
-Schedule management service - centralized business logic for scheduling.
-
-This service is independent of CLI/API and can be consumed by both.
 """
-
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, Tuple, Callable
 from threading import Event, Thread, RLock
@@ -15,15 +10,15 @@ import time
 
 from loguru import logger
 
-from tauro.orchest.models import ScheduleKind, Schedule, RunState
-from tauro.orchest.store import OrchestratorStore
-from tauro.orchest.resilience import (
+from tauro.api.orchest.models import ScheduleKind, Schedule, RunState
+from tauro.api.orchest.store import OrchestratorStore
+from tauro.api.orchest.resilience import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     get_resilience_manager,
 )
-from tauro.config.contexts import Context
+from tauro.core.config.contexts import Context
 
 try:
     from croniter import croniter
@@ -31,9 +26,7 @@ try:
     HAS_CRONITER = True
 except ImportError:
     HAS_CRONITER = False
-    logger.warning(
-        "croniter not installed, cron schedules will use placeholder behavior"
-    )
+    logger.warning("croniter not installed, cron schedules will use placeholder behavior")
 
 
 def _parse_interval_seconds(expr: str) -> int:
@@ -79,9 +72,6 @@ class ScheduleMetrics:
 class ScheduleService:
     """
     Centralized service for managing pipeline schedules.
-
-    This service encapsulates all business logic related to scheduling
-    and can be consumed independently by CLI or API without coupling.
     """
 
     def __init__(
@@ -95,14 +85,6 @@ class ScheduleService:
     ):
         """
         Initialize the schedule service.
-
-        Args:
-            context: Execution context
-            store: Orchestrator store for persistence
-            run_executor: Callable to execute runs (accepts run_id and kwargs)
-            stuck_run_timeout_minutes: Timeout for stuck runs
-            max_consecutive_failures: Maximum consecutive failures before stopping
-            enable_circuit_breakers: Enable per-schedule circuit breakers
         """
         self.context = context
         self.store = store or OrchestratorStore()
@@ -135,18 +117,6 @@ class ScheduleService:
     ) -> Schedule:
         """
         Create a new schedule.
-
-        Args:
-            pipeline_id: Pipeline identifier
-            kind: Schedule kind (INTERVAL or CRON)
-            expression: Schedule expression
-            max_concurrency: Maximum concurrent runs
-            retry_policy: Retry policy configuration
-            timeout_seconds: Execution timeout
-            enabled: Whether schedule is enabled
-
-        Returns:
-            Created Schedule instance
         """
         schedule = self.store.create_schedule(
             pipeline_id=pipeline_id,
@@ -166,13 +136,6 @@ class ScheduleService:
     def update_schedule(self, schedule_id: str, **updates) -> bool:
         """
         Update a schedule.
-
-        Args:
-            schedule_id: Schedule identifier
-            **updates: Fields to update
-
-        Returns:
-            True if updated successfully
         """
         try:
             self.store.update_schedule(schedule_id, **updates)
@@ -185,12 +148,6 @@ class ScheduleService:
     def delete_schedule(self, schedule_id: str) -> bool:
         """
         Delete a schedule.
-
-        Args:
-            schedule_id: Schedule identifier
-
-        Returns:
-            True if deleted successfully
         """
         try:
             self.store.delete_schedule(schedule_id)
@@ -207,13 +164,6 @@ class ScheduleService:
     ) -> List[Schedule]:
         """
         List schedules with optional filters.
-
-        Args:
-            pipeline_id: Filter by pipeline ID
-            enabled_only: Only return enabled schedules
-
-        Returns:
-            List of Schedule instances
         """
         return self.store.list_schedules(
             pipeline_id=pipeline_id,
@@ -223,9 +173,6 @@ class ScheduleService:
     def start(self, poll_interval: float = 1.0):
         """
         Start the scheduler in background.
-
-        Args:
-            poll_interval: Polling interval in seconds
         """
         if self._thread and self._thread.is_alive():
             logger.warning("Scheduler is already running")
@@ -248,9 +195,6 @@ class ScheduleService:
     def stop(self, timeout: Optional[float] = 30.0):
         """
         Stop the scheduler gracefully.
-
-        Args:
-            timeout: Maximum time to wait for shutdown
         """
         self._stop.set()
         if self._thread:
@@ -262,10 +206,6 @@ class ScheduleService:
     def backfill(self, pipeline_id: str, count: int):
         """
         Create multiple backfill runs for a pipeline.
-
-        Args:
-            pipeline_id: Pipeline identifier
-            count: Number of runs to create
         """
         if not self.run_executor:
             raise RuntimeError("No run executor configured for backfill")
@@ -280,9 +220,6 @@ class ScheduleService:
     def get_metrics(self) -> Dict[str, Any]:
         """
         Get scheduler metrics.
-
-        Returns:
-            Dictionary with metrics data
         """
         metrics = self._metrics.get_metrics()
 
@@ -304,9 +241,6 @@ class ScheduleService:
     def get_health_status(self) -> Dict[str, Any]:
         """
         Get scheduler health status.
-
-        Returns:
-            Dictionary with health status information
         """
         metrics = self.get_metrics()
 
@@ -349,9 +283,7 @@ class ScheduleService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    def _evaluate_circuit_breakers(
-        self, metrics: Dict[str, Any]
-    ) -> Tuple[List[str], List[str]]:
+    def _evaluate_circuit_breakers(self, metrics: Dict[str, Any]) -> Tuple[List[str], List[str]]:
         """Return (warnings, issues) related to circuit breaker states."""
         open_circuits: List[str] = []
         half_open_circuits: List[str] = []
@@ -366,19 +298,13 @@ class ScheduleService:
         warnings: List[str] = []
         issues: List[str] = []
         if open_circuits:
-            warnings.append(
-                f"{len(open_circuits)} schedule(s) with OPEN circuit breaker"
-            )
-            issues.extend(
-                [f"Schedule {sid}: circuit breaker OPEN" for sid in open_circuits]
-            )
+            warnings.append(f"{len(open_circuits)} schedule(s) with OPEN circuit breaker")
+            issues.extend([f"Schedule {sid}: circuit breaker OPEN" for sid in open_circuits])
         if half_open_circuits:
             warnings.append(f"{len(half_open_circuits)} schedule(s) recovering")
         return warnings, issues
 
-    def _evaluate_error_rate(
-        self, metrics: Dict[str, Any]
-    ) -> Tuple[Optional[str], List[str]]:
+    def _evaluate_error_rate(self, metrics: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
         """Return (issue_or_none, warnings) based on error rate metrics."""
         total_cycles = metrics.get("cycles", 0)
         if total_cycles <= 0:
@@ -481,12 +407,8 @@ class ScheduleService:
 
     def _can_schedule(self, s: Schedule) -> bool:
         """Check if schedule can create a new run."""
-        running = self.store.list_pipeline_runs(
-            pipeline_id=s.pipeline_id, state=RunState.RUNNING
-        )
-        queued = self.store.list_pipeline_runs(
-            pipeline_id=s.pipeline_id, state=RunState.QUEUED
-        )
+        running = self.store.list_pipeline_runs(pipeline_id=s.pipeline_id, state=RunState.RUNNING)
+        queued = self.store.list_pipeline_runs(pipeline_id=s.pipeline_id, state=RunState.QUEUED)
         if len(running) + len(queued) >= s.max_concurrency:
             logger.debug(
                 f"Skipping schedule {s.id} due to concurrency "
@@ -620,9 +542,7 @@ class ScheduleService:
     def _check_stuck_runs(self):
         """Detect and handle stuck executions."""
         try:
-            stuck_runs = self.store.get_stuck_pipeline_runs(
-                self.stuck_run_timeout_minutes
-            )
+            stuck_runs = self.store.get_stuck_pipeline_runs(self.stuck_run_timeout_minutes)
 
             for run in stuck_runs:
                 logger.warning(

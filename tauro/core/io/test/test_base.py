@@ -84,11 +84,7 @@ class TestBaseIO:
 
     def test_prepare_local_directory_skips_remote(self, base_io):
         # Si intenta crear un directorio para una ruta remota, no debe intentar mkdir local
-        with patch.object(
-            Path, "mkdir", side_effect=AssertionError("Should not mkdir")
-        ):
+        with patch.object(Path, "mkdir", side_effect=AssertionError("Should not mkdir")):
             base_io._prepare_local_directory("s3://bucket/data/file.parquet")
-            base_io._prepare_local_directory(
-                "abfss://cont@acct.dfs.core.windows.net/path"
-            )
+            base_io._prepare_local_directory("abfss://cont@acct.dfs.core.windows.net/path")
             base_io._prepare_local_directory("dbfs:/mnt/data/table")

@@ -16,9 +16,7 @@ class DummyContext:
 @pytest.fixture
 def manager():
     ctx = DummyContext()
-    mgr = StreamingPipelineManager(
-        ctx, max_concurrent_pipelines=2, validator=StreamingValidator()
-    )
+    mgr = StreamingPipelineManager(ctx, max_concurrent_pipelines=2, validator=StreamingValidator())
     # Replace query_manager with a mock to avoid starting real queries
     mgr.query_manager = mock.MagicMock()
     # create_and_start_query returns a mock streaming query object

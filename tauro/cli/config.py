@@ -79,9 +79,7 @@ class DSLConfigLoader:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line_num, raw in enumerate(f, 1):
-                    self._handle_line(
-                        raw.strip(), line_num, result, current_path, file_path
-                    )
+                    self._handle_line(raw.strip(), line_num, result, current_path, file_path)
         except ConfigurationError:
             raise
         except Exception as e:
@@ -131,9 +129,7 @@ class DSLConfigLoader:
             section[key] = parsed
             return
 
-        raise ConfigurationError(
-            f"Unrecognized DSL syntax at {file_path}:{line_num}: {line}"
-        )
+        raise ConfigurationError(f"Unrecognized DSL syntax at {file_path}:{line_num}: {line}")
 
     def _parse_value(self, value: str) -> Union[str, int, float, bool, List[Any]]:
         if (value.startswith('"') and value.endswith('"')) or (
@@ -289,9 +285,7 @@ class ConfigDiscovery:
 
         try:
             while True:
-                choice = input(
-                    f"Select configuration (1-{len(self.discovered_configs)}): "
-                ).strip()
+                choice = input(f"Select configuration (1-{len(self.discovered_configs)}): ").strip()
                 if choice.isdigit():
                     index = int(choice) - 1
                     if 0 <= index < len(self.discovered_configs):
@@ -360,9 +354,7 @@ class ConfigManager:
         if interactive:
             config_location = self.discovery.select_interactive()
         else:
-            config_location = self.discovery.find_best_match(
-                layer_name, use_case, config_type
-            )
+            config_location = self.discovery.find_best_match(layer_name, use_case, config_type)
 
         if not config_location:
             # Try any discovered config
@@ -478,9 +470,7 @@ class AppConfigManager:
         config_path = Path(self.config_file_path)
 
         if not config_path.exists():
-            raise ConfigurationError(
-                f"Settings file not found: {self.config_file_path}"
-            )
+            raise ConfigurationError(f"Settings file not found: {self.config_file_path}")
 
         try:
             with open(self.config_file_path, "r", encoding="utf-8") as f:
@@ -537,15 +527,11 @@ class AppConfigManager:
 
         if env not in env_configs:
             available = list(env_configs.keys())
-            raise ConfigurationError(
-                f"Environment '{env}' not found. Available: {available}"
-            )
+            raise ConfigurationError(f"Environment '{env}' not found. Available: {available}")
 
         return env
 
-    def _merge_base_and_env(
-        self, env_configs: Dict[str, Any], env: str
-    ) -> Dict[str, str]:
+    def _merge_base_and_env(self, env_configs: Dict[str, Any], env: str) -> Dict[str, str]:
         base_config = env_configs.get("base", {})
         env_config = env_configs.get(env, {})
         return {**base_config, **env_config}

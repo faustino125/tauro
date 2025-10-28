@@ -95,9 +95,7 @@ class TestTimeIntervalValidation:
         """Test that unsupported units are rejected."""
         assert self.validator._validate_time_interval("10 weeks") is False
         assert self.validator._validate_time_interval("5 months") is False
-        assert (
-            self.validator._validate_time_interval("1 year") is False
-        )  # Year not supported
+        assert self.validator._validate_time_interval("1 year") is False  # Year not supported
 
     def test_invalid_interval_non_string(self):
         """Test that non-string values are rejected."""
@@ -138,9 +136,7 @@ class TestTimeIntervalValidation:
     def test_edge_case_very_large_number(self):
         """Test with very large numbers."""
         # Should fail if > 1 year in seconds
-        assert (
-            self.validator._validate_time_interval("99999 seconds") is True
-        )  # ~1.16 days
+        assert self.validator._validate_time_interval("99999 seconds") is True  # ~1.16 days
         assert (
             self.validator._validate_time_interval("9999999 milliseconds") is False
         )  # ~2.77 hours, but 9999999ms = 9999.999s
@@ -162,17 +158,13 @@ class TestParseTimeToSeconds:
 
     def test_parse_seconds(self):
         """Test parsing seconds."""
-        assert self.validator._parse_time_to_seconds("10 seconds") == pytest.approx(
-            10.0
-        )
+        assert self.validator._parse_time_to_seconds("10 seconds") == pytest.approx(10.0)
         assert self.validator._parse_time_to_seconds("1 second") == pytest.approx(1.0)
 
     def test_parse_minutes(self):
         """Test parsing minutes."""
         assert self.validator._parse_time_to_seconds("1 minute") == pytest.approx(60.0)
-        assert self.validator._parse_time_to_seconds("5 minutes") == pytest.approx(
-            300.0
-        )
+        assert self.validator._parse_time_to_seconds("5 minutes") == pytest.approx(300.0)
 
     def test_parse_hours(self):
         """Test parsing hours."""
@@ -182,24 +174,16 @@ class TestParseTimeToSeconds:
     def test_parse_days(self):
         """Test parsing days."""
         assert self.validator._parse_time_to_seconds("1 day") == pytest.approx(86400.0)
-        assert self.validator._parse_time_to_seconds("7 days") == pytest.approx(
-            604800.0
-        )
+        assert self.validator._parse_time_to_seconds("7 days") == pytest.approx(604800.0)
 
     def test_parse_milliseconds(self):
         """Test parsing milliseconds."""
-        assert self.validator._parse_time_to_seconds(
-            "1000 milliseconds"
-        ) == pytest.approx(1.0)
-        assert self.validator._parse_time_to_seconds(
-            "500 milliseconds"
-        ) == pytest.approx(0.5)
+        assert self.validator._parse_time_to_seconds("1000 milliseconds") == pytest.approx(1.0)
+        assert self.validator._parse_time_to_seconds("500 milliseconds") == pytest.approx(0.5)
 
     def test_parse_microseconds(self):
         """Test parsing microseconds."""
-        assert self.validator._parse_time_to_seconds(
-            "1000000 microseconds"
-        ) == pytest.approx(1.0)
+        assert self.validator._parse_time_to_seconds("1000000 microseconds") == pytest.approx(1.0)
 
     def test_parse_invalid_returns_zero(self):
         """Test that invalid input returns 0.0."""
@@ -218,9 +202,7 @@ class TestParseTimeToMinutes:
     def test_parse_to_minutes_seconds(self):
         """Test parsing seconds to minutes."""
         assert self.validator._parse_time_to_minutes("60 seconds") == pytest.approx(1.0)
-        assert self.validator._parse_time_to_minutes("120 seconds") == pytest.approx(
-            2.0
-        )
+        assert self.validator._parse_time_to_minutes("120 seconds") == pytest.approx(2.0)
 
     def test_parse_to_minutes_minutes(self):
         """Test parsing minutes to minutes."""

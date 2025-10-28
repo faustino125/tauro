@@ -26,16 +26,12 @@ def extract_dependency_name(dependency: Any) -> str:
         return dependency
     elif isinstance(dependency, dict):
         if len(dependency) != 1:
-            raise ValueError(
-                f"Dict dependency must have exactly one key-value pair: {dependency}"
-            )
+            raise ValueError(f"Dict dependency must have exactly one key-value pair: {dependency}")
         return next(iter(dependency.keys()))
     elif dependency is None:
         raise ValueError("Dependency cannot be None")
     else:
-        raise TypeError(
-            f"Unsupported dependency type: {type(dependency)} - {dependency}"
-        )
+        raise TypeError(f"Unsupported dependency type: {type(dependency)} - {dependency}")
 
 
 def extract_pipeline_nodes(pipeline: Dict[str, Any]) -> List[str]:

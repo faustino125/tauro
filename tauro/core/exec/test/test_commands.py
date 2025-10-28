@@ -31,9 +31,7 @@ def test_node_command_raises_and_logs_on_error():
     def bad_fn(*args, start_date, end_date):
         raise RuntimeError("boom")
 
-    cmd = NodeCommand(
-        function=bad_fn, input_dfs=[], start_date="s", end_date="e", node_name="bad"
-    )
+    cmd = NodeCommand(function=bad_fn, input_dfs=[], start_date="s", end_date="e", node_name="bad")
 
     # Attach a temporary Loguru sink that writes into an in-memory buffer so we can assert on the error message.
     buf = StringIO()
@@ -102,9 +100,7 @@ def test_ml_node_command_passes_ml_context_and_merges_hyperparams(monkeypatch):
     assert res["model_version"] == "mv1"
     assert "lr" in res["hyperparams"]
     # spark conf should include tauro.ml.lr etc.
-    assert spark.conf.set_calls.get("tauro.ml.lr") == str(
-        node_config["hyperparams"]["lr"]
-    )
+    assert spark.conf.set_calls.get("tauro.ml.lr") == str(node_config["hyperparams"]["lr"])
 
 
 def test_ml_node_command_calls_function_without_ml_context_if_not_accepted(monkeypatch):

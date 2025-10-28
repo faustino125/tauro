@@ -104,8 +104,7 @@ class UnifiedPipelineState:
                 batch_deps = [
                     dep
                     for dep in deps
-                    if dep in self._nodes
-                    and self._nodes[dep].node_type == NodeType.BATCH
+                    if dep in self._nodes and self._nodes[dep].node_type == NodeType.BATCH
                 ]
                 if batch_deps:
                     self._cross_dependencies[node_name] = set(batch_deps)
@@ -128,9 +127,7 @@ class UnifiedPipelineState:
             node.status = NodeStatus.RUNNING
             node.start_time = time.time()
 
-            logger.info(
-                f"Started execution of {node.node_type.value} node '{node_name}'"
-            )
+            logger.info(f"Started execution of {node.node_type.value} node '{node_name}'")
             return True
 
     def complete_node_execution(
@@ -185,9 +182,7 @@ class UnifiedPipelineState:
                     f"Node '{node_name}' failed (attempt {node.retry_count}/"
                     f"{node.max_retries}). Retrying in {node.retry_delay}s"
                 )
-                threading.Timer(
-                    node.retry_delay, self._retry_node, args=[node_name]
-                ).start()
+                threading.Timer(node.retry_delay, self._retry_node, args=[node_name]).start()
             else:
                 node.status = NodeStatus.FAILED
                 node.error = error
@@ -237,9 +232,7 @@ class UnifiedPipelineState:
         with self._lock:
             ready_nodes = []
             for node_name, node in self._nodes.items():
-                if node.status == NodeStatus.PENDING and self._are_dependencies_ready(
-                    node_name
-                ):
+                if node.status == NodeStatus.PENDING and self._are_dependencies_ready(node_name):
                     ready_nodes.append(node_name)
             return ready_nodes
 
@@ -252,11 +245,7 @@ class UnifiedPipelineState:
                     [n for n in self._nodes.values() if n.node_type == NodeType.BATCH]
                 ),
                 "streaming_nodes": len(
-                    [
-                        n
-                        for n in self._nodes.values()
-                        if n.node_type == NodeType.STREAMING
-                    ]
+                    [n for n in self._nodes.values() if n.node_type == NodeType.STREAMING]
                 ),
                 "status_breakdown": {},
                 "cross_dependencies": len(self._cross_dependencies),
@@ -318,9 +307,7 @@ class UnifiedPipelineState:
     ) -> None:
         try:
             if not self._streaming_stopper:
-                logger.error(
-                    f"No stopper configured to stop streaming node '{streaming_node}'"
-                )
+                logger.error(f"No stopper configured to stop streaming node '{streaming_node}'")
                 return
 
             if self._streaming_stopper(query_id):
@@ -331,9 +318,7 @@ class UnifiedPipelineState:
                     f"failed dependency '{failed_batch_node}'"
                 )
             else:
-                logger.error(
-                    f"Stopper failed to stop streaming node '{streaming_node}'"
-                )
+                logger.error(f"Stopper failed to stop streaming node '{streaming_node}'")
         except Exception as e:
             logger.error(f"Error invoking stopper for '{streaming_node}': {e}")
 
@@ -421,9 +406,7 @@ class UnifiedPipelineState:
             query.stop()
             logger.info(f"Stopped streaming query handle for node '{node_name}'")
         except Exception as e:
-            logger.warning(
-                f"Error stopping streaming query handle for '{node_name}': {e}"
-            )
+            logger.warning(f"Error stopping streaming query handle for '{node_name}': {e}")
 
     def _stop_query_by_id(self, node_name: str, query_id: str) -> None:
         try:
@@ -431,9 +414,7 @@ class UnifiedPipelineState:
                 self._streaming_stopper(query_id)
                 logger.info(f"Requested stop by id for streaming node '{node_name}'")
             else:
-                logger.error(
-                    f"No stopper configured to stop streaming node '{node_name}'"
-                )
+                logger.error(f"No stopper configured to stop streaming node '{node_name}'")
         except Exception as e:
             logger.warning(f"Error requesting stop by id for '{node_name}': {e}")
 

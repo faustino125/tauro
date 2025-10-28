@@ -9,8 +9,8 @@ from loguru import logger  # type: ignore
 from pyspark.sql import DataFrame  # type: ignore
 from pyspark.sql.functions import col, from_json  # type: ignore
 
-from tauro.streaming.constants import STREAMING_FORMAT_CONFIGS, StreamingFormat
-from tauro.streaming.exceptions import (
+from tauro.core.streaming.constants import STREAMING_FORMAT_CONFIGS, StreamingFormat
+from tauro.core.streaming.exceptions import (
     StreamingError,
     StreamingFormatNotSupportedError,
 )
@@ -55,9 +55,7 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
             required_options = format_config.get("required_options", [])
             provided_options = config.get("options", {}) or {}
 
-            missing_options = [
-                opt for opt in required_options if opt not in provided_options
-            ]
+            missing_options = [opt for opt in required_options if opt not in provided_options]
             if missing_options:
                 raise StreamingError(
                     f"Missing required options for {format_name}: {missing_options}"
@@ -82,9 +80,7 @@ class KafkaStreamingReader(BaseStreamingReader):
             )
 
             subscription_options = ["subscribe", "subscribePattern", "assign"]
-            provided_subscriptions = [
-                opt for opt in subscription_options if opt in options
-            ]
+            provided_subscriptions = [opt for opt in subscription_options if opt in options]
             if len(provided_subscriptions) != 1:
                 raise StreamingError(
                     f"Exactly one of {subscription_options} must be provided for Kafka stream"
@@ -124,9 +120,7 @@ class DeltaStreamingReader(BaseStreamingReader):
             self._validate_options(config, StreamingFormat.DELTA_STREAM.value)
             options = config.get("options", {}) or {}
 
-            logger.info(
-                f"Creating Delta CDF streaming reader with options: {list(options.keys())}"
-            )
+            logger.info(f"Creating Delta CDF streaming reader with options: {list(options.keys())}")
 
             reader = self._spark_read_stream().format("delta")
             for key, value in options.items():
@@ -193,9 +187,7 @@ class StreamingReaderFactory:
         """Register a custom streaming reader."""
         try:
             if not issubclass(reader_class, BaseStreamingReader):
-                raise StreamingError(
-                    "Custom reader must inherit from BaseStreamingReader"
-                )
+                raise StreamingError("Custom reader must inherit from BaseStreamingReader")
             reader_instance = reader_class(self.context, *args, **kwargs)
             self._readers[format_name.lower()] = reader_instance
             logger.info(f"Registered custom reader '{format_name}'")

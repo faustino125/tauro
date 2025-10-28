@@ -38,9 +38,7 @@ class SparkSessionFactory:
             try:
                 cls._session.stop()
             except Exception:
-                logger.warning(
-                    "Error stopping Spark session during reset", exc_info=True
-                )
+                logger.warning("Error stopping Spark session during reset", exc_info=True)
         cls._session = None
 
     PROTECTED_CONFIGS = [
@@ -148,9 +146,7 @@ class SparkSessionFactory:
         protected = set(SparkSessionFactory.PROTECTED_CONFIGS or [])
         for k, v in (ml_config or {}).items():
             if k in protected:
-                logger.warning(
-                    f"Skipping ML config '{k}' because it's in PROTECTED_CONFIGS"
-                )
+                logger.warning(f"Skipping ML config '{k}' because it's in PROTECTED_CONFIGS")
                 continue
             try:
                 builder = builder.config(k, v)

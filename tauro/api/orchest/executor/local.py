@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from typing import Dict, List, Callable, Optional
 from datetime import datetime, timezone
@@ -9,14 +13,14 @@ import signal
 
 from loguru import logger  # type: ignore
 
-from tauro.config.contexts import Context
-from tauro.exec.dependency_resolver import DependencyResolver
-from tauro.exec.pipeline_validator import PipelineValidator
-from tauro.exec.node_executor import NodeExecutor
-from tauro.io.input import InputLoader
-from tauro.io.output import DataOutputManager
+from tauro.core.config.contexts import Context
+from tauro.core.exec.dependency_resolver import DependencyResolver
+from tauro.core.exec.pipeline_validator import PipelineValidator
+from tauro.core.exec.node_executor import NodeExecutor
+from tauro.core.io.input import InputLoader
+from tauro.core.io.output import DataOutputManager
 
-from tauro.orchest.models import TaskRun, RunState
+from tauro.api.orchest.models import TaskRun, RunState
 
 
 class LocalDagExecutor:
@@ -58,9 +62,7 @@ class LocalDagExecutor:
             raise ValueError(f"Pipeline '{pipeline_name}' not found")
         nodes_config = self.context.nodes_config or {}
 
-        maybe_nodes, inline_node_cfgs = self._parse_pipeline_nodes(
-            pipeline, pipeline_name
-        )
+        maybe_nodes, inline_node_cfgs = self._parse_pipeline_nodes(pipeline, pipeline_name)
         pipeline_nodes = list(dict.fromkeys(maybe_nodes))
         node_cfgs = self._build_node_configs(
             pipeline_nodes, nodes_config, inline_node_cfgs, pipeline_name
@@ -78,9 +80,7 @@ class LocalDagExecutor:
         if isinstance(pipeline, dict):
             raw_nodes = pipeline.get("nodes") or []
             for entry in raw_nodes:
-                self._process_node_entry(
-                    entry, maybe_nodes, inline_node_cfgs, pipeline_name
-                )
+                self._process_node_entry(entry, maybe_nodes, inline_node_cfgs, pipeline_name)
         return maybe_nodes, inline_node_cfgs
 
     def _process_node_entry(
@@ -182,13 +182,9 @@ class LocalDagExecutor:
         def _attempt():
             """Attempt a single execution (raises on failure)."""
             if timeout_seconds:
-                self._execute_with_timeout(
-                    node_name, start_date, end_date, timeout_seconds
-                )
+                self._execute_with_timeout(node_name, start_date, end_date, timeout_seconds)
             else:
-                self.node_executor.execute_single_node(
-                    node_name, start_date, end_date, ml_info={}
-                )
+                self.node_executor.execute_single_node(node_name, start_date, end_date, ml_info={})
 
         last_exc: Optional[Exception] = None
         for attempt in range(retries + 1):
@@ -259,9 +255,7 @@ class LocalDagExecutor:
     ) -> None:
         if retry_delay_sec > 0:
             sleep_time = retry_delay_sec * (attempt + 1)
-            logger.info(
-                f"Waiting {sleep_time} seconds before retry attempt {attempt + 2}"
-            )
+            logger.info(f"Waiting {sleep_time} seconds before retry attempt {attempt + 2}")
             time.sleep(sleep_time)
         tr.try_number = attempt + 2  # siguiente intento es 2..N
         on_task_state(tr)
@@ -336,9 +330,7 @@ class LocalDagExecutor:
         - Calls _handle_finished which may raise to indicate a failure.
         - Updates indegree and ready queue for downstream nodes.
         """
-        done, _pending = wait(
-            running.values(), timeout=0.1, return_when=FIRST_EXCEPTION
-        )
+        done, _pending = wait(running.values(), timeout=0.1, return_when=FIRST_EXCEPTION)
 
         finished_nodes: List[str] = []
         for node, fut in running.items():
@@ -423,9 +415,7 @@ class LocalDagExecutor:
         max_workers: int,
     ) -> None:
         while (ready or running) and not self._stop_event.is_set():
-            while (
-                ready and len(running) < max_workers and not self._stop_event.is_set()
-            ):
+            while ready and len(running) < max_workers and not self._stop_event.is_set():
                 node_to_run = ready.popleft()
                 self._submit_task(
                     pool,
@@ -443,9 +433,7 @@ class LocalDagExecutor:
             if not running:
                 continue
 
-            self._wait_and_process(
-                running, task_runs, children, on_task_state, indegree, ready
-            )
+            self._wait_and_process(running, task_runs, children, on_task_state, indegree, ready)
 
     def _finalize_running_tasks(
         self,

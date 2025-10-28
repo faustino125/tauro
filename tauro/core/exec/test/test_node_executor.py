@@ -97,14 +97,10 @@ def test_executor_uses_threadpool_to_submit_tasks(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(
-        tauro_exec_mod, "ThreadPoolExecutor", lambda max_workers=None: FakePool()
-    )
+    monkeypatch.setattr(tauro_exec_mod, "ThreadPoolExecutor", lambda max_workers=None: FakePool())
     logger.debug("Patched ThreadPoolExecutor in module %s", tauro_exec_mod.__name__)
 
-    ne = NodeExecutor(
-        DummyContext(), DummyInputLoader(), DummyOutputManager(), max_workers=2
-    )
+    ne = NodeExecutor(DummyContext(), DummyInputLoader(), DummyOutputManager(), max_workers=2)
     logger.debug("Created NodeExecutor instance with max_workers=2")
 
     execution_order = ["n1", "n2"]
@@ -124,18 +120,14 @@ def test_executor_uses_threadpool_to_submit_tasks(monkeypatch):
             node_name = info.get("node_name")
             if node_name:
                 completed.add(node_name)
-                logger.debug(
-                    "Marking node as completed in fake processor: %s", node_name
-                )
+                logger.debug("Marking node as completed in fake processor: %s", node_name)
         running.clear()
         return False
 
     monkeypatch.setattr(ne, "_process_completed_nodes", _fake_process_completed_nodes)
     logger.debug("Patched _process_completed_nodes to simulate immediate completion")
 
-    ne.execute_nodes_parallel(
-        execution_order, node_configs, dag, "2025-01-01", "2025-01-31", {}
-    )
+    ne.execute_nodes_parallel(execution_order, node_configs, dag, "2025-01-01", "2025-01-31", {})
     logger.info("Called execute_nodes_parallel")
 
     assert hasattr(

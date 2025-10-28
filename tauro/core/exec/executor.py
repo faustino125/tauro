@@ -9,16 +9,16 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 from loguru import logger  # type: ignore
 
-from tauro.config.contexts import Context
-from tauro.exec.dependency_resolver import DependencyResolver
-from tauro.exec.node_executor import NodeExecutor
-from tauro.exec.pipeline_state import NodeType, UnifiedPipelineState
-from tauro.exec.pipeline_validator import PipelineValidator
-from tauro.exec.utils import extract_pipeline_nodes, get_node_dependencies
-from tauro.io.input import InputLoader
-from tauro.io.output import DataOutputManager
-from tauro.streaming.constants import PipelineType
-from tauro.streaming.pipeline_manager import StreamingPipelineManager
+from tauro.core.config.contexts import Context
+from tauro.core.exec.dependency_resolver import DependencyResolver
+from tauro.core.exec.node_executor import NodeExecutor
+from tauro.core.exec.pipeline_state import NodeType, UnifiedPipelineState
+from tauro.core.exec.pipeline_validator import PipelineValidator
+from tauro.core.exec.utils import extract_pipeline_nodes, get_node_dependencies
+from tauro.core.io.input import InputLoader
+from tauro.core.io.output import DataOutputManager
+from tauro.core.streaming.constants import PipelineType
+from tauro.core.streaming.pipeline_manager import StreamingPipelineManager
 
 
 class BaseExecutor:
@@ -46,17 +46,11 @@ class BaseExecutor:
         ml_info: Dict[str, Any] = {}
         pipeline_ml_config: Dict[str, Any] = {}
         initial_hyperparams = dict(hyperparams or {})
-        final_model_version = model_version or getattr(
-            self.context, "default_model_version", None
-        )
+        final_model_version = model_version or getattr(self.context, "default_model_version", None)
 
         if hasattr(self.context, "get_pipeline_ml_config"):
-            pipeline_ml_config = (
-                self.context.get_pipeline_ml_config(pipeline_name) or {}
-            )
-            final_model_version = self._resolve_model_version(
-                pipeline_ml_config, model_version
-            )
+            pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name) or {}
+            final_model_version = self._resolve_model_version(pipeline_ml_config, model_version)
             final_hyperparams = self._merge_hyperparams(
                 pipeline_ml_config, initial_hyperparams, hyperparams
             )
@@ -76,9 +70,7 @@ class BaseExecutor:
             )
 
         elif self.is_ml_layer:
-            final_hyperparams = self._merge_hyperparams(
-                {}, initial_hyperparams, hyperparams
-            )
+            final_hyperparams = self._merge_hyperparams({}, initial_hyperparams, hyperparams)
             ml_info = {
                 "model_version": final_model_version,
                 "hyperparams": final_hyperparams,
@@ -128,9 +120,7 @@ class BaseExecutor:
 
     def _is_experiment_pipeline(self, pipeline_name: str) -> bool:
         """Check if it's an experimentation pipeline."""
-        return (
-            "experiment" in pipeline_name.lower() or "tuning" in pipeline_name.lower()
-        )
+        return "experiment" in pipeline_name.lower() or "tuning" in pipeline_name.lower()
 
     def _log_pipeline_start(
         self, pipeline_name: str, ml_info: Dict[str, Any], pipeline_type: str
@@ -209,9 +199,7 @@ class BatchExecutor(BaseExecutor):
     ) -> None:
         """Execute batch flow logic."""
         if node_name:
-            self.node_executor.execute_single_node(
-                node_name, start_date, end_date, ml_info
-            )
+            self.node_executor.execute_single_node(node_name, start_date, end_date, ml_info)
         else:
             pipeline_nodes = self._extract_pipeline_nodes(pipeline)
             self._execute_pipeline_nodes(pipeline_nodes, start_date, end_date, ml_info)
@@ -240,13 +228,9 @@ class StreamingExecutor(BaseExecutor):
 
     def __init__(self, context: Context):
         super().__init__(context)
-        max_streaming_pipelines = context.global_settings.get(
-            "max_streaming_pipelines", 5
-        )
+        max_streaming_pipelines = context.global_settings.get("max_streaming_pipelines", 5)
         # Inyectar policy del contexto dentro del manager (el manager crea su validador con policy)
-        self.streaming_manager = StreamingPipelineManager(
-            context, max_streaming_pipelines
-        )
+        self.streaming_manager = StreamingPipelineManager(context, max_streaming_pipelines)
 
     def execute(
         self,
@@ -286,27 +270,17 @@ class StreamingExecutor(BaseExecutor):
         for running in running_pipelines:
             running_resources = self._extract_pipeline_resources(running)
 
-            common_topics = (
-                current_resources["kafka_topics"] & running_resources["kafka_topics"]
-            )
+            common_topics = current_resources["kafka_topics"] & running_resources["kafka_topics"]
             if common_topics:
-                conflicts.append(
-                    f"Kafka topic conflict: topics {', '.join(common_topics)}"
-                )
+                conflicts.append(f"Kafka topic conflict: topics {', '.join(common_topics)}")
 
-            common_paths = (
-                current_resources["file_paths"] & running_resources["file_paths"]
-            )
+            common_paths = current_resources["file_paths"] & running_resources["file_paths"]
             if common_paths:
                 conflicts.append(f"File path conflict: paths {', '.join(common_paths)}")
 
-            common_tables = (
-                current_resources["delta_tables"] & running_resources["delta_tables"]
-            )
+            common_tables = current_resources["delta_tables"] & running_resources["delta_tables"]
             if common_tables:
-                conflicts.append(
-                    f"Delta table conflict: tables {', '.join(common_tables)}"
-                )
+                conflicts.append(f"Delta table conflict: tables {', '.join(common_tables)}")
 
         return conflicts
 
@@ -322,24 +296,16 @@ class StreamingExecutor(BaseExecutor):
         for t in topics:
             resources["kafka_topics"].add(t)
 
-    def _add_kafka_from_assign(
-        self, resources: Dict[str, Set[str]], assign_value: Any
-    ) -> None:
+    def _add_kafka_from_assign(self, resources: Dict[str, Set[str]], assign_value: Any) -> None:
         try:
-            mapping = (
-                json.loads(assign_value)
-                if isinstance(assign_value, str)
-                else assign_value
-            )
+            mapping = json.loads(assign_value) if isinstance(assign_value, str) else assign_value
             if isinstance(mapping, dict):
                 for t in mapping.keys():
                     resources["kafka_topics"].add(t)
         except Exception:
             pass
 
-    def _add_kafka_from_opts(
-        self, resources: Dict[str, Set[str]], opts: Dict[str, Any]
-    ) -> None:
+    def _add_kafka_from_opts(self, resources: Dict[str, Set[str]], opts: Dict[str, Any]) -> None:
         if not opts:
             return
         if "subscribe" in opts:
@@ -394,9 +360,7 @@ class StreamingExecutor(BaseExecutor):
             if out_path:
                 resources["delta_tables"].add(out_path)
 
-    def _extract_pipeline_resources(
-        self, pipeline: Dict[str, Any]
-    ) -> Dict[str, Set[str]]:
+    def _extract_pipeline_resources(self, pipeline: Dict[str, Any]) -> Dict[str, Set[str]]:
         """Extract critical resources from pipeline configuration."""
         resources: Dict[str, Set[str]] = {
             "kafka_topics": set(),
@@ -412,18 +376,12 @@ class StreamingExecutor(BaseExecutor):
 
         return resources
 
-    def _wait_for_streaming_pipeline(
-        self, execution_id: str, timeout_seconds: int = 300
-    ) -> None:
+    def _wait_for_streaming_pipeline(self, execution_id: str, timeout_seconds: int = 300) -> None:
         """Wait for streaming pipeline to complete."""
         start_time = time.time()
         while time.time() - start_time < timeout_seconds:
             status_info = self.streaming_manager.get_pipeline_status(execution_id)
-            state = (
-                status_info.get("state")
-                if isinstance(status_info, dict)
-                else str(status_info)
-            )
+            state = status_info.get("state") if isinstance(status_info, dict) else str(status_info)
             if state in ["completed", "error", "stopped"]:
                 break
             time.sleep(5)
@@ -434,12 +392,8 @@ class HybridExecutor(BaseExecutor):
 
     def __init__(self, context: Context):
         super().__init__(context)
-        max_streaming_pipelines = context.global_settings.get(
-            "max_streaming_pipelines", 5
-        )
-        self.streaming_manager = StreamingPipelineManager(
-            context, max_streaming_pipelines
-        )
+        max_streaming_pipelines = context.global_settings.get("max_streaming_pipelines", 5)
+        self.streaming_manager = StreamingPipelineManager(context, max_streaming_pipelines)
         self.max_retries = context.global_settings.get("max_retries", 3)
         self.retry_delay = context.global_settings.get("retry_delay", 5)
 
@@ -504,9 +458,7 @@ class HybridExecutor(BaseExecutor):
 
         for node_name in streaming_nodes:
             dependencies = get_node_dependencies(node_configs[node_name])
-            self.unified_state.register_node(
-                node_name, NodeType.STREAMING, dependencies
-            )
+            self.unified_state.register_node(node_name, NodeType.STREAMING, dependencies)
 
     def _execute_unified_hybrid_pipeline(
         self,
@@ -533,9 +485,7 @@ class HybridExecutor(BaseExecutor):
             execution_result["batch_execution"] = batch_results
 
             batch_failures = [
-                node
-                for node, result in batch_results.items()
-                if result["status"] != "completed"
+                node for node, result in batch_results.items() if result["status"] != "completed"
             ]
 
             if batch_failures:
@@ -578,9 +528,7 @@ class HybridExecutor(BaseExecutor):
 
             for attempt in range(self.max_retries + 1):
                 try:
-                    self._execute_node_with_retry(
-                        node, start_date, end_date, ml_info, attempt
-                    )
+                    self._execute_node_with_retry(node, start_date, end_date, ml_info, attempt)
                     results[node] = {"status": "completed"}
                     self.unified_state.complete_node_execution(node)
                     break
@@ -609,19 +557,13 @@ class HybridExecutor(BaseExecutor):
     ) -> None:
         """Execute a node with retry logic."""
         try:
-            self.node_executor.execute_single_node(
-                node_name, start_date, end_date, ml_info
-            )
+            self.node_executor.execute_single_node(node_name, start_date, end_date, ml_info)
         except Exception:
             if attempt < self.max_retries:
-                logger.warning(
-                    f"Attempt {attempt+1} failed for node '{node_name}'. Retrying..."
-                )
+                logger.warning(f"Attempt {attempt+1} failed for node '{node_name}'. Retrying...")
                 raise
             else:
-                logger.error(
-                    f"Node '{node_name}' failed after {self.max_retries} attempts"
-                )
+                logger.error(f"Node '{node_name}' failed after {self.max_retries} attempts")
                 raise
 
     def _handle_batch_failure(self, failed_node: str, results: Dict[str, Any]):
@@ -638,9 +580,7 @@ class HybridExecutor(BaseExecutor):
                     }
                     logger.warning(f"Cancelled dependent node: {node}")
 
-        stopped_streaming = self.unified_state.stop_dependent_streaming_nodes(
-            failed_node
-        )
+        stopped_streaming = self.unified_state.stop_dependent_streaming_nodes(failed_node)
         for node in stopped_streaming:
             logger.warning(f"Stopped streaming node due to batch failure: {node}")
 
@@ -657,9 +597,7 @@ class HybridExecutor(BaseExecutor):
                 continue
 
             try:
-                execution_id = self.streaming_manager.start_streaming_node(
-                    node, node_configs[node]
-                )
+                execution_id = self.streaming_manager.start_streaming_node(node, node_configs[node])
                 execution_ids.append(execution_id)
                 self.unified_state.register_streaming_query(node, execution_id)
                 self.unified_state.complete_node_execution(node)
@@ -672,16 +610,12 @@ class HybridExecutor(BaseExecutor):
 
         return execution_ids
 
-    def _wait_for_streaming_completion(
-        self, execution_ids: List[str], timeout_minutes=60
-    ):
+    def _wait_for_streaming_completion(self, execution_ids: List[str], timeout_minutes=60):
         """Wait for streaming queries to complete (for sync execution)."""
         start_time = time.time()
         while time.time() - start_time < timeout_minutes * 60:
             active_queries = [
-                eid
-                for eid in execution_ids
-                if self.streaming_manager.is_query_active(eid)
+                eid for eid in execution_ids if self.streaming_manager.is_query_active(eid)
             ]
             if not active_queries:
                 return
@@ -750,12 +684,7 @@ class PipelineExecutor:
     def get_streaming_pipeline_status(self, execution_id: str) -> Dict[str, Any]:
         """Return status info for a streaming pipeline execution."""
         try:
-            return (
-                self.streaming_executor.streaming_manager.get_pipeline_status(
-                    execution_id
-                )
-                or {}
-            )
+            return self.streaming_executor.streaming_manager.get_pipeline_status(execution_id) or {}
         except Exception:
             return {}
 
@@ -769,9 +698,7 @@ class PipelineExecutor:
     def stop_streaming_pipeline(self, execution_id: str, graceful: bool = True) -> bool:
         """Stop a running streaming pipeline."""
         try:
-            return self.streaming_executor.streaming_manager.stop_pipeline(
-                execution_id, graceful
-            )
+            return self.streaming_executor.streaming_manager.stop_pipeline(execution_id, graceful)
         except Exception:
             return False
 
@@ -779,10 +706,7 @@ class PipelineExecutor:
         """Get metrics for a streaming pipeline."""
         try:
             return (
-                self.streaming_executor.streaming_manager.get_pipeline_metrics(
-                    execution_id
-                )
-                or {}
+                self.streaming_executor.streaming_manager.get_pipeline_metrics(execution_id) or {}
             )
         except Exception:
             return {}

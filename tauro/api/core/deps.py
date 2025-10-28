@@ -1,30 +1,34 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
-from typing import Optional, TYPE_CHECKING, Any
+from typing import Optional, TYPE_CHECKING, Any, AsyncGenerator
 from functools import lru_cache
 import threading
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
-from motor.motor_asyncio import AsyncDatabase  # type: ignore
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from core.api.core.config import Settings, get_settings
-from core.api.services.config_service import ConfigService
-from core.api.db.connection import (
+from tauro.api.core.config import Settings, get_settings
+from tauro.api.services.config_service import ConfigService
+from tauro.api.db.connection import (
     init_mongodb,
     get_mongodb_client,
     get_database as get_database_dependency,
 )
-from core.api.services.project_service import ProjectService
-from core.api.services.run_service import RunService as APIRunService
-from core.api.services.schedule_service import ScheduleService as APIScheduleService
-from core.api.services.execution_service import ExecutionService
-from core.api.services.config_version_service import ConfigVersionService
+from tauro.api.services.project_service import ProjectService
+from tauro.api.services.run_service import RunService as APIRunService
+from tauro.api.services.schedule_service import ScheduleService as APIScheduleService
+from tauro.api.services.execution_service import ExecutionService
+from tauro.api.services.config_version_service import ConfigVersionService
 
 if TYPE_CHECKING:
     from tauro.cli.config import ConfigManager
     from tauro.cli.execution import ContextInitializer
-    from tauro.config.contexts import Context
-    from tauro.orchest import (
+    from tauro.core.config.contexts import Context
+    from tauro.api.orchest import (
         OrchestratorStore,
         OrchestratorRunner,
         ScheduleService,
@@ -44,8 +48,8 @@ OrchestRunService: Any = None
 try:
     from tauro.cli.config import ConfigManager
     from tauro.cli.execution import ContextInitializer
-    from tauro.config.contexts import Context
-    from tauro.orchest import (
+    from tauro.core.config.contexts import Context
+    from tauro.api.orchest import (
         OrchestratorStore,
         OrchestratorRunner,
         ScheduleService,
@@ -414,7 +418,7 @@ def cleanup_scheduler(scheduler: Optional[Any] = Depends(get_scheduler_service))
 # =============================================================================
 
 
-async def initialize_mongodb(settings: Settings) -> AsyncDatabase:
+async def initialize_mongodb(settings: Settings) -> AsyncIOMotorDatabase:
     """
     Initialize MongoDB connection
 
@@ -422,7 +426,7 @@ async def initialize_mongodb(settings: Settings) -> AsyncDatabase:
         settings: Application settings
 
     Returns:
-        AsyncDatabase instance
+        AsyncIOMotorDatabase instance
     """
     try:
         # Initialize client (doesn't connect yet)
@@ -438,7 +442,7 @@ async def initialize_mongodb(settings: Settings) -> AsyncDatabase:
         logger.info("MongoDB connection established")
 
         # Run migrations
-        from core.api.db.migrations import init_database
+        from tauro.api.db.migrations import init_database
 
         await init_database(db)
         logger.info("Database migrations completed")
@@ -460,12 +464,12 @@ def close_mongodb() -> None:
         logger.error(f"Error closing MongoDB: {e}")
 
 
-async def get_database() -> AsyncDatabase:
+async def get_database() -> AsyncGenerator[AsyncIOMotorDatabase, None]:
     """
     FastAPI dependency for getting MongoDB database
 
-    Returns:
-        AsyncDatabase instance
+    Yields:
+        AsyncIOMotorDatabase instance
     """
     async for db in get_database_dependency():
         yield db
@@ -489,7 +493,7 @@ _EXECUTION_SERVICE_INSTANCE: Optional[ExecutionService] = None
 
 
 def get_project_service(
-    db: AsyncDatabase = Depends(get_database),
+    db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> ProjectService:
     """
     Get ProjectService instance (cached singleton).
@@ -514,7 +518,7 @@ def get_project_service(
 
 
 def get_run_service(
-    db: AsyncDatabase = Depends(get_database),
+    db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> APIRunService:
     """
     Get RunService instance (cached singleton).
@@ -539,7 +543,7 @@ def get_run_service(
 
 
 def get_schedule_service(
-    db: AsyncDatabase = Depends(get_database),
+    db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> APIScheduleService:
     """
     Get ScheduleService instance (cached singleton).
@@ -596,21 +600,17 @@ def resolve_orchestrator_runner() -> Optional[Any]:
                 from tauro.orchest import OrchestratorStore
 
                 store = OrchestratorStore()
-                _ORCHESTRATOR_RUNNER_INSTANCE = OrchestratorRunner(
-                    context=None, store=store
-                )
+                _ORCHESTRATOR_RUNNER_INSTANCE = OrchestratorRunner(context=None, store=store)
                 logger.info("OrchestratorRunner singleton initialized")
             except Exception as e:
-                logger.error(
-                    f"Failed to initialize OrchestratorRunner: {type(e).__name__}: {e}"
-                )
+                logger.error(f"Failed to initialize OrchestratorRunner: {type(e).__name__}: {e}")
                 return None
 
     return _ORCHESTRATOR_RUNNER_INSTANCE
 
 
 def get_execution_service(
-    db: AsyncDatabase = Depends(get_database),
+    db: AsyncIOMotorDatabase = Depends(get_database),
     orchestrator_runner: Optional[Any] = Depends(resolve_orchestrator_runner),
 ) -> ExecutionService:
     """
@@ -639,9 +639,7 @@ def get_execution_service(
                 service.orchestrator_runner = orchestrator_runner
                 logger.debug("ExecutionService initialized with OrchestratorRunner")
             else:
-                logger.warning(
-                    "ExecutionService initialized without OrchestratorRunner"
-                )
+                logger.warning("ExecutionService initialized without OrchestratorRunner")
             _EXECUTION_SERVICE_INSTANCE = service
             logger.debug("ExecutionService instance created and cached")
 
@@ -653,7 +651,7 @@ _CONFIG_VERSION_SERVICE_INSTANCE: Optional[ConfigVersionService] = None
 
 
 def get_config_version_service(
-    db: AsyncDatabase = Depends(get_database),
+    db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> ConfigVersionService:
     """
     Get ConfigVersionService instance (cached singleton).

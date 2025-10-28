@@ -198,9 +198,7 @@ class TestPathResolver:
     def test_resolve_output_path_local(self, resolver, mock_validator):
         """Test resolving output path for local file system."""
         dataset_config = {}
-        result = resolver.resolve_output_path(
-            dataset_config, "test_schema.test_folder.test_table"
-        )
+        result = resolver.resolve_output_path(dataset_config, "test_schema.test_folder.test_table")
 
         assert str(result) == "/base/path/test_schema/test_folder/test_table"
         mock_validator.validate_output_key.assert_called_once_with(
@@ -212,9 +210,7 @@ class TestPathResolver:
         context = {"output_path": "/base/path", "execution_mode": "local"}
         resolver = PathResolver(context, mock_validator)
 
-        result = resolver.resolve_output_path(
-            {}, "test_schema.test_folder.test_table", env="dev"
-        )
+        result = resolver.resolve_output_path({}, "test_schema.test_folder.test_table", env="dev")
 
         assert str(result) == "/base/path/dev/test_schema/test_folder/test_table"
 
@@ -223,18 +219,14 @@ class TestPathResolver:
         context = {"output_path": "s3://bucket/path", "execution_mode": "databricks"}
         resolver = PathResolver(context, mock_validator)
 
-        result = resolver.resolve_output_path(
-            {}, "test_schema.test_folder.test_table", env="prod"
-        )
+        result = resolver.resolve_output_path({}, "test_schema.test_folder.test_table", env="prod")
 
         assert result == "s3://bucket/path/prod/test_schema/test_folder/test_table"
 
     def test_resolve_output_path_without_environment(self, resolver, mock_validator):
         """Test resolving output path without environment (backward compatibility)."""
         dataset_config = {}
-        result = resolver.resolve_output_path(
-            dataset_config, "test_schema.test_folder.test_table"
-        )
+        result = resolver.resolve_output_path(dataset_config, "test_schema.test_folder.test_table")
 
         assert str(result) == "/base/path/test_schema/test_folder/test_table"
 
@@ -258,13 +250,9 @@ class TestPathResolver:
             "table_name": "override_table",
         }
 
-        result = resolver.resolve_output_path(
-            dataset_config, "test_schema.test_folder.test_table"
-        )
+        result = resolver.resolve_output_path(dataset_config, "test_schema.test_folder.test_table")
 
-        assert (
-            str(result) == "/base/path/override_schema/override_folder/override_table"
-        )
+        assert str(result) == "/base/path/override_schema/override_folder/override_table"
 
     def test_resolve_output_path_missing_components(self, mock_validator):
         """Test error when path components are missing."""
@@ -297,14 +285,10 @@ class TestPathResolver:
 
     def test_resolve_output_path_invalid_inputs(self, resolver):
         """Test error when inputs are invalid."""
-        with pytest.raises(
-            ConfigurationError, match="dataset_config must be a dictionary"
-        ):
+        with pytest.raises(ConfigurationError, match="dataset_config must be a dictionary"):
             resolver.resolve_output_path("not_a_dict", "test.key")
 
-        with pytest.raises(
-            ConfigurationError, match="out_key must be a non-empty string"
-        ):
+        with pytest.raises(ConfigurationError, match="out_key must be a non-empty string"):
             resolver.resolve_output_path({}, "")
 
     def test_resolve_output_path_special_characters(self, mock_validator):
@@ -320,10 +304,7 @@ class TestPathResolver:
             {}, "test-schema.test folder with spaces.test_table_123"
         )
 
-        assert (
-            str(result)
-            == "/base/path/test-schema/test folder with spaces/test_table_123"
-        )
+        assert str(result) == "/base/path/test-schema/test folder with spaces/test_table_123"
 
 
 class TestDataWriter:
@@ -345,9 +326,7 @@ class TestDataWriter:
 
         data_writer.write_data(mock_df, "/test/path", {"format": "parquet"})
 
-        mock_writer.write.assert_called_once_with(
-            mock_df, "/test/path", {"format": "parquet"}
-        )
+        mock_writer.write.assert_called_once_with(mock_df, "/test/path", {"format": "parquet"})
         data_writer._prepare_local_directory.assert_called_once_with("/test/path")
 
     def test_write_data_skips_local_dir_prep_for_cloud(self, data_writer):
@@ -363,9 +342,7 @@ class TestDataWriter:
         cloud_path = "s3://bucket/some/where"
         data_writer.write_data(mock_df, cloud_path, {"format": "parquet"})
 
-        mock_writer.write.assert_called_once_with(
-            mock_df, cloud_path, {"format": "parquet"}
-        )
+        mock_writer.write.assert_called_once_with(mock_df, cloud_path, {"format": "parquet"})
         data_writer._prepare_local_directory.assert_not_called()
 
     def test_write_data_empty_path(self, data_writer):
@@ -376,9 +353,7 @@ class TestDataWriter:
     def test_write_data_invalid_format(self, data_writer):
         """Test error when format is not supported."""
         with pytest.raises(ConfigurationError, match="Unsupported format"):
-            data_writer.write_data(
-                MagicMock(), "/test/path", {"format": "invalid_format"}
-            )
+            data_writer.write_data(MagicMock(), "/test/path", {"format": "invalid_format"})
 
     def test_write_data_write_error(self, data_writer):
         """Test error handling when write operation fails."""
@@ -417,9 +392,7 @@ class TestModelArtifactManager:
 
     def test_save_model_artifacts(self, artifact_manager, tmp_path):
         """Test saving model artifacts with metadata."""
-        artifact_manager.context = {
-            "global_settings": {"model_registry_path": str(tmp_path)}
-        }
+        artifact_manager.context = {"global_settings": {"model_registry_path": str(tmp_path)}}
 
         node = {
             "name": "test_node",
@@ -462,9 +435,7 @@ class TestModelArtifactManager:
 
     def test_save_model_artifacts_invalid_artifact(self, artifact_manager, tmp_path):
         """Test handling of invalid artifacts."""
-        artifact_manager.context = {
-            "global_settings": {"model_registry_path": str(tmp_path)}
-        }
+        artifact_manager.context = {"global_settings": {"model_registry_path": str(tmp_path)}}
 
         node = {
             "name": "test_node",
@@ -492,9 +463,7 @@ class TestModelArtifactManager:
 
     def test_save_model_artifacts_performance(self, artifact_manager, tmp_path):
         """Test that saving model artifacts completes within expected time."""
-        artifact_manager.context = {
-            "global_settings": {"model_registry_path": str(tmp_path)}
-        }
+        artifact_manager.context = {"global_settings": {"model_registry_path": str(tmp_path)}}
 
         node = {
             "name": "test_node",
@@ -536,9 +505,7 @@ class TestUnityCatalogOperations:
         assert fake_spark.sql.call_count == 2
         calls = fake_spark.sql.call_args_list
         assert "CREATE CATALOG IF NOT EXISTS `test_catalog`" in str(calls[0])
-        assert "CREATE SCHEMA IF NOT EXISTS `test_catalog`.`test_schema`" in str(
-            calls[1]
-        )
+        assert "CREATE SCHEMA IF NOT EXISTS `test_catalog`.`test_schema`" in str(calls[1])
 
     def test_ensure_schema_exists_with_location(self, uc_operations):
         """Test ensuring schema exists with custom location."""
@@ -546,9 +513,7 @@ class TestUnityCatalogOperations:
         fake_spark = MagicMock()
         uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
-        uc_operations.ensure_schema_exists(
-            "test_catalog", "test_schema", "/custom/location"
-        )
+        uc_operations.ensure_schema_exists("test_catalog", "test_schema", "/custom/location")
 
         # Verify SQL command with location was executed
         calls = fake_spark.sql.call_args_list
@@ -569,9 +534,7 @@ class TestUnityCatalogOperations:
         fake_spark = MagicMock()
         uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
-        uc_operations.optimize_table(
-            "catalog.schema.table", "date_col", "2023-01-01", "2023-01-31"
-        )
+        uc_operations.optimize_table("catalog.schema.table", "date_col", "2023-01-01", "2023-01-31")
 
         # Verify OPTIMIZE command was executed with quoted identifiers
         fake_spark.sql.assert_called_once()
@@ -585,9 +548,7 @@ class TestUnityCatalogOperations:
         fake_spark = MagicMock()
         uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
-        uc_operations.add_table_comment(
-            "catalog.schema.table", "Test description", "date_col"
-        )
+        uc_operations.add_table_comment("catalog.schema.table", "Test description", "date_col")
 
         # Verify COMMENT command was executed
         fake_spark.sql.assert_called_once()
@@ -623,9 +584,7 @@ class TestUnityCatalogOperations:
         uc_operations._ctx_spark = MagicMock(return_value=fake_spark)
 
         start_time = time.time()
-        uc_operations.optimize_table(
-            "catalog.schema.table", "date_col", "2023-01-01", "2023-01-31"
-        )
+        uc_operations.optimize_table("catalog.schema.table", "date_col", "2023-01-01", "2023-01-31")
         end_time = time.time()
 
         # Should complete in less than 1 second (mocked operation)
@@ -810,9 +769,7 @@ class TestDataOutputManager:
         """Fixture to create an DataOutputManager with mock context."""
         mock_context = {
             "spark": MagicMock(),
-            "output_config": {
-                "test_output": {"format": "parquet", "filepath": "/test/path"}
-            },
+            "output_config": {"test_output": {"format": "parquet", "filepath": "/test/path"}},
             "global_settings": {"fail_on_error": True},
         }
         return DataOutputManager(mock_context)
@@ -928,9 +885,7 @@ class TestDataOutputManager:
         with pytest.raises(ConfigurationError, match="Parameter 'node' cannot be None"):
             output_manager.save_output("dev", None, MagicMock())
 
-        with pytest.raises(
-            ConfigurationError, match="Parameter 'node' must be a dictionary"
-        ):
+        with pytest.raises(ConfigurationError, match="Parameter 'node' must be a dictionary"):
             output_manager.save_output("dev", "not_a_dict", MagicMock())
 
     def test_save_output_integration(self, output_manager):

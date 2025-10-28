@@ -1,10 +1,7 @@
 """
-ScheduleService: Schedule management (periodic pipeline executions)
-
-This service implements business logic for creating, updating and managing
-schedules that trigger periodic pipeline executions.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 import logging
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
@@ -12,12 +9,12 @@ from datetime import datetime, timezone, timedelta
 from motor.motor_asyncio import AsyncDatabase  # type: ignore
 from croniter import croniter
 
-from core.api.schemas.models import (
+from tauro.api.schemas.models import (
     ScheduleCreate,
     ScheduleResponse,
     ScheduleKind,
 )
-from core.api.schemas.project_validators import ScheduleValidator
+from tauro.api.schemas.project_validators import ScheduleValidator
 
 
 logger = logging.getLogger(__name__)
@@ -44,13 +41,6 @@ class InvalidScheduleError(Exception):
 class ScheduleService:
     """
     Schedule management service.
-
-    Responsibilities:
-    - CRUD of schedules (Create, Read, Update, Delete)
-    - Validation of CRON and INTERVAL expressions
-    - Calculation of next executions
-    - Enable/disable schedules
-    - Backfill (create historical runs)
     """
 
     def __init__(self, db: AsyncDatabase):
@@ -72,30 +62,15 @@ class ScheduleService:
     ) -> ScheduleResponse:
         """
         Create a new schedule.
-
-        Args:
-            schedule_data: Schedule data to create
-            created_by: User creating the schedule (email or ID)
-
-        Returns:
-            ScheduleResponse with the created schedule
-
-        Raises:
-            InvalidScheduleError: If data is invalid
-            ScheduleAlreadyExistsError: If a similar schedule already exists
         """
         try:
             # Validate data
             self.validator.validate_schedule(schedule_data)
 
             # Verify project exists
-            project = await self.projects_collection.find_one(
-                {"id": str(schedule_data.project_id)}
-            )
+            project = await self.projects_collection.find_one({"id": str(schedule_data.project_id)})
             if not project:
-                raise InvalidScheduleError(
-                    f"Project {schedule_data.project_id} not found"
-                )
+                raise InvalidScheduleError(f"Project {schedule_data.project_id} not found")
 
             # Verify pipeline exists
             pipelines = project.get("pipelines", [])
@@ -103,9 +78,7 @@ class ScheduleService:
                 str(p.get("id")) == str(schedule_data.pipeline_id) for p in pipelines
             )
             if not pipeline_found:
-                raise InvalidScheduleError(
-                    f"Pipeline {schedule_data.pipeline_id} not found"
-                )
+                raise InvalidScheduleError(f"Pipeline {schedule_data.pipeline_id} not found")
 
             # Verify schedule doesn't already exist
             existing = await self.schedules_collection.find_one(
@@ -118,9 +91,7 @@ class ScheduleService:
             )
 
             if existing:
-                raise ScheduleAlreadyExistsError(
-                    "Schedule with this configuration already exists"
-                )
+                raise ScheduleAlreadyExistsError("Schedule with this configuration already exists")
 
             # Calculate next execution
             next_run_at = self._calculate_next_run(
@@ -142,9 +113,7 @@ class ScheduleService:
                 "max_concurrency": schedule_data.max_concurrency or 1,
                 "timeout_seconds": schedule_data.timeout_seconds,
                 "retry_policy": (
-                    schedule_data.retry_policy.dict()
-                    if schedule_data.retry_policy
-                    else None
+                    schedule_data.retry_policy.dict() if schedule_data.retry_policy else None
                 ),
                 "tags": schedule_data.tags or {},
                 "next_run_at": next_run_at,
@@ -157,8 +126,7 @@ class ScheduleService:
             # Insert into MongoDB
             await self.schedules_collection.insert_one(schedule_doc)
             logger.info(
-                f"Schedule created: {schedule_id} for pipeline "
-                f"{schedule_data.pipeline_id}"
+                f"Schedule created: {schedule_id} for pipeline " f"{schedule_data.pipeline_id}"
             )
 
             schedule_doc.pop("_id", None)
@@ -173,15 +141,6 @@ class ScheduleService:
     async def get_schedule(self, schedule_id: str) -> ScheduleResponse:
         """
         Obtiene un schedule por ID.
-
-        Args:
-            schedule_id: ID del schedule
-
-        Returns:
-            ScheduleResponse con los datos del schedule
-
-        Raises:
-            ScheduleNotFoundError: Si el schedule no existe
         """
         schedule_doc = await self.schedules_collection.find_one({"id": schedule_id})
 
@@ -201,18 +160,7 @@ class ScheduleService:
     ) -> tuple[List[ScheduleResponse], int]:
         """
         List schedules with optional filters.
-
-        Args:
-            project_id: Filter by project
-            pipeline_id: Filter by pipeline
-            enabled: Filter by state (enabled/disabled)
-            limit: Maximum number of results
-            offset: Number of results to skip
-
-        Returns:
-            Tuple of (list of schedules, total records)
         """
-        # Build filter
         query = {}
 
         if project_id:
@@ -229,10 +177,7 @@ class ScheduleService:
 
         # Get page
         cursor = (
-            self.schedules_collection.find(query)
-            .sort("created_at", -1)
-            .skip(offset)
-            .limit(limit)
+            self.schedules_collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
         )
 
         schedules = []
@@ -255,18 +200,6 @@ class ScheduleService:
     ) -> ScheduleResponse:
         """
         Update an existing schedule.
-
-        Args:
-            schedule_id: ID of the schedule
-            update_data: Dictionary with fields to update
-            updated_by: User updating the schedule
-
-        Returns:
-            Updated ScheduleResponse
-
-        Raises:
-            ScheduleNotFoundError: If schedule does not exist
-            InvalidScheduleError: If data is invalid
         """
         try:
             # Get current schedule
@@ -308,15 +241,6 @@ class ScheduleService:
     async def delete_schedule(self, schedule_id: str) -> bool:
         """
         Delete a schedule.
-
-        Args:
-            schedule_id: ID of the schedule to delete
-
-        Returns:
-            True if successfully deleted
-
-        Raises:
-            ScheduleNotFoundError: If schedule does not exist
         """
         # Verify it exists
         await self.get_schedule(schedule_id)
@@ -330,15 +254,6 @@ class ScheduleService:
     async def enable_schedule(self, schedule_id: str) -> ScheduleResponse:
         """
         Enable a schedule.
-
-        Args:
-            schedule_id: ID of the schedule
-
-        Returns:
-            Updated ScheduleResponse
-
-        Raises:
-            ScheduleNotFoundError: If schedule does not exist
         """
         return await self.update_schedule(
             schedule_id,
@@ -349,15 +264,6 @@ class ScheduleService:
     async def disable_schedule(self, schedule_id: str) -> ScheduleResponse:
         """
         Disable a schedule.
-
-        Args:
-            schedule_id: ID of the schedule
-
-        Returns:
-            Updated ScheduleResponse
-
-        Raises:
-            ScheduleNotFoundError: If schedule does not exist
         """
         return await self.update_schedule(
             schedule_id,
@@ -372,20 +278,6 @@ class ScheduleService:
     ) -> Dict[str, Any]:
         """
         Create historical runs (backfill) for a schedule.
-
-        This method simulates past executions of the schedule.
-        Useful for filling history or recovering from failures.
-
-        Args:
-            schedule_id: ID of the schedule
-            count: Number of runs to create toward the past
-
-        Returns:
-            Dictionary with backfill information (runs_created, start_date, end_date)
-
-        Raises:
-            ScheduleNotFoundError: If schedule does not exist
-            InvalidScheduleError: If count is invalid
         """
         if count <= 0 or count > 100:
             raise InvalidScheduleError("Backfill count must be between 1 and 100")
@@ -402,9 +294,7 @@ class ScheduleService:
             now,
         )
 
-        logger.info(
-            f"Backfill for schedule {schedule_id}: " f"{len(run_dates)} historical runs"
-        )
+        logger.info(f"Backfill for schedule {schedule_id}: {len(run_dates)} historical runs")
 
         return {
             "schedule_id": schedule_id,
@@ -420,13 +310,6 @@ class ScheduleService:
     ) -> datetime:
         """
         Calculate next execution based on kind and expression.
-
-        Args:
-            kind: "CRON" or "INTERVAL"
-            expression: CRON or INTERVAL expression
-
-        Returns:
-            Next datetime for execution
         """
         now = datetime.now(timezone.utc)
 
@@ -477,15 +360,6 @@ class ScheduleService:
     ) -> List[datetime]:
         """
         Calculate dates for historical runs for backfill.
-
-        Args:
-            kind: "CRON" or "INTERVAL"
-            expression: CRON or INTERVAL expression
-            count: Number of historical runs
-            now: Current reference date
-
-        Returns:
-            List of historical datetimes
         """
         if kind == ScheduleKind.CRON.value:
             return self._calculate_historical_cron(expression, count, now)

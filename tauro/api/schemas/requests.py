@@ -1,13 +1,17 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from core.api.schemas.validators import (
+from tauro.api.schemas.validators import (
     validate_pipeline_id,
     validate_cron_expression,
     validate_json_params,
 )
-from tauro.orchest.models import (
+from tauro.api.orchest.models import (
     RunState as CoreRunState,
     ScheduleKind as CoreScheduleKind,
 )
@@ -29,12 +33,8 @@ class PipelineRunRequest(BaseModel):
     params: Optional[Dict[str, Any]] = Field(
         default=None, description="Optional parameters for execution"
     )
-    timeout: Optional[int] = Field(
-        default=None, gt=0, description="Timeout in seconds (optional)"
-    )
-    tags: Optional[Dict[str, str]] = Field(
-        default=None, description="Optional tags for execution"
-    )
+    timeout: Optional[int] = Field(default=None, gt=0, description="Timeout in seconds (optional)")
+    tags: Optional[Dict[str, str]] = Field(default=None, description="Optional tags for execution")
 
     _validate_params = validator("params", allow_reuse=True)(validate_json_params)
 
@@ -80,12 +80,8 @@ class ScheduleCreateRequest(BaseModel):
         default=None, description="Date/time of next run (optional)"
     )
 
-    _validate_pipeline_id = validator("pipeline_id", allow_reuse=True)(
-        validate_pipeline_id
-    )
-    _validate_retry_policy = validator("retry_policy", allow_reuse=True)(
-        validate_json_params
-    )
+    _validate_pipeline_id = validator("pipeline_id", allow_reuse=True)(validate_pipeline_id)
+    _validate_retry_policy = validator("retry_policy", allow_reuse=True)(validate_json_params)
 
     @validator("expression")
     def validate_expression(cls, v, values):
@@ -99,9 +95,7 @@ class ScheduleCreateRequest(BaseModel):
                     raise ValueError("Interval must be positive")
                 return v
             except ValueError:
-                raise ValueError(
-                    "INTERVAL expression must be a positive integer (seconds)"
-                )
+                raise ValueError("INTERVAL expression must be a positive integer (seconds)")
 
         elif kind == ScheduleKind.CRON:
             # validate_cron_expression expects only the expression string
@@ -133,9 +127,7 @@ class ScheduleUpdateRequest(BaseModel):
     retry_policy: Optional[Dict[str, Any]] = Field(default=None)
     next_run_at: Optional[datetime] = None
 
-    _validate_retry_policy = validator("retry_policy", allow_reuse=True)(
-        validate_json_params
-    )
+    _validate_retry_policy = validator("retry_policy", allow_reuse=True)(validate_json_params)
 
     class Config:
         schema_extra = {

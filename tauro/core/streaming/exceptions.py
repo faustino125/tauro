@@ -100,9 +100,7 @@ class StreamingValidationError(StreamingError):
         if actual:
             context["actual"] = actual
 
-        super().__init__(
-            message, error_code="VALIDATION_ERROR", context=context, **kwargs
-        )
+        super().__init__(message, error_code="VALIDATION_ERROR", context=context, **kwargs)
 
 
 class StreamingFormatNotSupportedError(StreamingError):
@@ -122,9 +120,7 @@ class StreamingFormatNotSupportedError(StreamingError):
         if supported_formats:
             context["supported_formats"] = supported_formats
 
-        super().__init__(
-            message, error_code="UNSUPPORTED_FORMAT", context=context, **kwargs
-        )
+        super().__init__(message, error_code="UNSUPPORTED_FORMAT", context=context, **kwargs)
 
 
 class StreamingQueryError(StreamingError):
@@ -173,9 +169,7 @@ class StreamingPipelineError(StreamingError):
         if failed_nodes:
             context["failed_nodes"] = failed_nodes
 
-        super().__init__(
-            message, error_code="PIPELINE_ERROR", context=context, **kwargs
-        )
+        super().__init__(message, error_code="PIPELINE_ERROR", context=context, **kwargs)
 
 
 class StreamingConnectionError(StreamingError):
@@ -195,9 +189,7 @@ class StreamingConnectionError(StreamingError):
         if endpoint:
             context["endpoint"] = endpoint
 
-        super().__init__(
-            message, error_code="CONNECTION_ERROR", context=context, **kwargs
-        )
+        super().__init__(message, error_code="CONNECTION_ERROR", context=context, **kwargs)
 
 
 class StreamingConfigurationError(StreamingError):
@@ -257,9 +249,7 @@ class StreamingResourceError(StreamingError):
         if resource_path:
             context["resource_path"] = resource_path
 
-        super().__init__(
-            message, error_code="RESOURCE_ERROR", context=context, **kwargs
-        )
+        super().__init__(message, error_code="RESOURCE_ERROR", context=context, **kwargs)
 
 
 # Error handling utilities

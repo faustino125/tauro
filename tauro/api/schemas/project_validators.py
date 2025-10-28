@@ -1,10 +1,9 @@
-"""Custom Business Logic Validators for Tauro API
-
-Validators for project, pipeline, and run business rules.
 """
-
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from typing import List, Dict, Any, Set
-from core.api.schemas.models import (
+from tauro.api.schemas.models import (
     ProjectCreate,
     PipelineConfig,
     NodeConfig,
@@ -64,9 +63,7 @@ class ProjectValidator:
         # Validate retry policy if present
         if settings.retry_policy:
             if settings.retry_policy.initial_delay > settings.retry_policy.max_delay:
-                raise ValueError(
-                    "retry_policy.initial_delay cannot be greater than max_delay"
-                )
+                raise ValueError("retry_policy.initial_delay cannot be greater than max_delay")
 
     @staticmethod
     def validate_pipelines(pipelines: List[PipelineConfig]) -> None:
@@ -211,8 +208,7 @@ class PipelineValidator:
                 for dep in node.dependencies:
                     if dep not in node_names:
                         raise ValueError(
-                            f"Node '{node.name}' references non-existent "
-                            f"dependency '{dep}'"
+                            f"Node '{node.name}' references non-existent " f"dependency '{dep}'"
                         )
 
     @staticmethod
@@ -312,8 +308,7 @@ class ScheduleValidator:
         parts = expression.split()
         if len(parts) != 5:
             raise ValueError(
-                "CRON expression must have exactly 5 parts "
-                "(minute hour day month day_of_week)"
+                "CRON expression must have exactly 5 parts " "(minute hour day month day_of_week)"
             )
 
         # Validate each part is valid (simplified check)
@@ -333,9 +328,7 @@ class ScheduleValidator:
                 else:
                     int(part)
             except ValueError:
-                raise ValueError(
-                    f"Invalid value in CRON expression at position {i}: {part}"
-                )
+                raise ValueError(f"Invalid value in CRON expression at position {i}: {part}")
 
     @staticmethod
     def validate_interval_expression(expression: str) -> None:
@@ -356,9 +349,7 @@ class ScheduleValidator:
         unit = expression[-1] if expression else ""
 
         if unit not in valid_units:
-            raise ValueError(
-                f"Interval unit must be one of {valid_units}: {expression}"
-            )
+            raise ValueError(f"Interval unit must be one of {valid_units}: {expression}")
 
         try:
             value = int(expression[:-1])

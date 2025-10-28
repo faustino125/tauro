@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
@@ -5,17 +9,17 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, Query, status
 from loguru import logger
 
-from core.api.core import get_config_service, get_current_settings, validate_identifier
-from core.api.core.responses import (
+from tauro.api.core import get_config_service, get_current_settings, validate_identifier
+from tauro.api.core.responses import (
     APIResponse,
     success_response,
     error_response,
 )
-from core.api.schemas import (
+from tauro.api.schemas import (
     ConfigContextResponse,
     ConfigVersionMetadataResponse,
 )
-from tauro.config.exceptions import ActiveConfigNotFound, ConfigRepositoryError
+from tauro.core.config.exceptions import ActiveConfigNotFound, ConfigRepositoryError
 
 projects_router = APIRouter(prefix="/projects", tags=["projects"])
 configs_router = APIRouter(prefix="/projects/{project_id}/config", tags=["config"])
@@ -34,9 +38,7 @@ def _ensure_service(settings, service) -> Any:
             message="Configuration endpoints are only available when CONFIG_SOURCE=mongo",
         )
     if service is None:
-        raise error_response(
-            code="SERVICE_UNAVAILABLE", message=ERROR_CONFIG_SERVICE_UNAVAILABLE
-        )
+        raise error_response(code="SERVICE_UNAVAILABLE", message=ERROR_CONFIG_SERVICE_UNAVAILABLE)
     return service
 
 
@@ -73,9 +75,7 @@ async def get_project_details(
 @configs_router.get("/context", response_model=APIResponse)
 async def get_active_context(
     project_id: str,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     service=Depends(get_config_service),
 ):
@@ -128,9 +128,7 @@ async def get_active_context(
 @config_versions_router.get("/active", response_model=APIResponse)
 async def get_active_version_metadata(
     project_id: str,
-    environment: Optional[str] = Query(
-        default=None, description=ENVIRONMENT_QUERY_DESCRIPTION
-    ),
+    environment: Optional[str] = Query(default=None, description=ENVIRONMENT_QUERY_DESCRIPTION),
     settings=Depends(get_current_settings),
     service=Depends(get_config_service),
 ):

@@ -1,9 +1,7 @@
 """
-Prometheus metrics instrumentation for Tauro API.
-
-Provides counters, histograms, and gauges for monitoring API performance.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from typing import Callable
 import time
 from functools import wraps

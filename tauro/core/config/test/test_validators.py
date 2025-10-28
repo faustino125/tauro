@@ -53,10 +53,7 @@ def test_ml_validator_strict_and_lenient(monkeypatch):
 
     # Ensure that at least one warning about missing required fields was emitted
     joined = " ".join(captured).lower()
-    assert (
-        "missing required fields" in joined
-        or "missing recommended spark ml config" in joined
-    )
+    assert "missing required fields" in joined or "missing recommended spark ml config" in joined
 
 
 def test_streaming_validator_node_missing():

@@ -1,8 +1,12 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from core.api.schemas.requests import RunState, ScheduleKind
+from tauro.api.schemas.requests import RunState, ScheduleKind
 
 
 # =============================================================================

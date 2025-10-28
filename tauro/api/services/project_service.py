@@ -1,26 +1,24 @@
 """
-ProjectService: Project management (CRUD + statistics)
-
-This service implements business logic for complete project management.
-It interacts with MongoDB through the persistence layer.
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 import logging
-from typing import List, Optional, Dict, Any
-from uuid import UUID, uuid4
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
+
+# Third-party
 from motor.motor_asyncio import AsyncDatabase  # type: ignore
 
-from core.api.schemas.models import (
+# Local
+from tauro.api.db.models import ProjectDocument
+from tauro.api.schemas.models import (
+    PipelineConfig,
     ProjectCreate,
     ProjectResponse,
-    ProjectUpdate,
-    GlobalSettings,
-    PipelineConfig,
 )
-from core.api.schemas.serializers import ProjectSerializer
-from core.api.db.models import ProjectDocument
-from core.api.schemas.project_validators import ProjectValidator
+from tauro.api.schemas.project_validators import ProjectValidator
+from tauro.api.schemas.serializers import ProjectSerializer
 
 
 logger = logging.getLogger(__name__)
@@ -47,12 +45,6 @@ class InvalidProjectError(Exception):
 class ProjectService:
     """
     Project management service.
-
-    Responsibilities:
-    - CRUD for projects (Create, Read, Update, Delete)
-    - Business logic validations
-    - Pipeline management within projects
-    - Statistics and reporting
     """
 
     def __init__(self, db: AsyncDatabase):
@@ -76,26 +68,13 @@ class ProjectService:
     ) -> ProjectResponse:
         """
         Create a new project.
-
-        Args:
-            project_data: Project data to create
-            created_by: User creating the project (email or ID)
-
-        Returns:
-            ProjectResponse with created project
-
-        Raises:
-            ProjectAlreadyExistsError: If project with name already exists
-            InvalidProjectError: If data is invalid
         """
         try:
             # Validate input data
             self.validator.validate_project_creation(project_data)
 
             # Verify that the name is unique
-            existing = await self.projects_collection.find_one(
-                {"name": project_data.name}
-            )
+            existing = await self.projects_collection.find_one({"name": project_data.name})
             if existing:
                 raise ProjectAlreadyExistsError(
                     f"Project with name '{project_data.name}' already exists"
@@ -132,15 +111,6 @@ class ProjectService:
     async def read_project(self, project_id: str) -> ProjectResponse:
         """
         Read a project by ID.
-
-        Args:
-            project_id: Project ID
-
-        Returns:
-            ProjectResponse with project data
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
         """
         project_doc = await self.projects_collection.find_one({"id": project_id})
 
@@ -159,18 +129,6 @@ class ProjectService:
     ) -> ProjectResponse:
         """
         Update an existing project.
-
-        Args:
-            project_id: ID of the project to update
-            update_data: Dictionary with fields to update
-            updated_by: User performing the update
-
-        Returns:
-            ProjectResponse with updated data
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
-            InvalidProjectError: If data is invalid
         """
         try:
             # Verify that the project exists
@@ -180,9 +138,7 @@ class ProjectService:
 
             # Validate name changes (must be unique)
             if "name" in update_data and update_data["name"] != project_doc["name"]:
-                existing = await self.projects_collection.find_one(
-                    {"name": update_data["name"]}
-                )
+                existing = await self.projects_collection.find_one({"name": update_data["name"]})
                 if existing:
                     raise InvalidProjectError(
                         f"Project with name '{update_data['name']}' already exists"
@@ -217,15 +173,6 @@ class ProjectService:
     async def delete_project(self, project_id: str) -> bool:
         """
         Delete a project (soft delete: mark as deleted).
-
-        Args:
-            project_id: ID of the project to delete
-
-        Returns:
-            True if successfully deleted
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
         """
         # Verify it exists
         project_doc = await self.projects_collection.find_one({"id": project_id})
@@ -256,16 +203,6 @@ class ProjectService:
     ) -> tuple[List[ProjectResponse], int]:
         """
         List projects with optional filters.
-
-        Args:
-            status: Filter by status (active, archived, draft)
-            tags: Filter by tags (key:value pairs)
-            limit: Maximum number of results
-            offset: Number of results to skip
-            created_by: Filter by creator user
-
-        Returns:
-            Tuple of (list of projects, total records)
         """
         # Build filter
         query = {}
@@ -285,10 +222,7 @@ class ProjectService:
 
         # Get page
         cursor = (
-            self.projects_collection.find(query)
-            .sort("created_at", -1)
-            .skip(offset)
-            .limit(limit)
+            self.projects_collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
         )
 
         projects = []
@@ -306,23 +240,12 @@ class ProjectService:
     async def get_project_stats(self, project_id: str) -> Dict[str, Any]:
         """
         Get project statistics.
-
-        Args:
-            project_id: Project ID
-
-        Returns:
-            Dictionary with statistics
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
         """
         # Verify it exists
         project = await self.read_project(project_id)
 
         # Count runs
-        total_runs = await self.pipeline_runs_collection.count_documents(
-            {"project_id": project_id}
-        )
+        total_runs = await self.pipeline_runs_collection.count_documents({"project_id": project_id})
 
         # Runs by state
         run_states = await self.pipeline_runs_collection.aggregate(
@@ -362,24 +285,13 @@ class ProjectService:
     ) -> ProjectResponse:
         """
         Add a new pipeline to a project.
-
-        Args:
-            project_id: Project ID
-            pipeline_config: Pipeline configuration
-
-        Returns:
-            Updated ProjectResponse
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
-            InvalidProjectError: If configuration is invalid
         """
         # Verify it exists
         project = await self.read_project(project_id)
 
         # Validate configuration
         try:
-            from core.api.schemas.project_validators import PipelineValidator
+            from tauro.api.schemas.project_validators import PipelineValidator
 
             validator = PipelineValidator()
             validator.validate_pipeline(pipeline_config)
@@ -389,9 +301,7 @@ class ProjectService:
         # Verify that no pipeline exists with the same name
         existing_pipelines = project.pipelines or []
         if any(p.name == pipeline_config.name for p in existing_pipelines):
-            raise InvalidProjectError(
-                f"Pipeline with name '{pipeline_config.name}' already exists"
-            )
+            raise InvalidProjectError(f"Pipeline with name '{pipeline_config.name}' already exists")
 
         # Add pipeline
         pipelines_updated = [p.dict() for p in existing_pipelines]
@@ -411,17 +321,6 @@ class ProjectService:
     ) -> ProjectResponse:
         """
         Remove a pipeline from a project.
-
-        Args:
-            project_id: Project ID
-            pipeline_id: ID of the pipeline to remove
-
-        Returns:
-            Updated ProjectResponse
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
-            InvalidProjectError: If pipeline does not exist
         """
         # Verify it exists
         project = await self.read_project(project_id)
@@ -454,18 +353,6 @@ class ProjectService:
     ) -> ProjectResponse:
         """
         Duplicate an existing project.
-
-        Args:
-            project_id: ID of the project to duplicate
-            new_name: Name of the new project
-            created_by: User creating the project
-
-        Returns:
-            ProjectResponse with the new project
-
-        Raises:
-            ProjectNotFoundError: If project does not exist
-            ProjectAlreadyExistsError: If new name already exists
         """
         # Get original project
         original = await self.read_project(project_id)

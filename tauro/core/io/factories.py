@@ -4,8 +4,8 @@ For licensing information, see the LICENSE file in the project root
 """
 from typing import Any, Dict, Protocol
 
-from tauro.io.constants import SupportedFormats
-from tauro.io.exceptions import FormatNotSupportedError
+from tauro.core.io.constants import SupportedFormats
+from tauro.core.io.exceptions import FormatNotSupportedError
 
 
 class DataReader(Protocol):

@@ -1,28 +1,22 @@
 """
-Scheduling Router - Pipeline Schedule Management
-
-Endpoints para gestionar programaciones de pipelines:
-- Crear, listar, obtener schedules
-- Pausar/reanudar schedules
-- Backfill de runs
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from fastapi import APIRouter, Depends, status, Query
 from typing import Optional
 from loguru import logger
 
-from core.api.core import get_orchestrator_store, get_config_manager
-from core.api.core.responses import (
+from tauro.api.core import get_orchestrator_store, get_config_manager
+from tauro.api.core.responses import (
     APIResponse,
     ListResponse,
     success_response,
     error_response,
     list_response,
 )
-from core.api.schemas import (
+from tauro.api.schemas import (
     ScheduleCreateRequest,
     ScheduleUpdateRequest,
-    ScheduleResponse,
 )
 
 router = APIRouter(prefix="/schedules", tags=["scheduling"])
@@ -33,9 +27,7 @@ def _schedule_to_response(schedule) -> dict:
     return {
         "id": schedule.id,
         "pipeline_id": schedule.pipeline_id,
-        "kind": schedule.kind.value
-        if hasattr(schedule.kind, "value")
-        else schedule.kind,
+        "kind": schedule.kind.value if hasattr(schedule.kind, "value") else schedule.kind,
         "expression": schedule.expression,
         "enabled": schedule.enabled,
         "max_concurrency": schedule.max_concurrency,
@@ -68,9 +60,6 @@ async def create_schedule(
 ):
     """
     Create a new schedule.
-
-    Create a schedule to automatically execute a pipeline.
-    Validates that the pipeline exists before creating the schedule.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -128,8 +117,6 @@ async def list_schedules(
 ):
     """
     Listar schedules.
-
-    Retorna la lista de schedules configurados, con filtros opcionales.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -206,8 +193,6 @@ async def update_schedule(
 ):
     """
     Update a schedule.
-
-    Allow modifying the configuration of an existing schedule.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -266,8 +251,6 @@ async def delete_schedule(
 ):
     """
     Eliminar un schedule.
-
-    Elimina permanentemente un schedule del sistema.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -281,9 +264,7 @@ async def delete_schedule(
             )
 
         logger.info(f"Schedule deleted: {schedule_id}")
-        return success_response(
-            {"message": f"Schedule {schedule_id} deleted successfully"}
-        )
+        return success_response({"message": f"Schedule {schedule_id} deleted successfully"})
 
     except Exception as e:
         logger.error(f"Error deleting schedule {schedule_id}: {e}")
@@ -306,8 +287,6 @@ async def pause_schedule(
 ):
     """
     Pausar un schedule.
-
-    Deshabilita temporalmente un schedule sin eliminarlo.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -322,9 +301,7 @@ async def pause_schedule(
             )
 
         logger.info(f"Schedule paused: {schedule_id}")
-        return success_response(
-            {"message": f"Schedule {schedule_id} paused successfully"}
-        )
+        return success_response({"message": f"Schedule {schedule_id} paused successfully"})
 
     except Exception as e:
         logger.error(f"Error pausing schedule {schedule_id}: {e}")
@@ -347,8 +324,6 @@ async def resume_schedule(
 ):
     """
     Reanudar un schedule.
-
-    Habilita un schedule previamente pausado.
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -363,9 +338,7 @@ async def resume_schedule(
             )
 
         logger.info(f"Schedule resumed: {schedule_id}")
-        return success_response(
-            {"message": f"Schedule {schedule_id} resumed successfully"}
-        )
+        return success_response({"message": f"Schedule {schedule_id} resumed successfully"})
 
     except Exception as e:
         logger.error(f"Error resuming schedule {schedule_id}: {e}")
@@ -384,32 +357,11 @@ async def resume_schedule(
 @router.post("/{schedule_id}/backfill", response_model=APIResponse)
 async def backfill_schedule(
     schedule_id: str,
-    count: int = Query(
-        10, ge=1, le=100, description="Number of historical runs to create"
-    ),
+    count: int = Query(10, ge=1, le=100, description="Number of historical runs to create"),
     store=Depends(get_orchestrator_store),
 ):
     """
     Create N historical runs for a schedule (backfill).
-
-    Useful for recovering missed runs due to downtime or for testing.
-
-    Query parameters:
-    - count: Number of historical runs to create (default: 10, max: 100)
-
-    Example: POST /api/v1/schedules/{schedule_id}/backfill?count=20
-
-    Response:
-    ```json
-    {
-        "status": "success",
-        "data": {
-            "schedule_id": "uuid",
-            "runs_created": 20,
-            "created_run_ids": ["run-1", "run-2", ...]
-        }
-    }
-    ```
     """
     if not store:
         return error_response(code="STORE_UNAVAILABLE", message=ERROR_STORE_UNAVAILABLE)
@@ -439,9 +391,7 @@ async def backfill_schedule(
                 logger.warning(f"Error creating backfill run {i}: {e}")
                 continue
 
-        logger.info(
-            f"Backfill completed: {len(run_ids)} runs created for schedule {schedule_id}"
-        )
+        logger.info(f"Backfill completed: {len(run_ids)} runs created for schedule {schedule_id}")
 
         return success_response(
             {

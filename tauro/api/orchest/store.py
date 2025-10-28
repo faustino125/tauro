@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 
 import gzip
@@ -16,7 +20,7 @@ from pymongo.collection import Collection  # type: ignore
 from pymongo.errors import PyMongoError  # type: ignore
 
 from .db import close_client, get_collection, ping_database
-from tauro.orchest.models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
+from tauro.api.orchest.models import PipelineRun, TaskRun, RunState, Schedule, ScheduleKind
 
 try:
     from croniter import croniter
@@ -24,9 +28,7 @@ try:
     HAS_CRONITER = True
 except ImportError:
     HAS_CRONITER = False
-    logger.warning(
-        "croniter not installed, cron schedules will use placeholder behavior"
-    )
+    logger.warning("croniter not installed, cron schedules will use placeholder behavior")
 
 
 class OrchestratorStore:
@@ -116,9 +118,7 @@ class OrchestratorStore:
             "run_result": threading.RLock(),
         }
 
-        logger.debug(
-            f"OrchestratorStore initialized with MongoDB for scope {self._scope}"
-        )
+        logger.debug(f"OrchestratorStore initialized with MongoDB for scope {self._scope}")
 
     def _init_db(self) -> None:
         """Ensure MongoDB collections and indexes are available."""
@@ -128,9 +128,7 @@ class OrchestratorStore:
             for index_spec in cfg.get("indexes", []):
                 try:
                     collection.create_index(index_spec, background=True)
-                except (
-                    PyMongoError
-                ):  # pragma: no cover - index creation errors are logged
+                except PyMongoError:  # pragma: no cover - index creation errors are logged
                     logger.exception(
                         "Failed to ensure index %s for collection %s",
                         index_spec,
@@ -201,9 +199,7 @@ class OrchestratorStore:
             except Exception:
                 return None
 
-    def _build_document(
-        self, entity: str, entity_id: str, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _build_document(self, entity: str, entity_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         doc = dict(data)
         key = self._primary_key(entity)
         if key not in doc or doc[key] in (None, ""):
@@ -246,9 +242,7 @@ class OrchestratorStore:
         key_value = self._normalize_key(id)
         collection = self._get_collection(entity)
         try:
-            doc = collection.find_one(
-                {"_id": key_value}, max_time_ms=5000
-            )  # 5 second timeout
+            doc = collection.find_one({"_id": key_value}, max_time_ms=5000)  # 5 second timeout
         except PyMongoError:
             logger.exception("Failed to read entity '%s' with id '%s'", entity, id)
             raise
@@ -261,9 +255,7 @@ class OrchestratorStore:
         """List all entities from MongoDB."""
         collection = self._get_collection(entity)
         try:
-            docs = collection.find(
-                max_time_ms=10000
-            )  # 10 second timeout for list operations
+            docs = collection.find(max_time_ms=10000)  # 10 second timeout for list operations
         except PyMongoError:
             logger.exception("Failed to list entities for '%s'", entity)
             raise
@@ -333,9 +325,7 @@ class OrchestratorStore:
                     "status": "unhealthy",
                     "details": f"Access failed: {str(e)}",
                 }
-                health_status["issues"].append(
-                    f"Collection {entity} inaccessible: {str(e)}"
-                )
+                health_status["issues"].append(f"Collection {entity} inaccessible: {str(e)}")
         return collections_healthy
 
     def _check_locks(self, health_status: Dict[str, Any]) -> bool:
@@ -409,19 +399,14 @@ class OrchestratorStore:
             return None
         try:
             params_val = row.get("params")
-            params = (
-                json.loads(params_val)
-                if isinstance(params_val, str)
-                else (params_val or {})
-            )
+            params = json.loads(params_val) if isinstance(params_val, str) else (params_val or {})
         except Exception:
             params = {}
         return PipelineRun(
             id=row.get("id", ""),
             pipeline_id=row.get("pipeline_id", ""),
             state=RunState(row.get("state", RunState.PENDING.value)),
-            created_at=self._parse_dt(row.get("created_at"))
-            or datetime.now(timezone.utc),
+            created_at=self._parse_dt(row.get("created_at")) or datetime.now(timezone.utc),
             started_at=self._parse_dt(row.get("started_at")),
             finished_at=self._parse_dt(row.get("finished_at")),
             params=params,
@@ -580,9 +565,7 @@ class OrchestratorStore:
             raise ValueError("pipeline_id must be a non-empty string")
 
         if not isinstance(kind, ScheduleKind):
-            raise ValueError(
-                f"kind must be a ScheduleKind enum value, got {type(kind)}"
-            )
+            raise ValueError(f"kind must be a ScheduleKind enum value, got {type(kind)}")
 
         if not expression or not isinstance(expression, str):
             raise ValueError("expression must be a non-empty string")
@@ -663,14 +646,10 @@ class OrchestratorStore:
         delay = retry_policy.get("delay", 0)
 
         if not isinstance(retries, int) or retries < 0:
-            raise ValueError(
-                f"retry_policy.retries must be a non-negative integer, got {retries}"
-            )
+            raise ValueError(f"retry_policy.retries must be a non-negative integer, got {retries}")
 
         if not isinstance(delay, (int, float)) or delay < 0:
-            raise ValueError(
-                f"retry_policy.delay must be a non-negative number, got {delay}"
-            )
+            raise ValueError(f"retry_policy.delay must be a non-negative number, got {delay}")
 
         if retries > 10:
             logger.warning(f"High retry count: {retries}")
@@ -696,11 +675,7 @@ class OrchestratorStore:
     def _parse_retry_policy_value(self, r: Dict[str, Any]) -> Dict[str, Any]:
         retry_val = r.get("retry_policy")
         try:
-            return (
-                json.loads(retry_val)
-                if isinstance(retry_val, str)
-                else (retry_val or {})
-            )
+            return json.loads(retry_val) if isinstance(retry_val, str) else (retry_val or {})
         except Exception:
             return {"retries": 0, "delay": 0}
 
@@ -716,10 +691,8 @@ class OrchestratorStore:
             retry_policy=retry_policy or {"retries": 0, "delay": 0},
             timeout_seconds=row.get("timeout_seconds"),
             next_run_at=self._parse_dt(row.get("next_run_at")),
-            created_at=self._parse_dt(row.get("created_at"))
-            or datetime.now(timezone.utc),
-            updated_at=self._parse_dt(row.get("updated_at"))
-            or datetime.now(timezone.utc),
+            created_at=self._parse_dt(row.get("created_at")) or datetime.now(timezone.utc),
+            updated_at=self._parse_dt(row.get("updated_at")) or datetime.now(timezone.utc),
         )
 
     def list_schedules(
@@ -831,9 +804,7 @@ class OrchestratorStore:
         return base + timedelta(seconds=interval_seconds)
 
     # ---------- Dead letter queue ----------
-    def add_schedule_failure_to_dlq(
-        self, schedule_id: str, pipeline_id: str, error: str
-    ) -> None:
+    def add_schedule_failure_to_dlq(self, schedule_id: str, pipeline_id: str, error: str) -> None:
         rec = {
             "id": str(uuid4()),
             "schedule_id": schedule_id,
@@ -851,9 +822,7 @@ class OrchestratorStore:
             rows = [r for r in rows if r.get("schedule_id") == schedule_id]
 
         def _k(r: Dict[str, Any]):
-            dt = self._parse_dt(r.get("created_at")) or datetime.min.replace(
-                tzinfo=timezone.utc
-            )
+            dt = self._parse_dt(r.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
             return dt
 
         rows.sort(key=_k, reverse=True)
@@ -878,9 +847,7 @@ class OrchestratorStore:
                 pr = self.get_pipeline_run(r.get("id", ""))
                 if pr:
                     stuck.append(pr)
-        stuck.sort(
-            key=lambda pr: pr.started_at or datetime.min.replace(tzinfo=timezone.utc)
-        )
+        stuck.sort(key=lambda pr: pr.started_at or datetime.min.replace(tzinfo=timezone.utc))
         return stuck[:max_runs]
 
     # ---------- Maintenance ----------
@@ -914,9 +881,7 @@ class OrchestratorStore:
             )
             result["pipeline_runs"] = pipeline_delete.deleted_count
         except PyMongoError:
-            logger.exception(
-                "Failed to cleanup pipeline runs older than %s", cutoff_iso
-            )
+            logger.exception("Failed to cleanup pipeline runs older than %s", cutoff_iso)
             result["pipeline_runs"] = -1  # Indicate error
 
         try:
@@ -1061,9 +1026,7 @@ class OrchestratorStore:
 
         if execution_time:
             current_avg = float(row.get("avg_execution_time_seconds", 0) or 0)
-            new_avg = (
-                (current_avg * int(row.get("total_runs", 0))) + execution_time
-            ) / total_runs
+            new_avg = ((current_avg * int(row.get("total_runs", 0))) + execution_time) / total_runs
         else:
             new_avg = float(row.get("avg_execution_time_seconds", 0) or 0)
 
@@ -1092,9 +1055,7 @@ class OrchestratorStore:
 
         execution_time: Optional[float] = None
         if pipeline_run.started_at and pipeline_run.finished_at:
-            execution_time = (
-                pipeline_run.finished_at - pipeline_run.started_at
-            ).total_seconds()
+            execution_time = (pipeline_run.finished_at - pipeline_run.started_at).total_seconds()
 
         row = self._read("pipeline_metrics", pipeline_run.pipeline_id)
         if row is None:
@@ -1102,9 +1063,7 @@ class OrchestratorStore:
         else:
             self._update_pipeline_metrics_row(row, pipeline_run, execution_time)
 
-    def get_pipeline_metrics(
-        self, pipeline_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    def get_pipeline_metrics(self, pipeline_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if pipeline_id:
             row = self._read("pipeline_metrics", pipeline_id)
             return [row] if row else []
@@ -1163,9 +1122,7 @@ class OrchestratorStore:
             state = RunState.__members__.get(status_up, RunState.PENDING)
         self.update_pipeline_run_state(run_id, state)
 
-    def update_run_result(
-        self, run_id: str, result: Any, status: str = "success"
-    ) -> None:
+    def update_run_result(self, run_id: str, result: Any, status: str = "success") -> None:
         payload = {
             "run_id": run_id,
             "status": status,

@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from loguru import logger  # type: ignore
 
-from tauro.io.exceptions import ConfigurationError, DataValidationError
+from tauro.core.io.exceptions import ConfigurationError, DataValidationError
 
 DATAFRAME_EMPTY_MSG = "DataFrame cannot be empty"
 DATAFRAME_EMPTY = "DataFrame is empty"
@@ -35,7 +35,9 @@ class ConfigValidator(BaseValidator):
 
         missing_fields = [field for field in required_fields if not config.get(field)]
         if missing_fields:
-            error_msg = f"Required fields not specified for {config_type}: {', '.join(missing_fields)}"
+            error_msg = (
+                f"Required fields not specified for {config_type}: {', '.join(missing_fields)}"
+            )
             raise ConfigurationError(error_msg)
 
         logger.debug(f"Configuration for {config_type} successfully validated")

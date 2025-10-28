@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
+"""
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
@@ -66,9 +70,7 @@ class Schedule:
     expression: str = "60"  # "60" intervalos (segundos) o "*/5 * * * *" cron
     enabled: bool = True
     max_concurrency: int = 1
-    retry_policy: Dict[str, Any] = field(
-        default_factory=lambda: {"retries": 0, "delay": 0}
-    )
+    retry_policy: Dict[str, Any] = field(default_factory=lambda: {"retries": 0, "delay": 0})
     timeout_seconds: Optional[int] = None
     next_run_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

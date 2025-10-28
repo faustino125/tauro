@@ -31,17 +31,17 @@ try:
 except ImportError:
     pl = None
 
-from tauro.io.base import BaseIO
-from tauro.io.constants import (
+from tauro.core.io.base import BaseIO
+from tauro.core.io.constants import (
     DEFAULT_VACUUM_RETENTION_HOURS,
     MIN_VACUUM_RETENTION_HOURS,
     SupportedFormats,
     WriteMode,
     CLOUD_URI_PREFIXES,
 )
-from tauro.io.exceptions import ConfigurationError, WriteOperationError
-from tauro.io.factories import WriterFactory
-from tauro.io.validators import ConfigValidator, DataValidator
+from tauro.core.io.exceptions import ConfigurationError, WriteOperationError
+from tauro.core.io.factories import WriterFactory
+from tauro.core.io.validators import ConfigValidator, DataValidator
 
 
 @dataclass
@@ -141,11 +141,7 @@ class DataFrameManager(BaseIO):
 
         if pd and isinstance(df, pd.DataFrame):
             logger.info("Converting pandas DataFrame to Spark")
-            return (
-                spark.createDataFrame(df, schema=schema)
-                if schema
-                else spark.createDataFrame(df)
-            )
+            return spark.createDataFrame(df, schema=schema) if schema else spark.createDataFrame(df)
 
         if pl and isinstance(df, pl.DataFrame):
             logger.info("Converting Polars DataFrame to Spark")
@@ -172,9 +168,7 @@ class DataFrameManager(BaseIO):
 
         module = getattr(type(df), "__module__", "")
         if "pyspark.sql" in module:
-            return hasattr(df, "schema") and (
-                hasattr(df, "write") or hasattr(df, "toPandas")
-            )
+            return hasattr(df, "schema") and (hasattr(df, "write") or hasattr(df, "toPandas"))
 
         return False
 
@@ -194,18 +188,14 @@ class PathManager(BaseIO):
         base_path = self._get_base_path()
         return self._build_path(base_path, components, env)
 
-    def _extract_components(
-        self, dataset_config: Dict[str, Any], out_key: str
-    ) -> PathComponents:
+    def _extract_components(self, dataset_config: Dict[str, Any], out_key: str) -> PathComponents:
         """Extract and validate path components."""
         parsed_key = self.config_validator.validate_output_key(out_key)
 
         return PathComponents(
             table_name=dataset_config.get("table_name", parsed_key["table_name"]),
             schema=dataset_config.get("schema", parsed_key["schema"]),
-            sub_folder=dataset_config.get(
-                "sub_folder", parsed_key.get("sub_folder", "")
-            ),
+            sub_folder=dataset_config.get("sub_folder", parsed_key.get("sub_folder", "")),
         )
 
     def _get_base_path(self) -> str:
@@ -220,9 +210,7 @@ class PathManager(BaseIO):
     ) -> str:
         """Build final path from components."""
         execution_mode = self._get_execution_mode()
-        should_include_env = (
-            execution_mode in ("local", "databricks", "distributed") and env
-        )
+        should_include_env = execution_mode in ("local", "databricks", "distributed") and env
 
         parts = []
         if should_include_env:
@@ -273,10 +261,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         spark = self._ctx_spark()
         if not spark:
             return False
-        return (
-            spark.conf.get("spark.databricks.unityCatalog.enabled", "false").lower()
-            == "true"
-        )
+        return spark.conf.get("spark.databricks.unityCatalog.enabled", "false").lower() == "true"
 
     def is_enabled(self) -> bool:
         """Public check for UC availability."""
@@ -382,7 +367,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
             "options": config.options,
         }
 
-        from tauro.io.factories import WriterFactory
+        from tauro.core.io.factories import WriterFactory
 
         writer = WriterFactory(self._context).get_writer("delta")
         writer.write(df, location, writer_config)
@@ -414,9 +399,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         quoted_name = self.quote_table_name(full_table_name)
 
         self._add_comment_if_needed(spark, quoted_name, full_table_name, config)
-        self._optimize_if_needed(
-            spark, quoted_name, full_table_name, config, start_date, end_date
-        )
+        self._optimize_if_needed(spark, quoted_name, full_table_name, config, start_date, end_date)
         self._vacuum_if_needed(spark, quoted_name, full_table_name, config)
 
     def _add_comment_if_needed(
@@ -430,7 +413,9 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         if not (config.description or config.partition_col):
             return
 
-        comment = f"{config.description or 'Data table'}. Partition: {config.partition_col or 'N/A'}"
+        comment = (
+            f"{config.description or 'Data table'}. Partition: {config.partition_col or 'N/A'}"
+        )
         escaped_comment = self.escape_string(comment)
         try:
             spark.sql(f"COMMENT ON TABLE {quoted_name} IS '{escaped_comment}'")
@@ -549,9 +534,7 @@ class DataOutputManager(BaseIO):
             output_config.get("format") == SupportedFormats.UNITY_CATALOG.value
             and self.uc_manager.is_enabled()
         ):
-            self._write_unity_catalog(
-                df, output_config, start_date, end_date, out_key, env
-            )
+            self._write_unity_catalog(df, output_config, start_date, end_date, out_key, env)
         else:
             self._write_traditional(df, output_config, out_key, env)
 
@@ -570,9 +553,7 @@ class DataOutputManager(BaseIO):
         uc_config = UnityCatalogConfig(
             catalog_name=config["catalog_name"].format(environment=env),
             schema=config.get("schema", parsed["schema"]).format(environment=env),
-            table_name=config.get("table_name", parsed["table_name"]).format(
-                environment=env
-            ),
+            table_name=config.get("table_name", parsed["table_name"]).format(environment=env),
             uc_table_mode=config.get("uc_table_mode", "external"),
             write_mode=config.get("write_mode", WriteMode.OVERWRITE.value),
             overwrite_schema=config.get("overwrite_schema", True),
@@ -586,17 +567,13 @@ class DataOutputManager(BaseIO):
 
         if config.get("overwrite_strategy", "").lower() == "replacewhere":
             if not (start_date and end_date):
-                raise ConfigurationError(
-                    "replaceWhere requires start_date and end_date"
-                )
+                raise ConfigurationError("replaceWhere requires start_date and end_date")
             validate_date_range(start_date, end_date)
             uc_config.options[
                 "replaceWhere"
             ] = f"{uc_config.partition_col} BETWEEN '{start_date}' AND '{end_date}'"
 
-        full_table_name = (
-            f"{uc_config.catalog_name}.{uc_config.schema}.{uc_config.table_name}"
-        )
+        full_table_name = f"{uc_config.catalog_name}.{uc_config.schema}.{uc_config.table_name}"
 
         base_location = config.get("output_path") or self._ctx_get("output_path", "")
         self.uc_manager.ensure_schema_exists(
@@ -618,15 +595,11 @@ class DataOutputManager(BaseIO):
                     parsed.get("sub_folder", ""),
                     uc_config.table_name,
                 )
-                self.uc_manager.write_external_table(
-                    df, full_table_name, table_location, uc_config
-                )
+                self.uc_manager.write_external_table(df, full_table_name, table_location, uc_config)
 
             logger.info(f"UC write completed in {time.time() - start:.2f}s")
 
-            self.uc_manager.post_write_operations(
-                full_table_name, uc_config, start_date, end_date
-            )
+            self.uc_manager.post_write_operations(full_table_name, uc_config, start_date, end_date)
 
         except Exception as e:
             raise WriteOperationError(f"Unity Catalog write failed: {e}") from e
@@ -670,9 +643,7 @@ class DataOutputManager(BaseIO):
                     "artifact": artifact["name"],
                     "version": model_version,
                     "node": node.get("name"),
-                    "saved_at": datetime.now(timezone.utc)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    "saved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 }
 
                 (artifact_path / "metadata.json").write_text(
@@ -681,9 +652,7 @@ class DataOutputManager(BaseIO):
                 logger.info(f"Artifact '{artifact['name']}' saved to: {artifact_path}")
 
             except Exception as e:
-                logger.error(
-                    f"Error saving artifact {artifact.get('name', 'unknown')}: {e}"
-                )
+                logger.error(f"Error saving artifact {artifact.get('name', 'unknown')}: {e}")
 
     def _get_output_keys(self, node: Dict[str, Any]) -> List[str]:
         """Get and validate output keys from node."""

@@ -7,10 +7,10 @@ from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
-from tauro.io.base import BaseIO
-from tauro.io.exceptions import ConfigurationError, ReadOperationError
-from tauro.io.factories import ReaderFactory
-from tauro.io.constants import CLOUD_URI_PREFIXES
+from tauro.core.io.base import BaseIO
+from tauro.core.io.exceptions import ConfigurationError, ReadOperationError
+from tauro.core.io.factories import ReaderFactory
+from tauro.core.io.constants import CLOUD_URI_PREFIXES
 
 
 class InputLoadingStrategy(BaseIO):
@@ -22,9 +22,7 @@ class InputLoadingStrategy(BaseIO):
 
     def load_inputs(self, input_keys: List[str], fail_fast: bool = True) -> List[Any]:
         """Load inputs using the appropriate strategy."""
-        raise NotImplementedError(
-            "Subclasses must implement load_inputs method"
-        ) from None
+        raise NotImplementedError("Subclasses must implement load_inputs method") from None
 
 
 class SequentialLoadingStrategy(InputLoadingStrategy):
@@ -34,9 +32,7 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
         """Load datasets sequentially with proper error handling."""
         results: List[Any] = []
         errors: List[str] = []
-        fill_none = bool(
-            self._ctx_get("global_settings", {}).get("fill_none_on_error", False)
-        )
+        fill_none = bool(self._ctx_get("global_settings", {}).get("fill_none_on_error", False))
 
         logger.info(f"Loading {len(input_keys)} datasets sequentially")
 
@@ -83,9 +79,7 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
                 return reader.read(filepath, config)
 
         except Exception as e:
-            raise ReadOperationError(
-                f"Failed to load dataset '{input_key}': {e}"
-            ) from e
+            raise ReadOperationError(f"Failed to load dataset '{input_key}': {e}") from e
 
     def _get_dataset_config(self, input_key: str) -> Dict[str, Any]:
         """Get configuration for a dataset with validation."""
@@ -114,9 +108,7 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
         try:
             path = config.get("filepath")
             if not path:
-                raise ConfigurationError(
-                    f"Missing filepath for dataset '{input_key}'"
-                ) from None
+                raise ConfigurationError(f"Missing filepath for dataset '{input_key}'") from None
 
             if any(str(path).startswith(pfx) for pfx in CLOUD_URI_PREFIXES):
                 return str(path)
@@ -142,15 +134,11 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
                 return self._handle_glob_pattern(p, path)
 
             if not p.exists():
-                raise FileNotFoundError(
-                    f"File '{path}' does not exist in local mode"
-                ) from None
+                raise FileNotFoundError(f"File '{path}' does not exist in local mode") from None
 
             return str(path)
         except Exception as e:
-            raise ConfigurationError(
-                f"Failed to handle local filepath '{path}': {e}"
-            ) from e
+            raise ConfigurationError(f"Failed to handle local filepath '{path}': {e}") from e
 
     def _contains_glob_pattern(self, path: str) -> bool:
         """Check if the path contains glob pattern characters."""
@@ -173,9 +161,7 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
                     f"Glob pattern '{path}' matched no files in local mode"
                 ) from None
         except Exception as e:
-            raise ConfigurationError(
-                f"Failed to process glob pattern '{path}': {e}"
-            ) from e
+            raise ConfigurationError(f"Failed to process glob pattern '{path}': {e}") from e
 
 
 class InputLoader(BaseIO):
@@ -196,17 +182,13 @@ class InputLoader(BaseIO):
                 logger.warning(f"Node '{node_name}' has no defined inputs")
                 return []
 
-            loading_strategy = SequentialLoadingStrategy(
-                self.context, self.reader_factory
-            )
+            loading_strategy = SequentialLoadingStrategy(self.context, self.reader_factory)
             fail_fast = node.get("fail_fast", True)
 
             return loading_strategy.load_inputs(input_keys, fail_fast)
         except Exception as e:
             node_name = node.get("name", "unnamed")
-            raise ReadOperationError(
-                f"Failed to load inputs for node '{node_name}': {e}"
-            ) from e
+            raise ReadOperationError(f"Failed to load inputs for node '{node_name}': {e}") from e
 
     def _get_input_keys(self, node: Dict[str, Any]) -> List[str]:
         """Get input keys from a node configuration with validation."""
@@ -230,9 +212,7 @@ class InputLoader(BaseIO):
                 ) from None
         except Exception as e:
             node_name = node.get("name", "unnamed")
-            raise ConfigurationError(
-                f"Failed to get input keys for node '{node_name}': {e}"
-            ) from e
+            raise ConfigurationError(f"Failed to get input keys for node '{node_name}': {e}") from e
 
     def _get_configured_formats(self) -> Set[str]:
         """Inspect input_config and return the set of formats in use."""
@@ -246,9 +226,7 @@ class InputLoader(BaseIO):
                     if fmt:
                         formats.add(fmt)
             except Exception:
-                logger.debug(
-                    f"Skipping format detection for malformed input_config key: {key}"
-                )
+                logger.debug(f"Skipping format detection for malformed input_config key: {key}")
 
         return formats
 
@@ -271,9 +249,7 @@ class InputLoader(BaseIO):
                 self._try_import_xml()
                 logger.debug("XML format dependencies verified")
             except Exception as e:
-                logger.warning(
-                    f"XML format configured but dependencies not available: {e}"
-                )
+                logger.warning(f"XML format configured but dependencies not available: {e}")
 
     def _try_import_delta(self) -> None:
         """Verify Delta Lake dependencies are available."""

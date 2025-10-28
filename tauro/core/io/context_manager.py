@@ -5,7 +5,7 @@ For licensing information, see the LICENSE file in the project root
 from typing import Any, Optional
 from loguru import logger  # type: ignore
 
-from tauro.io.exceptions import ConfigurationError
+from tauro.core.io.exceptions import ConfigurationError
 
 
 class ContextManager:

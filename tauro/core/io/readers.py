@@ -7,10 +7,9 @@ from typing import Any, Dict
 
 from loguru import logger  # type: ignore
 
-from tauro.io.base import BaseIO
-from tauro.io.constants import DEFAULT_CSV_OPTIONS
-from tauro.io.exceptions import ConfigurationError, ReadOperationError
-from tauro.io.sql import SQLSanitizer
+from tauro.core.io.base import BaseIO
+from tauro.core.io.constants import DEFAULT_CSV_OPTIONS
+from tauro.core.io.exceptions import ConfigurationError, ReadOperationError
 
 
 class SparkReaderBase(BaseIO):
@@ -48,9 +47,7 @@ class ParquetReader(SparkReaderBase):
         except ReadOperationError:
             raise
         except Exception as e:
-            raise ReadOperationError(
-                f"Failed to read Parquet from {source}: {e}"
-            ) from e
+            raise ReadOperationError(f"Failed to read Parquet from {source}: {e}") from e
 
 
 class JSONReader(SparkReaderBase):
@@ -225,9 +222,7 @@ class PickleReader(SparkReaderBase):
         try:
             return spark.createDataFrame(objects)
         except Exception as e:
-            raise ReadOperationError(
-                f"Failed to create DataFrame from pickled objects: {e}"
-            ) from e
+            raise ReadOperationError(f"Failed to create DataFrame from pickled objects: {e}") from e
 
 
 class AvroReader(SparkReaderBase):
@@ -300,9 +295,7 @@ class QueryReader(BaseIO):
                 ) from None
 
             if not self._spark_available():
-                raise ReadOperationError(
-                    "Spark session is required to execute queries"
-                ) from None
+                raise ReadOperationError("Spark session is required to execute queries") from None
 
             sanitized = self.sanitize_sql_query(str(query))
 

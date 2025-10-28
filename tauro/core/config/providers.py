@@ -1,10 +1,7 @@
 """
-Configuration providers and repository interfaces.
-
-This module defines the abstract interfaces and data structures for
-configuration storage backends (MongoDB, files, etc.).
+Copyright (c) 2025 Faustino Lopez Ramos.
+For licensing information, see the LICENSE file in the project root
 """
-
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -55,9 +52,7 @@ class IConfigRepository(ABC):
         pass
 
     @abstractmethod
-    def get_active_version(
-        self, project_id: str, environment: str
-    ) -> ActiveConfigRecord:
+    def get_active_version(self, project_id: str, environment: str) -> ActiveConfigRecord:
         """
         Get the active configuration version for a project/environment.
 

@@ -16,22 +16,22 @@ import pyspark.sql.functions as f  # type: ignore
 
 DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
-from tauro.streaming.constants import (
+from tauro.core.streaming.constants import (
     DEFAULT_STREAMING_CONFIG,
     STREAMING_VALIDATIONS,
     StreamingOutputMode,
     StreamingTrigger,
 )
-from tauro.streaming.exceptions import (
+from tauro.core.streaming.exceptions import (
     StreamingConfigurationError,
     StreamingError,
     StreamingQueryError,
     create_error_context,
     handle_streaming_error,
 )
-from tauro.streaming.readers import StreamingReaderFactory
-from tauro.streaming.validators import StreamingValidator
-from tauro.streaming.writers import StreamingWriterFactory
+from tauro.core.streaming.readers import StreamingReaderFactory
+from tauro.core.streaming.validators import StreamingValidator
+from tauro.core.streaming.writers import StreamingWriterFactory
 
 
 class StreamingQueryManager:
@@ -159,9 +159,7 @@ class StreamingQueryManager:
         """Apply watermark on the streaming DataFrame using provided config."""
         try:
             timestamp_col = watermark_config.get("column")
-            delay_threshold = watermark_config.get(
-                "delay", DEFAULT_PROCESSING_TIME_INTERVAL
-            )
+            delay_threshold = watermark_config.get("delay", DEFAULT_PROCESSING_TIME_INTERVAL)
 
             if not timestamp_col:
                 raise StreamingConfigurationError(
@@ -202,16 +200,12 @@ class StreamingQueryManager:
                     cause=e,
                 ) from e
 
-    def _apply_transformations(
-        self, input_df: DataFrame, node_config: Dict[str, Any]
-    ) -> DataFrame:
+    def _apply_transformations(self, input_df: DataFrame, node_config: Dict[str, Any]) -> DataFrame:
         """Apply transformations to the streaming DataFrame with error handling."""
         try:
             function_config = node_config.get("function")
             if not function_config:
-                logger.info(
-                    "No transformation function specified, using input DataFrame as-is"
-                )
+                logger.info("No transformation function specified, using input DataFrame as-is")
                 return input_df
 
             module_path = function_config.get("module")
@@ -251,9 +245,7 @@ class StreamingQueryManager:
 
             transform_func = getattr(module, function_name)
 
-            logger.info(
-                f"Applying transformation function '{function_name}' from '{module_path}'"
-            )
+            logger.info(f"Applying transformation function '{function_name}' from '{module_path}'")
 
             try:
                 transformed_df = transform_func(input_df, node_config)
@@ -313,8 +305,7 @@ class StreamingQueryManager:
 
             node_name = node_config.get("name", "unknown")
             query_name = (
-                streaming_config.get("query_name")
-                or f"{pipeline_name}_{node_name}_{execution_id}"
+                streaming_config.get("query_name") or f"{pipeline_name}_{node_name}_{execution_id}"
             )
 
             checkpoint_location = self._get_checkpoint_location(
@@ -324,9 +315,7 @@ class StreamingQueryManager:
                 execution_id,
             )
 
-            output_mode = streaming_config.get(
-                "output_mode", StreamingOutputMode.APPEND.value
-            )
+            output_mode = streaming_config.get("output_mode", StreamingOutputMode.APPEND.value)
 
             trigger_config = streaming_config.get("trigger", {})
             trigger = self._configure_trigger(trigger_config)
@@ -453,14 +442,10 @@ class StreamingQueryManager:
                 cause=e,
             ) from e
 
-    def _configure_trigger(
-        self, trigger_config: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _configure_trigger(self, trigger_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Configure streaming trigger with minimum interval validation."""
         try:
-            trigger_type_raw = trigger_config.get(
-                "type", StreamingTrigger.PROCESSING_TIME.value
-            )
+            trigger_type_raw = trigger_config.get("type", StreamingTrigger.PROCESSING_TIME.value)
             trigger_type = str(trigger_type_raw).lower()
 
             mapped_key = self._map_trigger_type(trigger_type, trigger_type_raw)
@@ -509,17 +494,13 @@ class StreamingQueryManager:
 
     def _validate_interval(self, interval: str, config_section: str) -> None:
         """Validate an interval string and ensure it meets the minimum configured seconds."""
-        if not getattr(self.validator, "_validate_time_interval", lambda x: True)(
-            interval
-        ):
+        if not getattr(self.validator, "_validate_time_interval", lambda x: True)(interval):
             raise StreamingConfigurationError(
                 f"Invalid {config_section.split('.')[-1]} interval '{interval}'",
                 config_section=config_section,
                 config_value=interval,
             )
-        min_interval = float(
-            STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1)
-        )
+        min_interval = float(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
         if (
             getattr(self.validator, "_parse_time_to_seconds", lambda x: 0.0)(interval)
             < min_interval
@@ -530,17 +511,13 @@ class StreamingQueryManager:
                 config_value=interval,
             )
 
-    def _build_processing_time_trigger(
-        self, trigger_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _build_processing_time_trigger(self, trigger_config: Dict[str, Any]) -> Dict[str, Any]:
         """Build processingTime trigger dict after validation."""
         interval = str(trigger_config.get("interval", DEFAULT_PROCESSING_TIME_INTERVAL))
         self._validate_interval(interval, "trigger.interval")
         return {"processingTime": interval}
 
-    def _build_continuous_trigger(
-        self, trigger_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _build_continuous_trigger(self, trigger_config: Dict[str, Any]) -> Dict[str, Any]:
         """Build continuous trigger dict after validation."""
         interval = str(trigger_config.get("interval", "1 second"))
         self._validate_interval(interval, "trigger.interval")
@@ -608,10 +585,7 @@ class StreamingQueryManager:
     ) -> bool:
         """Wait until the query becomes inactive or the timeout elapses; returns True if stopped."""
         try:
-            while (
-                self._is_query_active(query)
-                and (time.time() - start_time) < timeout_seconds
-            ):
+            while self._is_query_active(query) and (time.time() - start_time) < timeout_seconds:
                 time.sleep(0.5)
             return not self._is_query_active(query)
         except Exception:
@@ -623,9 +597,7 @@ class StreamingQueryManager:
         with self._active_queries_lock:
             for key, info in self._active_queries.items():
                 try:
-                    if self._get_query_id(info.get("query")) == self._get_query_id(
-                        query
-                    ):
+                    if self._get_query_id(info.get("query")) == self._get_query_id(query):
                         query_key = key
                         break
                 except Exception:

@@ -16,7 +16,7 @@ try:
 except Exception:  # pragma: no cover - yaml is optional, handled in load()
     yaml = None  # type: ignore
 
-from tauro.config.exceptions import ConfigLoadError
+from tauro.core.config.exceptions import ConfigLoadError
 
 
 class ConfigLoader:
@@ -121,9 +121,7 @@ class DSLConfigLoader(ConfigLoader):
             with path.open("r", encoding="utf-8") as f:
                 for line_num, raw in enumerate(f, 1):
                     line = raw.strip()
-                    current_path = self._process_line(
-                        line, line_num, path, result, current_path
-                    )
+                    current_path = self._process_line(line, line_num, path, result, current_path)
         except ConfigLoadError:
             raise
         except Exception as e:
@@ -246,9 +244,7 @@ class ConfigLoaderFactory:
 
         return self.get_loader(source).load(source)
 
-    def _try_parse_inline_text(
-        self, text: str
-    ) -> Union[Dict[str, Any], List[Any], None]:
+    def _try_parse_inline_text(self, text: str) -> Union[Dict[str, Any], List[Any], None]:
         """Try to parse a string as JSON or YAML; return None on failure or if not applicable."""
         if not text:
             return None
