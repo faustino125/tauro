@@ -664,19 +664,50 @@ class StreamingPipelineManager:
         return active_queries, failed_queries, completed_queries
 
     def _get_query_state(self, query_name, query):
-        if not isinstance(query, StreamingQuery):
+        """Return state for a query using duck-typing to support Py4J proxies.
+
+        Possible return values: ("active", None), ("failed", error), ("completed", None), or (None, None)
+        """
+        if query is None:
             return None, None
+
         try:
-            if query.isActive:
+            # Some StreamingQuery objects (Py4J proxies) may not pass isinstance checks.
+            # Use duck-typing: check for an 'isActive' attribute or callable.
+            is_active_attr = getattr(query, "isActive", None)
+            if is_active_attr is not None:
+                # Try as property first
+                try:
+                    is_active = bool(is_active_attr)
+                except TypeError:
+                    # If it's callable, call it
+                    if callable(is_active_attr):
+                        try:
+                            is_active = bool(is_active_attr())
+                        except Exception:
+                            is_active = False
+                    else:
+                        is_active = False
+            else:
+                is_active = False
+
+            if is_active:
                 return "active", None
-            try:
-                exception = query.exception()
-            except Exception:
-                exception = None
+
+            # If not active, check for exceptions via .exception() if available
+            exception = None
+            exc_call = getattr(query, "exception", None)
+            if callable(exc_call):
+                try:
+                    exception = exc_call()
+                except Exception:
+                    exception = None
+
             if exception:
                 return "failed", str(exception)
-            else:
-                return "completed", None
+
+            return "completed", None
+
         except Exception as e:
             logger.error(f"Error checking query '{query_name}' status: {str(e)}")
             return "failed", str(e)

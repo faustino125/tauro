@@ -3,6 +3,7 @@ Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
 """
 import os
+import sys
 import time
 import threading
 from pathlib import Path
@@ -218,59 +219,40 @@ class StreamingQueryManager:
                     config_value=function_config,
                 )
 
-            import importlib
-
+            added_paths = []
             try:
-                module = importlib.import_module(module_path)
-            except ImportError as e:
-                raise StreamingError(
-                    f"Cannot import module '{module_path}': {str(e)}",
-                    error_code="MODULE_IMPORT_ERROR",
-                    context={"module_path": module_path},
-                    cause=e,
-                ) from e
+                config_file_path = getattr(self.context, "_config_file_path", None)
+                added_paths = self._add_config_dir_to_sys_path(config_file_path)
 
-            if not hasattr(module, function_name):
-                available_functions = [
-                    attr for attr in dir(module) if callable(getattr(module, attr))
-                ]
-                raise StreamingError(
-                    f"Function '{function_name}' not found in module '{module_path}'. Available functions: {available_functions[:10]}",
-                    error_code="FUNCTION_NOT_FOUND",
-                    context={
-                        "module_path": module_path,
-                        "function_name": function_name,
-                    },
+                transform_func = self._import_transform_function(module_path, function_name)
+
+                logger.info(
+                    f"Applying transformation function '{function_name}' from '{module_path}'"
                 )
 
-            transform_func = getattr(module, function_name)
-
-            logger.info(f"Applying transformation function '{function_name}' from '{module_path}'")
-
-            try:
-                transformed_df = transform_func(input_df, node_config)
-            except Exception as e:
-                raise StreamingError(
-                    f"Error executing transformation function '{function_name}': {str(e)}",
-                    error_code="TRANSFORMATION_ERROR",
-                    context={
-                        "module_path": module_path,
-                        "function_name": function_name,
-                    },
-                    cause=e,
-                ) from e
-
-            if not isinstance(transformed_df, DataFrame):
-                raise StreamingError(
-                    f"Transformation function must return a DataFrame, got {type(transformed_df)}",
-                    error_code="INVALID_RETURN_TYPE",
-                    context={
-                        "function_name": function_name,
-                        "return_type": str(type(transformed_df)),
-                    },
+                transformed_df = self._call_transform_func(
+                    transform_func, input_df, node_config, module_path, function_name
                 )
 
-            return transformed_df
+                if not isinstance(transformed_df, DataFrame):
+                    raise StreamingError(
+                        f"Transformation function must return a DataFrame, got {type(transformed_df)}",
+                        error_code="INVALID_RETURN_TYPE",
+                        context={
+                            "function_name": function_name,
+                            "return_type": str(type(transformed_df)),
+                        },
+                    )
+
+                return transformed_df
+            finally:
+                # Remove temporarily added paths
+                for path in added_paths:
+                    try:
+                        while path in sys.path:
+                            sys.path.remove(path)
+                    except ValueError:
+                        pass
 
         except Exception as e:
             logger.error(f"Error applying transformation: {str(e)}")
@@ -282,6 +264,70 @@ class StreamingQueryManager:
                     error_code="TRANSFORMATION_FAILURE",
                     cause=e,
                 ) from e
+
+    def _add_config_dir_to_sys_path(self, config_file_path: Optional[str]) -> list:
+        """Add the config directory to sys.path if needed and return the list of added paths."""
+        added_paths: list = []
+        try:
+            if config_file_path:
+                config_dir = str(Path(config_file_path).parent)
+                if config_dir not in sys.path:
+                    sys.path.insert(0, config_dir)
+                    added_paths.append(config_dir)
+                    logger.debug(f"Added config directory to sys.path: {config_dir}")
+        except Exception:
+            # Non-fatal; callers will handle import errors explicitly
+            pass
+        return added_paths
+
+    def _import_transform_function(self, module_path: str, function_name: str):
+        """Import module and return the transformation function or raise StreamingError."""
+        import importlib
+
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as e:
+            raise StreamingError(
+                f"Cannot import module '{module_path}': {str(e)}",
+                error_code="MODULE_IMPORT_ERROR",
+                context={"module_path": module_path},
+                cause=e,
+            ) from e
+
+        if not hasattr(module, function_name):
+            available_functions = [attr for attr in dir(module) if callable(getattr(module, attr))]
+            raise StreamingError(
+                f"Function '{function_name}' not found in module '{module_path}'. Available functions: {available_functions[:10]}",
+                error_code="FUNCTION_NOT_FOUND",
+                context={
+                    "module_path": module_path,
+                    "function_name": function_name,
+                },
+            )
+
+        return getattr(module, function_name)
+
+    def _call_transform_func(
+        self,
+        transform_func,
+        input_df: DataFrame,
+        node_config: Dict[str, Any],
+        module_path: str,
+        function_name: str,
+    ) -> DataFrame:
+        """Call the transform function and wrap execution errors."""
+        try:
+            return transform_func(input_df, node_config)
+        except Exception as e:
+            raise StreamingError(
+                f"Error executing transformation function '{function_name}': {str(e)}",
+                error_code="TRANSFORMATION_ERROR",
+                context={
+                    "module_path": module_path,
+                    "function_name": function_name,
+                },
+                cause=e,
+            ) from e
 
     def _configure_and_start_query(
         self,

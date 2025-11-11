@@ -440,13 +440,17 @@ class Context:
                 f"DSL/Python config is missing required sections: {', '.join(missing)}"
             )
 
-        return cls(
+        context = cls(
             global_settings=config_data["global_settings"],
             pipelines_config=config_data["pipelines_config"],
             nodes_config=config_data["nodes_config"],
             input_config=config_data["input_config"],
             output_config=config_data["output_config"],
         )
+
+        # Store the config file path for module imports
+        context._config_file_path = str(p.resolve())
+        return context
 
 
 class BaseSpecializedContext(Context, ABC):

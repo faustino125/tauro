@@ -643,18 +643,20 @@ class PipelineExecutor:
         hyperparams: Optional[Dict[str, Any]] = None,
         execution_mode: Optional[str] = "async",
     ) -> Union[None, str, Dict[str, Any]]:
-        PipelineValidator.validate_required_params(
-            pipeline_name,
-            start_date,
-            end_date,
-            self.context.global_settings.get("start_date"),
-            self.context.global_settings.get("end_date"),
-        )
-
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
         logger.info(f"Executing {pipeline_type} pipeline: '{pipeline_name}'")
+
+        # Only validate dates for batch and hybrid pipelines, not for streaming
+        if pipeline_type in [PipelineType.BATCH.value, PipelineType.HYBRID.value]:
+            PipelineValidator.validate_required_params(
+                pipeline_name,
+                start_date,
+                end_date,
+                self.context.global_settings.get("start_date"),
+                self.context.global_settings.get("end_date"),
+            )
 
         if pipeline_type == PipelineType.BATCH.value:
             return self.batch_executor.execute(
@@ -710,6 +712,31 @@ class PipelineExecutor:
             )
         except Exception:
             return {}
+
+    def run_streaming_pipeline(
+        self,
+        pipeline_name: str,
+        mode: str = "async",
+        model_version: Optional[str] = None,
+        hyperparams: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Execute a streaming pipeline (convenience wrapper for CLI)."""
+        execution_mode = "sync" if mode == "sync" else "async"
+        result = self.run_pipeline(
+            pipeline_name=pipeline_name,
+            model_version=model_version,
+            hyperparams=hyperparams,
+            execution_mode=execution_mode,
+        )
+        return result if isinstance(result, str) else ""
+
+    def get_running_execution_ids(self) -> List[str]:
+        """Get list of running execution IDs from streaming manager."""
+        try:
+            pipelines = self.streaming_executor.streaming_manager.list_running_pipelines()
+            return [p.get("execution_id") for p in pipelines if p.get("execution_id")]
+        except Exception:
+            return []
 
     def shutdown(self) -> None:
         """Unified shutdown with resource cleanup"""

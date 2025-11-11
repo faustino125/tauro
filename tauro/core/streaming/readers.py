@@ -137,6 +137,27 @@ class DeltaStreamingReader(BaseStreamingReader):
             raise StreamingError(f"Failed to create Delta stream: {str(e)}")
 
 
+class RateStreamingReader(BaseStreamingReader):
+    """Streaming reader for Spark built-in rate source (for testing)."""
+
+    def read_stream(self, config: Dict[str, Any]) -> DataFrame:
+        try:
+            self._validate_options(config, "rate")
+            options = config.get("options", {}) or {}
+
+            logger.info(f"Creating Rate streaming reader with options: {list(options.keys())}")
+
+            reader = self._spark_read_stream().format("rate")
+            for key, value in options.items():
+                reader = reader.option(key, str(value))
+
+            return reader.load()
+
+        except Exception as e:
+            logger.error(f"Error creating Rate streaming reader: {str(e)}")
+            raise StreamingError(f"Failed to create Rate stream: {str(e)}")
+
+
 class StreamingReaderFactory:
     """Factory for creating streaming data readers."""
 
@@ -151,7 +172,8 @@ class StreamingReaderFactory:
             self._readers = {
                 StreamingFormat.KAFKA.value: KafkaStreamingReader(self.context),
                 StreamingFormat.DELTA_STREAM.value: DeltaStreamingReader(self.context),
-                # Add more readers here as they are implemented (e.g., rate, socket, memory)
+                "rate": RateStreamingReader(self.context),
+                # Add more readers here as they are implemented (e.g., socket, memory)
             }
             logger.info(f"Initialized {len(self._readers)} streaming readers")
         except Exception as e:
