@@ -1,5 +1,4 @@
-from types import SimpleNamespace
-from tauro.config.session import SparkSessionFactory
+from tauro.core.config.session import SparkSessionFactory
 
 
 class FakeBuilder:

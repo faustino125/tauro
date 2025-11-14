@@ -1,13 +1,11 @@
-import json
-from pathlib import Path
-import pytest
+import pytest  # type: ignore
 
-from tauro.config.loaders import (
+from tauro.core.config.loaders import (
     ConfigLoaderFactory,
     DSLConfigLoader,
     PythonConfigLoader,
 )
-from tauro.config.exceptions import ConfigLoadError
+from tauro.core.config.exceptions import ConfigLoadError
 
 
 def test_load_json_string():

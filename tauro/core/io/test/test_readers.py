@@ -1,8 +1,8 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock
-from tauro.io.readers import CSVReader, ParquetReader, QueryReader
-from tauro.io.exceptions import ReadOperationError, ConfigurationError
-from tauro.io.constants import DEFAULT_CSV_OPTIONS
+from tauro.core.io.readers import CSVReader, QueryReader
+from tauro.core.io.exceptions import ReadOperationError, ConfigurationError
+from tauro.core.io.constants import DEFAULT_CSV_OPTIONS
 
 
 class TestCSVReader:

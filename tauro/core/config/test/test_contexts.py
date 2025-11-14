@@ -1,14 +1,13 @@
-import pytest
+import pytest  # type: ignore
 from types import SimpleNamespace
-from tauro.config.contexts import (
+from tauro.core.config.contexts import (
     Context,
     ContextFactory,
     MLContext,
     StreamingContext,
     HybridContext,
 )
-from tauro.config.exceptions import ConfigValidationError
-from tauro.config.session import SparkSessionFactory
+from tauro.core.config.session import SparkSessionFactory
 
 
 # Avoid creating real Spark sessions during tests: return a fake object instead

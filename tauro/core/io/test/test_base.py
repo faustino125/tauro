@@ -1,9 +1,9 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
-from tauro.io.base import BaseIO
-from tauro.io.exceptions import ConfigurationError
+from tauro.core.io.base import BaseIO
+from tauro.core.io.exceptions import ConfigurationError
 
 
 class TestBaseIO:

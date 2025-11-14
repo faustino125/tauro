@@ -3,16 +3,15 @@ import types
 import logging
 from unittest import mock
 
-import pytest
+import pytest  # type: ignore
 
 tauro_exec_mod = pytest.importorskip(
-    "tauro.exec.node_executor",
-    reason="NodeExecutor not available in tauro.exec.node_executor",
+    "tauro.core.exec.node_executor",
+    reason="NodeExecutor not available in tauro.core.exec.node_executor",
 )
 NodeExecutor = getattr(tauro_exec_mod, "NodeExecutor", None)
 if NodeExecutor is None:
-    pytest.skip("NodeExecutor class not found in tauro.exec.node_executor")
-
+    pytest.skip("NodeExecutor class not found in tauro.core.exec.node_executor")
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 

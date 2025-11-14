@@ -1,15 +1,14 @@
-import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
-import pytest
+import pytest  # type: ignore
 
-from tauro.io.input import (
+from tauro.core.io.input import (
     InputLoader,
     SequentialLoadingStrategy,
 )
-from tauro.io.exceptions import ConfigurationError, ReadOperationError
+from tauro.core.io.exceptions import ConfigurationError, ReadOperationError
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-import pytest
+import pytest  # type: ignore
 
 from tauro.cli.core import normalize_environment, is_allowed_environment
 

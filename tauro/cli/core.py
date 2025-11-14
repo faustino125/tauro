@@ -14,6 +14,14 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from loguru import logger  # type: ignore
 
+# Import canonical environment definitions
+from tauro.common import (
+    CanonicalEnvironment,
+    ENV_ALIASES,
+    DEFAULT_ENVIRONMENTS,
+    is_valid_environment,
+)
+
 
 class ConfigFormat(Enum):
     """Supported configuration file formats."""
@@ -441,15 +449,8 @@ def validate_environment_name(env_name: str) -> bool:
 
 
 # ----- New helpers for scalable env handling -----
-DEFAULT_ENVIRONMENTS = ["base", "dev", "sandbox", "prod"]
-
-# Aliases map (user-friendly names -> canonical)
-ENV_ALIASES = {
-    "development": "dev",
-    "prod": "prod",
-    "production": "prod",
-    "staging": "dev",
-}
+# Now uses canonical definitions from tauro.common
+# These are kept for backward compatibility but reference the canonical source
 
 
 def normalize_environment(env_name: Optional[str]) -> Optional[str]:
@@ -457,6 +458,8 @@ def normalize_environment(env_name: Optional[str]) -> Optional[str]:
 
     Returns canonical name (e.g. 'production' -> 'prod', 'SANDBox_juan' -> 'sandbox_juan').
     If env_name is falsy returns None.
+
+    Uses canonical environment definitions from tauro.common.constants.
     """
     if not env_name:
         return None
@@ -496,11 +499,23 @@ def allowed_environments() -> List[str]:
 
 
 def is_allowed_environment(env_name: str) -> bool:
-    """Check whether an environment is allowed (after normalization)."""
+    """Check whether an environment is allowed (after normalization).
+
+    An environment is allowed if:
+    - It's a canonical environment from CanonicalEnvironment
+    - It's an alias that maps to a canonical environment
+    - It's a sandbox variant (sandbox or sandbox_<name>)
+    - It's in TAURO_ALLOWED_ENVS environment variable
+    """
+    if not is_valid_environment(env_name):
+        return False
+
     norm = normalize_environment(env_name)
     if not norm:
         return False
+
     # sandbox variants should be accepted as long as prefix is sandbox
     if norm == "sandbox" or norm.startswith("sandbox_"):
         return True
+
     return norm in allowed_environments()

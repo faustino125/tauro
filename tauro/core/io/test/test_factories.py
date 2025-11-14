@@ -1,7 +1,7 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock
-from tauro.io.factories import ReaderFactory, WriterFactory
-from tauro.io.exceptions import FormatNotSupportedError
+from tauro.core.io.factories import ReaderFactory, WriterFactory
+from tauro.core.io.exceptions import FormatNotSupportedError
 
 
 class TestReaderFactory:

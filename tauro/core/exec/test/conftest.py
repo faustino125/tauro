@@ -1,6 +1,5 @@
 import sys
-import types
-import pytest
+import pytest  # type: ignore
 
 
 # Minimal dummy context used across tests

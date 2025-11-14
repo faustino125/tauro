@@ -1,4 +1,4 @@
-import pytest
+import pytest  # type: ignore
 from tauro.cli.core import parse_iso_date, validate_date_range, ValidationError
 
 

@@ -1,7 +1,6 @@
-import pytest
-from types import SimpleNamespace
+import pytest  # type: ignore
 
-import tauro.exec.pipeline_validator as pv
+import tauro.core.exec.pipeline_validator as pv
 
 
 class DummyPolicy:

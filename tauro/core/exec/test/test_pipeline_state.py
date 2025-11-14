@@ -1,9 +1,6 @@
 import time
-import threading
 
-import pytest
-
-from tauro.exec.pipeline_state import (
+from tauro.core.exec.pipeline_state import (
     UnifiedPipelineState,
     NodeType,
     NodeStatus,

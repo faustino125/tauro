@@ -1,4 +1,4 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock
 from typing import Dict, Generator, Any
 
@@ -7,7 +7,7 @@ from typing import Dict, Generator, Any
 def spark_session() -> Generator[Any, None, None]:
     """Creates a real SparkSession for integration tests that require it."""
     try:
-        from pyspark.sql import SparkSession
+        from pyspark.sql import SparkSession  # type: ignore
     except Exception:
         pytest.skip("pyspark not available in test environment")
 

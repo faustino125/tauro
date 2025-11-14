@@ -134,15 +134,6 @@ tauro --env dev --pipeline my_pipeline --verbose
 **Problem:** Something went wrong and I need to debug  
 **Solution:** Check the generated logs and run with `--verbose` for more details.
 
-## Exit Codes
-
-- **0** — Success! Everything worked.
-- **1** — General error (something went wrong).
-- **2** — Configuration error (check your settings file).
-- **3** — Validation error (your data or pipeline is invalid).
-- **4** — Execution error (the pipeline ran but failed).
-- **5** — Dependency error (missing required software).
-- **6** — Security error (permission or access issue).
 
 ## Need More Help?
 

@@ -484,70 +484,221 @@ class AppConfigManager:
         return settings
 
     def get_env_config(self, env: str) -> Dict[str, str]:
-        """Get configuration paths for specific environment."""
+        """
+        Get configuration paths for specific environment.
+
+        Process:
+        1. Normalize environment name (handle aliases, case, sandbox variants)
+        2. Validate environment is allowed
+        3. Resolve sandbox fallback if needed
+        4. Merge base configuration with environment-specific overrides
+        5. Validate and build absolute paths
+
+        Args:
+            env: Raw environment name (may include aliases)
+
+        Returns:
+            Dictionary mapping config keys to absolute paths
+
+        Raises:
+            ConfigurationError: If environment is invalid or required config missing
+        """
+        logger.debug(f"Loading config for environment: '{env}'")
+
         # Step 1: normalize and validate the environment name
         norm_env = self._normalize_env(env)
+        logger.debug(f"Normalized environment: '{norm_env}'")
 
         env_configs = self.settings["env_config"]
 
         # Step 2: resolve sandbox fallback or verify presence
         resolved_env = self._resolve_env_fallback(norm_env, env_configs)
+        logger.debug(f"Resolved environment: '{resolved_env}'")
 
         # Step 3: merge base and environment specific configs
         merged = self._merge_base_and_env(env_configs, resolved_env)
+        logger.debug(f"Merged config keys: {list(merged.keys())}")
+        logger.debug(f"Merged config: {merged}")
 
         # Step 4: validate and build absolute paths
-        return self._validate_and_build_paths(merged)
+        result = self._validate_and_build_paths(merged)
+
+        logger.info(f"Successfully loaded config for environment '{env}'")
+        logger.debug(f"Final config paths: {result}")
+
+        return result
 
     def _normalize_env(self, env: str) -> str:
+        """
+        Normalize and validate environment name.
+
+        Handles:
+        - Alias mapping (development → dev, production → prod)
+        - Case normalization
+        - Sandbox variant handling
+
+        Args:
+            env: Raw environment name
+
+        Returns:
+            Normalized environment name
+
+        Raises:
+            ConfigurationError: If environment is not valid/allowed
+        """
         from tauro.cli.core import normalize_environment, is_allowed_environment
 
+        logger.debug(f"Normalizing environment: '{env}'")
         norm_env = normalize_environment(env)
-        if not norm_env or not is_allowed_environment(norm_env):
+
+        if not norm_env:
+            logger.error(f"Failed to normalize environment: '{env}'")
+            available = list(self.settings.get("env_config", {}).keys())
+            raise ConfigurationError(
+                f"Environment '{env}' is invalid or empty. Available: {available}"
+            )
+
+        if not is_allowed_environment(norm_env):
+            logger.error(f"Environment '{norm_env}' is not allowed")
             available = list(self.settings.get("env_config", {}).keys())
             raise ConfigurationError(
                 f"Environment '{env}' not found or not allowed. Available: {available}"
             )
+
+        logger.debug(f"Environment normalized to: '{norm_env}'")
         return norm_env
 
     def _resolve_env_fallback(self, env: str, env_configs: Dict[str, Any]) -> str:
+        """
+        Resolve environment configuration with fallback chain.
+
+        For sandbox environments (sandbox, sandbox_alice):
+        - First tries sandbox_alice (if looking for sandbox_alice)
+        - Falls back to sandbox
+        - Falls back to base
+
+        For other environments:
+        - Must exist in env_configs or raises error
+
+        Args:
+            env: Normalized environment name
+            env_configs: Available environment configurations
+
+        Returns:
+            Resolved environment name (may be different from input due to fallback)
+
+        Raises:
+            ConfigurationError: If environment can't be resolved
+        """
         from tauro.cli.core import is_sandbox_environment, get_base_environment
+
+        logger.debug(f"Resolving environment fallback for: '{env}'")
 
         if is_sandbox_environment(env) and env not in env_configs:
             base_env = get_base_environment(env)
+            logger.debug(f"Sandbox environment '{env}' not found, checking base: '{base_env}'")
+
             if base_env in env_configs:
                 logger.info(
                     f"Environment '{env}' not found, falling back to '{base_env}' configuration"
                 )
+                logger.debug(f"Successfully resolved to fallback: '{base_env}'")
                 return base_env
+
             available = list(env_configs.keys())
+            logger.error(
+                f"Environment '{env}' not found and no fallback '{base_env}' available. "
+                f"Available: {available}"
+            )
             raise ConfigurationError(
                 f"Environment '{env}' not found and no '{base_env}' fallback available. Available: {available}"
             )
 
         if env not in env_configs:
             available = list(env_configs.keys())
+            logger.error(f"Environment '{env}' not found. Available: {available}")
             raise ConfigurationError(f"Environment '{env}' not found. Available: {available}")
 
+        logger.debug(f"Environment '{env}' resolved successfully")
         return env
 
     def _merge_base_and_env(self, env_configs: Dict[str, Any], env: str) -> Dict[str, str]:
+        """
+        Merge base configuration with environment-specific overrides.
+
+        Merging strategy:
+        1. Start with base configuration (foundation)
+        2. Override with environment-specific values
+        3. Environment values take precedence
+
+        Example:
+            base = {input: "config/input.yaml", output: "config/output.yaml"}
+            dev = {input: "config/dev/input.yaml"}
+            result = {input: "config/dev/input.yaml", output: "config/output.yaml"}
+
+        Args:
+            env_configs: All environment configurations
+            env: Target environment name
+
+        Returns:
+            Merged configuration (base + env specific)
+        """
         base_config = env_configs.get("base", {})
         env_config = env_configs.get(env, {})
-        return {**base_config, **env_config}
+
+        logger.debug(f"Merging config for '{env}':")
+        logger.debug(f"  Base config keys: {list(base_config.keys())}")
+        logger.debug(f"  Env config keys: {list(env_config.keys())}")
+
+        merged = {**base_config, **env_config}
+
+        logger.debug(f"  Merged keys: {list(merged.keys())}")
+
+        return merged
 
     def _validate_and_build_paths(self, merged: Dict[str, str]) -> Dict[str, str]:
+        """
+        Validate and build absolute paths from relative configuration paths.
+
+        Steps:
+        1. Skip empty paths
+        2. Resolve relative paths against base_path
+        3. Validate paths are within base_path (security check)
+        4. Check file existence (warning if missing)
+        5. Build absolute paths for result
+
+        Args:
+            merged: Merged configuration (base + env specific)
+
+        Returns:
+            Dictionary mapping keys to validated absolute paths
+        """
         result: Dict[str, str] = {}
+
+        logger.debug(f"Validating {len(merged)} configuration paths:")
+
         for key, path in merged.items():
             if not path:
+                logger.debug(f"  {key}: (empty, skipping)")
                 continue
+
             full_path = self.base_path / path
+
+            logger.debug(f"  {key}: {path}")
+            logger.debug(f"    -> Full path: {full_path}")
+
             try:
                 validated = SecurityValidator.validate_path(self.base_path, full_path)
                 result[key] = str(validated)
+
                 if not validated.exists():
                     logger.warning(f"Config path missing: {validated}")
+                else:
+                    logger.debug("    -> Validated: OK (exists)")
+
             except SecurityError as e:
                 logger.error(f"Invalid config path: {e}")
                 result[key] = str(full_path)
+
+        logger.debug(f"Validated paths: {list(result.keys())}")
         return result

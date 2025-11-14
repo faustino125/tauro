@@ -1,7 +1,7 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock
-from tauro.io.validators import ConfigValidator, DataValidator
-from tauro.io.exceptions import ConfigurationError, DataValidationError
+from tauro.core.io.validators import ConfigValidator, DataValidator
+from tauro.core.io.exceptions import ConfigurationError, DataValidationError
 
 
 class TestConfigValidator:

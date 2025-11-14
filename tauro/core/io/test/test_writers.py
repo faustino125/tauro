@@ -1,8 +1,7 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock
-import time
 
-from tauro.io.writers import (
+from tauro.core.io.writers import (
     ParquetWriter,
     CSVWriter,
     JSONWriter,
@@ -10,8 +9,7 @@ from tauro.io.writers import (
     DeltaWriter,
     SparkWriterMixin,
 )
-from tauro.io.exceptions import ConfigurationError, WriteOperationError
-from tauro.io.validators import ConfigValidator
+from tauro.core.io.exceptions import ConfigurationError, WriteOperationError
 
 
 class DummyDF:

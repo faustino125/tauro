@@ -1,9 +1,9 @@
-import pytest
+import pytest  # type: ignore
 import time
 from unittest import mock
-from tauro.streaming.pipeline_manager import StreamingPipelineManager
-from tauro.streaming.exceptions import StreamingPipelineError
-from tauro.streaming.validators import StreamingValidator
+from tauro.core.streaming.pipeline_manager import StreamingPipelineManager
+from tauro.core.streaming.exceptions import StreamingPipelineError
+from tauro.core.streaming.validators import StreamingValidator
 
 
 class DummyContext:

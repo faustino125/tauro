@@ -1,7 +1,7 @@
-import pytest
-from tauro.streaming.readers import StreamingReaderFactory, KafkaStreamingReader
-from tauro.streaming.writers import StreamingWriterFactory, ParquetStreamingWriter
-from tauro.streaming.exceptions import StreamingFormatNotSupportedError, StreamingError
+import pytest  # type: ignore
+from tauro.core.streaming.readers import StreamingReaderFactory, KafkaStreamingReader
+from tauro.core.streaming.writers import StreamingWriterFactory, ParquetStreamingWriter
+from tauro.core.streaming.exceptions import StreamingFormatNotSupportedError, StreamingError
 
 
 class DummyContext:

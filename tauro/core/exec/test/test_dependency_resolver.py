@@ -1,6 +1,6 @@
-import pytest
+import pytest  # type: ignore
 
-from tauro.exec.dependency_resolver import DependencyResolver
+from tauro.core.exec.dependency_resolver import DependencyResolver
 
 
 def test_build_dependency_graph_and_topological_sort_simple():

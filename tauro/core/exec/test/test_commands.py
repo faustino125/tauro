@@ -1,12 +1,9 @@
-import json
-import time
-from types import SimpleNamespace
 from io import StringIO
 
-import pytest
+import pytest  # type: ignore
 from loguru import logger
 
-from tauro.exec.commands import NodeCommand, MLNodeCommand, ExperimentCommand
+from tauro.core.exec.commands import NodeCommand, MLNodeCommand, ExperimentCommand
 
 
 def test_node_command_executes_function_and_returns_value():

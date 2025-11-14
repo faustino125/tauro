@@ -1,4 +1,4 @@
-import pytest
+import pytest  # type: ignore
 from pathlib import Path
 from tauro.cli.config import DSLConfigLoader
 from tauro.cli.core import ConfigurationError

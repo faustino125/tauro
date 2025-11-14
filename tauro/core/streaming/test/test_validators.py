@@ -1,7 +1,7 @@
-import pytest
-from tauro.streaming.validators import StreamingValidator
-from tauro.streaming.exceptions import StreamingValidationError
-from tauro.streaming.constants import DEFAULT_STREAMING_CONFIG
+import pytest  # type: ignore
+from tauro.core.streaming.validators import StreamingValidator
+from tauro.core.streaming.exceptions import StreamingValidationError
+from tauro.core.streaming.constants import DEFAULT_STREAMING_CONFIG
 
 
 class DummyPolicy:

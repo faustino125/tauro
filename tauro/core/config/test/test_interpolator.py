@@ -1,12 +1,10 @@
-import os
-from tauro.config.interpolator import VariableInterpolator
+from tauro.core.config.interpolator import VariableInterpolator
 
 
 def test_interpolate_env_precedence(monkeypatch):
     monkeypatch.setenv("FOO", "env_value")
     s = "path/${FOO}/and/${BAR}"
     result = VariableInterpolator.interpolate(s, {"BAR": "var_value", "FOO": "var_override"})
-    # env has precedence for FOO, variables used for BAR
     assert result == "path/env_value/and/var_value"
 
 

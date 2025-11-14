@@ -1,22 +1,21 @@
-import pytest
+import pytest  # type: ignore
 from unittest.mock import MagicMock
-from pathlib import Path
 import json
 import time
 from datetime import datetime
 
-from tauro.io.output import (
+from tauro.core.io.output import (
     UnityCatalogManager,
     DataOutputManager,
     PathManager,
     DataFrameManager,
     UnityCatalogManager as UnityCatalogOperations,
 )
-from tauro.io.exceptions import (
+from tauro.core.io.exceptions import (
     ConfigurationError,
     WriteOperationError,
 )
-from tauro.io.constants import (
+from tauro.core.io.constants import (
     SupportedFormats,
     MIN_VACUUM_RETENTION_HOURS,
     DEFAULT_VACUUM_RETENTION_HOURS,

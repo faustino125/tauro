@@ -1,13 +1,13 @@
-import pytest
-from tauro.config.validators import (
+import pytest  # type: ignore
+from tauro.core.config.validators import (
     ConfigValidator,
     PipelineValidator,
     FormatPolicy,
     MLValidator,
     StreamingValidator,
 )
-from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
-import tauro.config.validators as validators
+from tauro.core.config.exceptions import ConfigValidationError, PipelineValidationError
+import tauro.core.config.validators as validators
 
 
 def test_validate_required_keys_missing():

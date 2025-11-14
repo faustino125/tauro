@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-import pytest
+import pytest  # type: ignore
 from tauro.cli.config import AppConfigManager
 from tauro.cli.core import ConfigurationError
 

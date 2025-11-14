@@ -2,7 +2,7 @@ import time
 import logging
 from unittest import mock
 
-import pytest
+import pytest  # type: ignore
 
 streaming_pm_mod = pytest.importorskip(
     "tauro.streaming.pipeline_manager",
@@ -12,7 +12,7 @@ StreamingPipelineManager = getattr(streaming_pm_mod, "StreamingPipelineManager",
 if StreamingPipelineManager is None:
     pytest.skip("StreamingPipelineManager class not found in tauro.streaming.pipeline_manager")
 
-from tauro.streaming.validators import (
+from tauro.core.streaming.validators import (
     StreamingValidator,
 )  # direct import; importorskip above will have skipped if missing
 

@@ -4,10 +4,10 @@ Tests for streaming validations with emphasis on time interval validation.
 Comprehensive unit tests to ensure that validations are robust.
 """
 
-import pytest
-from tauro.streaming.validators import StreamingValidator
-from tauro.streaming.exceptions import StreamingValidationError
-from tauro.streaming.constants import StreamingFormat
+import pytest  # type: ignore
+from tauro.core.streaming.validators import StreamingValidator
+from tauro.core.streaming.exceptions import StreamingValidationError
+from tauro.core.streaming.constants import StreamingFormat
 
 
 class TestTimeIntervalValidation:

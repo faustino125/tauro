@@ -1,9 +1,8 @@
-import pytest
-import time
+import pytest  # type: ignore
 from unittest import mock
-from tauro.streaming.query_manager import StreamingQueryManager
-from tauro.streaming.exceptions import StreamingError, StreamingQueryError
-from tauro.streaming.constants import DEFAULT_STREAMING_CONFIG
+from tauro.core.streaming.query_manager import StreamingQueryManager
+from tauro.core.streaming.exceptions import StreamingError
+from tauro.core.streaming.constants import DEFAULT_STREAMING_CONFIG
 
 
 class DummyContext:
