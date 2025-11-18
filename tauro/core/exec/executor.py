@@ -11,8 +11,18 @@ from loguru import logger  # type: ignore
 
 from tauro.core.config.contexts import Context
 from tauro.core.exec.dependency_resolver import DependencyResolver
+from tauro.core.exec.mlops_auto_config import MLOpsAutoConfigurator
 from tauro.core.exec.node_executor import NodeExecutor
 from tauro.core.exec.pipeline_state import NodeType, UnifiedPipelineState
+
+try:
+    from tauro.core.exec.mlflow_node_executor import MLflowNodeExecutor
+    from tauro.core.mlops.mlflow_adapter import MLflowPipelineTracker, is_mlflow_available
+    MLFLOW_INTEGRATION_AVAILABLE = True
+except ImportError:
+    MLFLOW_INTEGRATION_AVAILABLE = False
+    MLflowNodeExecutor = None
+    MLflowPipelineTracker = None
 from tauro.core.exec.pipeline_validator import PipelineValidator
 from tauro.core.exec.utils import extract_pipeline_nodes, get_node_dependencies
 from tauro.core.io.input import InputLoader
@@ -31,10 +41,122 @@ class BaseExecutor:
         self.is_ml_layer = getattr(self.context, "is_ml_layer", False)
         gs = getattr(self.context, "global_settings", {}) or {}
         self.max_workers = gs.get("max_parallel_nodes", 4)
-        self.node_executor = NodeExecutor(
-            self.context, self.input_loader, self.output_manager, self.max_workers
-        )
+        # Check if MLflow is enabled
+        self._mlflow_enabled = self._should_enable_mlflow()
+        self._mlflow_tracker = None
+        
+        # Create node executor (MLflow-enabled if configured)
+        if self._mlflow_enabled and MLFLOW_INTEGRATION_AVAILABLE:
+            try:
+                self._mlflow_tracker = MLflowPipelineTracker.from_context(self.context)
+                self.node_executor = MLflowNodeExecutor(
+                    self.context, 
+                    self.input_loader, 
+                    self.output_manager, 
+                    self._mlflow_tracker,
+                    self.max_workers
+                )
+                logger.info("MLflow integration enabled for pipeline execution")
+            except Exception as e:
+                logger.warning(f"Could not enable MLflow: {e}. Falling back to standard executor.")
+                self.node_executor = NodeExecutor(
+                    self.context, self.input_loader, self.output_manager, self.max_workers
+                )
+        else:
+            self.node_executor = NodeExecutor(
+                self.context, self.input_loader, self.output_manager, self.max_workers
+            )
+        
         self.unified_state = None
+        
+        # Lazy MLOps initialization - only load when needed
+        self._mlops_context = None
+        self._mlops_auto_config = MLOpsAutoConfigurator()
+        self._mlops_init_attempted = False
+    
+    def _should_enable_mlflow(self) -> bool:
+        """
+        Determine if MLflow should be enabled.
+        
+        Checks:
+        1. MLflow library availability
+        2. Global settings (mlflow.enabled)
+        3. Environment variable (TAURO_MLFLOW_ENABLED)
+        
+        Returns:
+            True if MLflow should be enabled
+        """
+        if not MLFLOW_INTEGRATION_AVAILABLE:
+            return False
+        
+        import os
+        
+        # Check environment variable
+        env_enabled = os.getenv("TAURO_MLFLOW_ENABLED", "false").lower() == "true"
+        if env_enabled:
+            return True
+        
+        # Check global settings
+        gs = getattr(self.context, "global_settings", {}) or {}
+        mlflow_config = gs.get("mlflow", {}) or {}
+        
+        return mlflow_config.get("enabled", False)
+    
+    def _should_init_mlops(self) -> bool:
+        """
+        Determine if MLOps should be initialized for this execution.
+        
+        Checks:
+        1. Global override (mlops.enabled in global_settings)
+        2. Pipeline-specific nodes (auto-detection)
+        
+        Returns:
+            True if MLOps should be initialized
+        """
+        gs = getattr(self.context, "global_settings", {}) or {}
+        
+        # Use auto-configurator to decide
+        return self._mlops_auto_config.should_init_mlops_for_pipeline(
+            self.context.nodes_config, gs
+        )
+    
+    def _init_mlops_if_needed(self) -> None:
+        """
+        Initialize MLOps lazily if needed.
+        """
+        if self._mlops_init_attempted:
+            return
+        
+        self._mlops_init_attempted = True
+        
+        if not self._should_init_mlops():
+            logger.debug("MLOps initialization skipped (not needed for this pipeline)")
+            return
+        
+        try:
+            from tauro.core.mlops.config import MLOpsContext
+            
+            self._mlops_context = MLOpsContext.from_context(
+                self.context,
+                auto_init=True,
+            )
+            logger.info("MLOps initialized successfully (auto-detected ML workload)")
+        except Exception as e:
+            logger.warning(f"MLOps initialization failed (non-critical): {e}")
+            self._mlops_context = None
+    
+    @property
+    def mlops_context(self):
+        """
+        Get MLOps context (lazy initialization).
+        
+        Returns:
+            MLOpsContext if initialized, None otherwise
+        """
+        if not self._mlops_init_attempted:
+            self._init_mlops_if_needed()
+        
+        return self._mlops_context
 
     def _prepare_ml_info(
         self,
@@ -197,7 +319,39 @@ class BatchExecutor(BaseExecutor):
         end_date: str,
         ml_info: Dict[str, Any],
     ) -> None:
-        """Execute batch flow logic."""
+        """Execute batch flow logic with optional MLflow tracking."""
+        pipeline_name = pipeline.get("name", "batch_pipeline")
+        
+        # Execute with MLflow tracking if enabled
+        if self._mlflow_enabled and self._mlflow_tracker:
+            with self._mlflow_tracker.start_pipeline_run(
+                pipeline_name=pipeline_name,
+                parameters={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "model_version": ml_info.get("model_version"),
+                    "node_name": node_name or "all",
+                },
+                tags={
+                    "pipeline_type": "batch",
+                    "executor": "BatchExecutor",
+                },
+            ) as run_id:
+                logger.info(f"Batch pipeline '{pipeline_name}' tracked in MLflow (run_id: {run_id})")
+                self._execute_batch_nodes(node_name, pipeline, start_date, end_date, ml_info)
+        else:
+            # Standard execution without MLflow
+            self._execute_batch_nodes(node_name, pipeline, start_date, end_date, ml_info)
+    
+    def _execute_batch_nodes(
+        self,
+        node_name: Optional[str],
+        pipeline: Dict[str, Any],
+        start_date: str,
+        end_date: str,
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """Execute batch nodes (single or all)."""
         if node_name:
             self.node_executor.execute_single_node(node_name, start_date, end_date, ml_info)
         else:

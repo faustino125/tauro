@@ -23,6 +23,7 @@ This module provides:
 
 - [Key Concepts](#key-concepts)
 - [Architecture Overview](#architecture-overview)
+- [MLOps Integration](#mlops-integration)
 - [Components Reference](#components-reference)
 - [Node Function Signatures](#node-function-signatures)
 - [Dependencies Format and Normalization](#dependencies-format-and-normalization)
@@ -39,6 +40,7 @@ This module provides:
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
 - [API Quick Reference](#api-quick-reference)
+- [MLOps Quick Reference](#mlops-quick-reference)
 
 ---
 
@@ -90,6 +92,491 @@ References between nodes that establish:
 
 ---
 
+## MLOps Integration
+
+El módulo exec integra de forma **transparente y automática** la capa MLOps para experiment tracking, model registry y hyperparameter management.
+
+### 🎯 Filosofía: Zero-Config hasta que se necesite
+
+- **Pipelines ETL**: MLOps se auto-deshabilita → Sin overhead
+- **Pipelines ML**: MLOps se auto-activa → Sin configuración manual
+- **Producción ML**: ml_info.yaml opcional → Control fino cuando se necesita
+
+### Auto-Detection
+
+El sistema detecta automáticamente nodos ML mediante patrones:
+
+**Patterns de detección:**
+- **Node names**: `train_*`, `predict_*`, `ml_*`, `model_*`
+- **Function names**: `train_model`, `fit_*`, `predict_*`
+- **I/O patterns**: Inputs/outputs de modelos (`*.pkl`, `*.joblib`, `*.h5`)
+
+**Ejemplo auto-detectado:**
+
+```yaml
+# config/nodes.yaml
+nodes:
+  train_model:  # ← AUTO-DETECTADO como ML node
+    function: "models.train_xgboost"
+    dependencies: ["feature_engineering"]
+    # ✅ No config MLOps necesaria
+    # ✅ Lazy init solo cuando se ejecuta
+    # ✅ Backend auto-seleccionado desde global_settings
+```
+
+### Lazy Initialization
+
+MLOps solo se inicializa cuando:
+1. Se detecta al menos un nodo ML
+2. El nodo ML está listo para ejecutarse
+
+**Ventajas:**
+- ✅ Pipelines ETL no cargan MLOps (más rápidos)
+- ✅ Config se valida solo si se usa
+- ✅ Menos memoria y deps en runtime
+
+### Key Features
+
+- **Automatic Experiment Tracking**: Create experiments and runs during pipeline execution
+- **Node-Level Metrics**: Log metrics, parameters, and artifacts per node
+- **Model Registration**: Register trained models automatically from run artifacts
+- **Auto-Configuration**: Detecta backend (local/Databricks) desde context
+- **Lazy Loading**: Solo se carga si hay nodos ML
+- **ml_info.yaml Support**: Configuración ML centralizada opcional
+- **Hyperparameter Management**: Override hyperparameters at runtime
+- **Run Comparison**: Compare runs and generate analytics DataFrames
+
+### Configuración Simple (Recomendada)
+
+#### Opción 1: Zero-Config (Auto todo)
+
+```python
+from tauro.core.config import Context
+from tauro.core.exec import BaseExecutor
+
+# Context estándar
+context = Context(
+    global_settings="config/global_settings.yaml",
+    pipelines_config="config/pipelines.yaml",
+    nodes_config="config/nodes.yaml",
+)
+
+# Executor con auto-detection
+executor = BaseExecutor(context, input_loader, output_manager)
+
+# ✅ MLOps se auto-activa si hay nodos ML
+# ✅ Backend auto-detectado desde global_settings
+# ✅ Experiment tracking automático
+executor.execute_pipeline("ml_training_pipeline")
+```
+
+#### Opción 2: ml_info.yaml (Producción ML)
+
+```yaml
+# config/ml_info.yaml
+mlops:
+  enabled: true
+  backend: "databricks"
+  experiment:
+    name: "production-churn-model"
+    description: "Customer churn prediction model"
+  model_registry:
+    catalog: "main"
+    schema: "ml_models"
+  tracking:
+    catalog: "main"
+    schema: "ml_experiments"
+  auto_log: true
+  
+hyperparameters:
+  learning_rate: 0.01
+  max_depth: 6
+  n_estimators: 100
+
+tags:
+  team: "data_science"
+  project: "customer_churn"
+  environment: "production"
+```
+
+```python
+# Python code - sin cambios necesarios
+executor = BaseExecutor(context, input_loader, output_manager)
+executor.execute_pipeline("ml_training_pipeline")
+# ✅ Usa ml_info.yaml automáticamente
+```
+
+### Precedencia de Configuración MLOps
+
+1. **Node config** (`nodes.yaml` - específico del nodo)
+2. **Pipeline config** (`pipelines.yaml` - nivel pipeline)
+3. **ml_info.yaml** (configuración ML centralizada)
+4. **Global settings** (`global_settings.yaml`)
+5. **Auto-defaults** (valores por defecto inteligentes)
+
+### Integración Avanzada (Legacy - Manual)
+
+```python
+from tauro.core.exec import MLOpsExecutorMixin
+from tauro.exec.executor import BaseExecutor
+
+# Add MLOps to your executor (solo si necesitas control manual)
+class EnhancedExecutor(MLOpsExecutorMixin, BaseExecutor):
+    pass
+
+executor = EnhancedExecutor(context, input_loader, output_manager)
+
+# MLOps manual setup
+run_id = executor._setup_mlops_experiment(
+    pipeline_name="daily_ml",
+    pipeline_type="BATCH",
+    model_version="v1.0.0",
+)
+
+executor.execute_pipeline(...)
+executor._log_pipeline_execution_summary(run_id, results)
+```
+
+### Configuration File (DEPRECATED - usar ml_info.yaml)
+
+```yaml
+# ml_config.yml (LEGACY)
+pipeline_name: daily_model_training
+pipeline_type: BATCH
+model_version: v1.0.0
+
+hyperparams:
+  learning_rate: 0.01
+  max_depth: 6
+  n_estimators: 100
+
+metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1_score
+
+tags:
+  team: data_science
+  project: customer_churn
+  environment: production
+```
+
+### ML Node Configuration (Override Selectivo)
+
+```yaml
+# config/nodes.yaml
+train_model:
+  function: "my_pkg.ml.train_model"
+  dependencies: ["prepare_data"]
+  output: ["model"]
+  
+  # ML-specific configuration (OPCIONAL - Override ml_info.yaml)
+  mlops:
+    experiment_name: "xgboost-hyperparameter-tuning"  # Override solo esto
+    # Resto hereda de ml_info.yaml → global_settings → auto-defaults
+  
+  hyperparams:
+    learning_rate: 0.01
+    max_depth: 6
+  
+  metrics:
+    - accuracy
+    - precision
+    - recall
+```
+
+### Auto-Detection Internals
+
+El sistema usa `MLOpsAutoConfigurator` para detectar automáticamente nodos ML:
+
+```python
+from tauro.core.exec.mlops_auto_config import MLOpsAutoConfigurator
+
+# Patterns de detección
+ML_NODE_PATTERNS = [
+    r"train.*", r".*train.*", r"fit.*",
+    r"predict.*", r".*predict.*", r"inference.*",
+    r"ml.*", r".*ml.*", r"model.*",
+]
+
+ML_FUNCTION_PATTERNS = [
+    r"train_model", r"fit_.*", r"train_.*",
+    r"predict_.*", r"inference_.*",
+]
+
+ML_IO_PATTERNS = [
+    r".*\.pkl$", r".*\.joblib$", r".*\.h5$",
+    r".*\.pt$", r".*\.pth$", r".*\.onnx$",
+]
+
+# Auto-detection en acción
+auto_config = MLOpsAutoConfigurator()
+should_enable = auto_config.should_enable_mlops(
+    node_name="train_model",
+    node_config={"function": "models.train_xgboost"},
+    pipeline_config={},
+)
+# ✅ Returns True → MLOps se activará
+
+# Merge de configuración con precedencia
+final_config = auto_config.merge_ml_config(
+    node_config=node_cfg,
+    pipeline_config=pipeline_cfg,
+    ml_info=ml_info_yaml,
+    global_settings=global_cfg,
+)
+# ✅ Resultado: node > pipeline > ml_info > global > auto
+```
+
+### Node Function with ML Context
+
+```python
+def train_model(training_df, *, start_date: str, end_date: str, ml_context=None):
+    """
+    ML node that uses hyperparameters from ml_context.
+    
+    Args:
+        training_df: Input training data
+        start_date: Period start date
+        end_date: Period end date
+        ml_context: Optional dict with hyperparams and execution metadata
+    
+    Returns:
+        Trained model
+    """
+    # Extract hyperparameters from ml_context
+    if ml_context:
+        hyperparams = ml_context.get("hyperparams", {})
+        lr = hyperparams.get("learning_rate", 0.01)
+        max_depth = hyperparams.get("max_depth", 6)
+        model_version = ml_context.get("model_version", "unknown")
+        execution_time = ml_context.get("execution_time")
+    else:
+        lr = 0.01
+        max_depth = 6
+        model_version = "unknown"
+    
+    # Train model with resolved hyperparameters
+    model = GBTClassifier(learningRate=lr, maxDepth=max_depth)
+    model = model.fit(training_df)
+    
+    return model
+```
+
+### MLOps Classes
+
+#### MLOpsExecutorIntegration
+
+Bridge between executor and MLOps layer.
+
+```python
+from tauro.core.exec import MLOpsExecutorIntegration
+
+integration = MLOpsExecutorIntegration()
+
+# Create experiment
+exp_id = integration.create_pipeline_experiment(
+    pipeline_name="daily_ml",
+    pipeline_type="BATCH",
+    tags={"team": "ds"}
+)
+
+# Start run
+run_id = integration.start_pipeline_run(
+    experiment_id=exp_id,
+    pipeline_name="daily_ml",
+    hyperparams={"lr": 0.01}
+)
+
+# Log node execution
+integration.log_node_execution(
+    run_id=run_id,
+    node_name="train_model",
+    status="completed",
+    duration_seconds=45.2,
+    metrics={"accuracy": 0.95}
+)
+
+# Log artifact
+artifact_uri = integration.log_artifact(
+    run_id=run_id,
+    artifact_path="/path/to/model.pkl",
+    artifact_type="model"
+)
+
+# Register model
+integration.register_model_from_run(
+    run_id=run_id,
+    model_name="churn_classifier",
+    artifact_path="/path/to/model.pkl",
+    artifact_type="sklearn",
+    framework="scikit-learn",
+    metrics={"auc": 0.92}
+)
+
+# End run
+integration.end_pipeline_run(run_id, status=RunStatus.COMPLETED)
+```
+
+#### MLInfoConfigLoader
+
+Load and merge ML configuration from various sources.
+
+```python
+from tauro.core.exec import MLInfoConfigLoader
+
+# Load from YAML/JSON file
+ml_info = MLInfoConfigLoader.load_ml_info_from_file("ml_config.yml")
+
+# Load from context
+ml_info = MLInfoConfigLoader.load_ml_info_from_context(
+    context=context,
+    pipeline_name="daily_ml"
+)
+
+# Merge configurations (with override precedence)
+merged = MLInfoConfigLoader.merge_ml_info(
+    base_ml_info={"hyperparams": {"lr": 0.01}},
+    override_ml_info={"hyperparams": {"lr": 0.05}}
+)
+# Result: {"hyperparams": {"lr": 0.05}}
+```
+
+#### MLOpsExecutorMixin
+
+Add MLOps capabilities to any executor via mixin pattern.
+
+```python
+from tauro.core.exec import MLOpsExecutorMixin
+from tauro.exec.executor import BaseExecutor
+
+class EnhancedBatchExecutor(MLOpsExecutorMixin, BaseExecutor):
+    def execute_with_mlops(self, pipeline_name, start_date, end_date):
+        # Setup MLOps experiment
+        run_id = self._setup_mlops_experiment(
+            pipeline_name=pipeline_name,
+            pipeline_type="BATCH",
+        )
+        
+        try:
+            # Execute pipeline
+            results = self.execute_pipeline(
+                pipeline_name=pipeline_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            
+            # Log summary
+            self._log_pipeline_execution_summary(
+                run_id=run_id,
+                execution_results=results,
+                status=RunStatus.COMPLETED
+            )
+            
+            return results
+            
+        except Exception as e:
+            # Log failure
+            self._log_pipeline_execution_summary(
+                run_id=run_id,
+                execution_results={},
+                status=RunStatus.FAILED
+            )
+            raise
+
+# Usage
+executor = EnhancedBatchExecutor(context, input_loader, output_manager)
+executor.execute_with_mlops(
+    pipeline_name="daily_ml",
+    start_date="2025-01-01",
+    end_date="2025-01-31"
+)
+```
+
+### Environment Variables
+
+MLOps configuration via environment:
+
+```bash
+# Backend selection
+export TAURO_MLOPS_BACKEND=local  # or "databricks"
+
+# Local storage
+export TAURO_MLOPS_PATH=./mlops_data
+
+# Databricks configuration
+export TAURO_MLOPS_CATALOG=ml_catalog
+export TAURO_MLOPS_SCHEMA=experiments
+export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+export DATABRICKS_TOKEN=your-token
+
+# Auto-initialization
+export TAURO_MLOPS_AUTO_INIT=true
+```
+
+### Complete Example Pipeline
+
+```yaml
+# ml_pipeline.yml
+name: customer_churn_ml
+type: batch
+
+config:
+  hyperparams:
+    learning_rate: 0.01
+    max_depth: 6
+    n_estimators: 100
+  
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - auc
+
+nodes:
+  prepare_features:
+    function: "my_pkg.ml.prepare_features"
+    output: ["features"]
+  
+  train_model:
+    function: "my_pkg.ml.train_model"
+    dependencies: ["prepare_features"]
+    output: ["model"]
+    hyperparams:
+      learning_rate: 0.01
+      max_depth: 6
+  
+  evaluate_model:
+    function: "my_pkg.ml.evaluate_model"
+    dependencies: ["train_model"]
+    output: ["metrics"]
+    metrics:
+      - accuracy
+      - auc
+```
+
+```python
+# Execute with MLOps
+executor = EnhancedBatchExecutor(context, input_loader, output_manager)
+
+# MLOps integration is automatic
+executor.execute_pipeline(
+    pipeline_name="customer_churn_ml",
+    start_date="2025-01-01",
+    end_date="2025-01-31",
+    model_version="v1.0.0",
+    hyperparams={"learning_rate": 0.05},  # Override
+)
+```
+
+For detailed MLOps documentation, see:
+- [tauro/core/mlops/README.md](../mlops/README.md) - MLOps Core
+- [MLOPS_INTEGRATION.md](./MLOPS_INTEGRATION.md) - Integration Guide
+- [MLOPS_QUICK_START.md](../MLOPS_QUICK_START.md) - Getting Started
+
+---
+
 ## Architecture Overview
 
 The execution module is built in layers:
@@ -129,6 +616,26 @@ The execution module is built in layers:
 ---
 
 ## Components Reference
+
+### MLOps Components
+
+**MLOpsExecutorIntegration** (`mlops_integration.py`)
+- Bridge between executor and MLOps layer
+- Manages experiment creation, run lifecycle, metric logging
+- Handles artifact registration and model registration
+- Provides run comparison functionality
+
+**MLInfoConfigLoader** (`mlops_integration.py`)
+- Static utility for loading ML configuration
+- Supports YAML, JSON, and context-based loading
+- Merges configurations with override precedence
+- Integrates with executor context
+
+**MLOpsExecutorMixin** (`mlops_executor_mixin.py`)
+- Non-invasive mixin for adding MLOps to executors
+- Provides experiment setup, execution logging, summary reporting
+- Handles enhanced ML configuration loading
+- Backward compatible with existing executors
 
 ### Commands (`commands.py`)
 
@@ -1104,6 +1611,214 @@ best_params = command.execute()
 
 ---
 
+## MLOps Quick Reference
+
+### MLOpsExecutorIntegration
+
+```python
+from tauro.core.exec import MLOpsExecutorIntegration
+from tauro.core.mlops.experiment_tracking import RunStatus
+
+integration = MLOpsExecutorIntegration()
+
+# Setup
+exp_id = integration.create_pipeline_experiment(
+    pipeline_name="daily_ml",
+    pipeline_type="BATCH",
+    tags={"team": "ds"}
+)
+
+run_id = integration.start_pipeline_run(
+    experiment_id=exp_id,
+    pipeline_name="daily_ml",
+    hyperparams={"lr": 0.01}
+)
+
+# Logging
+integration.log_node_execution(
+    run_id=run_id,
+    node_name="train",
+    status="completed",
+    duration_seconds=45.2,
+    metrics={"accuracy": 0.95}
+)
+
+integration.log_artifact(
+    run_id=run_id,
+    artifact_path="/path/to/model.pkl",
+    artifact_type="model"
+)
+
+# Model registration
+integration.register_model_from_run(
+    run_id=run_id,
+    model_name="churn_classifier",
+    artifact_path="/path/to/model.pkl",
+    artifact_type="sklearn",
+    framework="scikit-learn",
+    metrics={"auc": 0.92}
+)
+
+# Analysis
+comparison_df = integration.get_run_comparison(
+    experiment_id=exp_id,
+    metric_filter={"accuracy": (">", 0.90)}
+)
+
+# Cleanup
+integration.end_pipeline_run(run_id, status=RunStatus.COMPLETED)
+```
+
+### MLInfoConfigLoader
+
+```python
+from tauro.core.exec import MLInfoConfigLoader
+
+# Load configuration
+ml_info = MLInfoConfigLoader.load_ml_info_from_file("ml_config.yml")
+
+# Load from context
+ml_info = MLInfoConfigLoader.load_ml_info_from_context(context, "daily_ml")
+
+# Merge configurations
+merged = MLInfoConfigLoader.merge_ml_info(
+    base_ml_info={"hyperparams": {"lr": 0.01}},
+    override_ml_info={"hyperparams": {"lr": 0.05}}
+)
+```
+
+### MLOpsExecutorMixin
+
+```python
+from tauro.core.exec import MLOpsExecutorMixin
+from tauro.exec.executor import BaseExecutor
+
+class EnhancedExecutor(MLOpsExecutorMixin, BaseExecutor):
+    pass
+
+executor = EnhancedExecutor(context, input_loader, output_manager)
+
+# Setup experiment (automatic)
+run_id = executor._setup_mlops_experiment(
+    pipeline_name="daily_ml",
+    pipeline_type="BATCH",
+    model_version="v1.0.0",
+    hyperparams={"lr": 0.01}
+)
+
+# Log summary (automatic)
+executor._log_pipeline_execution_summary(
+    run_id=run_id,
+    execution_results=results,
+    status=RunStatus.COMPLETED
+)
+
+# Load ML info (enhanced)
+ml_info = executor._load_ml_info_enhanced(
+    pipeline_name="daily_ml",
+    model_version="v1.0.0",
+    hyperparams={"lr": 0.05}
+)
+```
+
+---
+
+## 🎓 Resumen: Configuración MLOps Simplificada
+
+### Comparación: Antes vs Ahora
+
+#### ❌ Antes (Complejo)
+```yaml
+# CADA nodo ML necesitaba config completa
+train_model:
+  function: "ml.train"
+  mlops:
+    enabled: true
+    backend: "databricks"
+    catalog: "main"
+    schema: "ml"
+    experiment_name: "exp1"
+    # ... 20+ líneas de config
+
+predict:
+  function: "ml.predict"
+  mlops:  # ← DUPLICADO
+    enabled: true
+    backend: "databricks"
+    # ... otra vez todo
+```
+
+#### ✅ Ahora (Simple)
+```yaml
+# config/ml_info.yaml (UNA VEZ)
+mlops:
+  backend: "databricks"
+  catalog: "main"
+  schema: "ml"
+
+# config/nodes.yaml (MÍNIMO)
+train_model:
+  function: "ml.train"  # ← AUTO-DETECTADO
+  # ✅ Hereda todo de ml_info.yaml
+  
+predict:
+  function: "ml.predict"  # ← AUTO-DETECTADO
+  # ✅ Sin configuración duplicada
+```
+
+### Tres Niveles de Complejidad
+
+| Nivel | Use Case | Config Necesaria | MLOps |
+|-------|----------|------------------|-------|
+| **ETL** | Solo datos | Ninguna | Auto-skip |
+| **ML Simple** | Prototipo ML | Ninguna | Auto-detect + defaults |
+| **ML Production** | Producción ML | `ml_info.yaml` | Centralizada + overrides |
+
+### Migration Path
+
+**Migrar de config compleja a simplificada:**
+
+1. **Extraer config común a ml_info.yaml**
+```yaml
+# config/ml_info.yaml (NUEVO)
+mlops:
+  backend: "databricks"
+  catalog: "main"
+  schema: "ml_experiments"
+  experiment:
+    name: "production-model"
+```
+
+2. **Remover config duplicada de nodes.yaml**
+```yaml
+# Antes: 50 líneas por nodo
+train_model:
+  function: "ml.train"
+  mlops: { ... 50 líneas ... }
+
+# Después: 3 líneas por nodo
+train_model:
+  function: "ml.train"
+  # ✅ Hereda de ml_info.yaml
+```
+
+3. **Override solo lo específico**
+```yaml
+train_model:
+  function: "ml.train"
+  mlops:
+    experiment_name: "xgboost-tuning"  # Solo esto
+    # Resto hereda de ml_info.yaml
+```
+
+**Resultado:**
+- ✅ 90% menos config
+- ✅ Sin duplicación
+- ✅ Mantenimiento más fácil
+- ✅ Backward compatible
+
+---
+
 ## Architecture Improvements
 
 Recent enhancements to the execution module:
@@ -1115,6 +1830,23 @@ Recent enhancements to the execution module:
 - **Resource Lifecycle**: Explicit cleanup of DataFrames and connections
 - **Format Policy Integration**: Batch/streaming format compatibility via context policy
 - **Comprehensive Validation**: Multi-layer validation for configuration integrity
+- **MLOps Auto-Detection**: Pattern-based detection of ML workloads
+- **Lazy MLOps Initialization**: Only loads when ML nodes detected
+- **ml_info.yaml Support**: Centralized ML configuration with precedence
+- **Configuration Management**: Hierarchical merge (node → pipeline → ml_info → global → auto)
+- **Automatic Metrics Logging**: Per-node and pipeline-level metric tracking
+
+---
+
+### Módulos Core
+- **[tauro.core.mlops](../mlops/README.md)**: Model Registry y Experiment Tracking
+- **[tauro.core.config](../config/README.md)**: Context y configuración jerárquica
+- **[tauro.core.io](../io/README.md)**: InputLoader y DataOutputManager
+
+### Componentes Exec
+- **`mlops_auto_config.py`**: MLOpsAutoConfigurator con patterns y merge logic
+- **`executor.py`**: BaseExecutor con lazy initialization
+- **`mlops_executor_mixin.py`**: Legacy manual integration (backward compatibility)
 
 ---
 
@@ -1125,7 +1857,11 @@ Recent enhancements to the execution module:
 - Keep node functions pure; use `ml_context` for parameterization
 - Always set appropriate `max_workers` based on cluster resources
 - For very large pipelines, consider breaking into stages with intermediate persistence
-- Integrate with a model registry via `context` for production ML workflows
+- **MLOps se auto-activa**: No configuración manual necesaria para pipelines ML simples
+- **ml_info.yaml es opcional**: Úsalo solo para proyectos ML complejos
+- **Precedencia clara**: Node > Pipeline > ml_info > Global > Auto-defaults
+- Configure MLOps backend via `global_settings.yaml` or environment variables
+- Refer to **SIMPLIFICATION_PROPOSAL.md** for detailed auto-detection architecture
 
 ---
 
