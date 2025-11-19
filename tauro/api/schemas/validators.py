@@ -11,7 +11,6 @@ from functools import lru_cache
 import json
 
 from pydantic import validator
-from pydantic.fields import ModelField
 
 # Optional HTML sanitization - install with: pip install bleach
 try:

@@ -6,7 +6,7 @@ import logging
 import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
-from motor.motor_asyncio import AsyncDatabase  # type: ignore
+from motor.motor_asyncio import AsyncIOMotorDatabase  # type: ignore
 
 from tauro.api.schemas.models import RunCreate, RunState
 
@@ -37,12 +37,12 @@ class ExecutionService:
     Centralized orchestration service.
     """
 
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: AsyncIOMotorDatabase):
         """
         Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance from Motor
+            db: AsyncIOMotorDatabase instance from Motor
         """
         self.db = db
         self.runs_collection = db["pipeline_runs"]
@@ -434,3 +434,4 @@ class ExecutionService:
                 "error": str(e),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+

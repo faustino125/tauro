@@ -7,9 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-# Third-party
-from motor.motor_asyncio import AsyncDatabase  # type: ignore
-
 # Local
 from tauro.api.db.models import ProjectDocument
 from tauro.api.schemas.models import (
@@ -47,12 +44,12 @@ class ProjectService:
     Project management service.
     """
 
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: Any):
         """
         Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance from Motor
+            db: AsyncDatabase instance from Motor (Motor 3.x+)
         """
         self.db = db
         self.projects_collection = db["projects"]

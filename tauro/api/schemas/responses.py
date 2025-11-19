@@ -83,7 +83,7 @@ class PipelineRunResponse(BaseModel):
         return v
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "run_id": "run_20241013_123456_abc123",
                 "pipeline_id": "etl_daily",
@@ -151,7 +151,7 @@ class ScheduleResponse(BaseModel):
     next_run_at: Optional[datetime] = None
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "id": "schedule_abc123",
                 "pipeline_id": "etl_daily",
@@ -188,7 +188,7 @@ class HealthCheck(BaseModel):
     components: Dict[str, str] = Field(default_factory=dict)
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "status": "healthy",
                 "version": "2.0.0",
@@ -222,7 +222,7 @@ class StatsResponse(BaseModel):
     failed_runs: int
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "total_pipelines": 15,
                 "total_runs": 1234,
@@ -256,3 +256,4 @@ __all__ = [
     "APIInfo",
     "StatsResponse",
 ]
+

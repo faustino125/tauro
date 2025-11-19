@@ -4,7 +4,7 @@ For licensing information, see the LICENSE file in the project root
 """
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from motor.motor_asyncio import AsyncDatabase  # type: ignore
+from motor.motor_asyncio import AsyncIOMotorDatabase  # type: ignore
 from loguru import logger
 from typing import List
 
@@ -16,12 +16,12 @@ class Migration(ABC):
     description: str
 
     @abstractmethod
-    async def up(self, db: AsyncDatabase) -> None:
+    async def up(self, db: AsyncIOMotorDatabase) -> None:
         """Execute migration (upgrade)"""
         pass
 
     @abstractmethod
-    async def down(self, db: AsyncDatabase) -> None:
+    async def down(self, db: AsyncIOMotorDatabase) -> None:
         """Rollback migration (downgrade)"""
         pass
 
@@ -32,7 +32,7 @@ class Migration001Initial(Migration):
     version = 1
     description = "Create initial collections and indexes"
 
-    async def up(self, db: AsyncDatabase) -> None:
+    async def up(self, db: AsyncIOMotorDatabase) -> None:
         """Create initial schema"""
         logger.info("Running migration 001: Initial setup")
 
@@ -52,11 +52,9 @@ class Migration001Initial(Migration):
             except Exception:
                 logger.debug(f"Collection {collection_name} already exists")
 
-        # Create indexes
-        await self._create_indexes(db)
         logger.info("✓ Migration 001 completed")
 
-    async def down(self, db: AsyncDatabase) -> None:
+    async def down(self, db: AsyncIOMotorDatabase) -> None:
         """Rollback initial setup"""
         logger.info("Rolling back migration 001")
 
@@ -75,58 +73,15 @@ class Migration001Initial(Migration):
             except Exception:
                 pass
 
-    async def _create_indexes(self, db: AsyncDatabase) -> None:
-        """Create all required indexes"""
-
-        # Projects indexes
-        projects = db["projects"]
-        await projects.create_index([("name", 1)], unique=True)
-        await projects.create_index([("created_at", -1)])
-        await projects.create_index([("status", 1)])
-        await projects.create_index([("created_by", 1)])
-        logger.debug("✓ Created indexes for 'projects'")
-
-        # Pipeline runs indexes
-        runs = db["pipeline_runs"]
-        await runs.create_index([("project_id", 1), ("pipeline_id", 1)])
-        await runs.create_index([("state", 1)])
-        await runs.create_index([("created_at", -1)])
-        await runs.create_index(
-            [("created_at", 1)],
-            expireAfterSeconds=7776000,  # 90 days TTL
-        )
-        logger.debug("✓ Created indexes for 'pipeline_runs'")
-
-        # Task runs indexes
-        tasks = db["task_runs"]
-        await tasks.create_index([("pipeline_run_id", 1)])
-        await tasks.create_index([("state", 1)])
-        await tasks.create_index(
-            [("created_at", 1)],
-            expireAfterSeconds=7776000,  # 90 days TTL
-        )
-        logger.debug("✓ Created indexes for 'task_runs'")
-
-        # Schedules indexes
-        schedules = db["schedules"]
-        await schedules.create_index([("project_id", 1)])
-        await schedules.create_index([("pipeline_id", 1)])
-        await schedules.create_index([("enabled", 1)])
-        await schedules.create_index([("next_run_at", 1)])
-        logger.debug("✓ Created indexes for 'schedules'")
-
-        # Config versions indexes
-        configs = db["config_versions"]
-        await configs.create_index([("project_id", 1), ("pipeline_id", 1)])
-        await configs.create_index([("version_number", 1)])
-        await configs.create_index([("created_at", -1)])
-        logger.debug("✓ Created indexes for 'config_versions'")
+    async def _create_indexes(self, db: AsyncIOMotorDatabase) -> None:
+        """Create all required indexes - DEPRECATED: Use MigrationManager instead"""
+        pass  # This is now handled by MigrationManager.create_indexes()
 
 
 class MigrationRunner:
     """Executes database migrations with versioning"""
 
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.migrations_collection = db["_migrations"]
 
@@ -170,7 +125,8 @@ class MigrationRunner:
                 logger.info(f"✓ Migration {migration.version} completed")
 
             except Exception as e:
-                logger.error(f"✗ Migration {migration.version} failed: {e}", exc_info=True)
+                error_msg = f"Migration {migration.version} failed: {str(e)}"
+                logger.error("✗ " + error_msg, exc_info=True)
 
                 # Record failure
                 await self.migrations_collection.insert_one(
@@ -202,12 +158,12 @@ class MigrationRunner:
 class MigrationManager:
     """Manages MongoDB migrations and index creation (deprecated - use MigrationRunner)"""
 
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: AsyncIOMotorDatabase):
         """
         Initialize migration manager
 
         Args:
-            db: Motor AsyncDatabase instance
+            db: Motor AsyncIOMotorDatabase instance
         """
         self.db = db
 
@@ -234,13 +190,13 @@ class MigrationManager:
         collection = self.db["projects"]
 
         # Unique index on name
-        await collection.create_index("name", unique=True, name="idx_name_unique")
+        await collection.create_index([("name", 1)], unique=True, name="idx_name_unique")
 
         # Index on created_at for sorting
-        await collection.create_index("created_at", name="idx_created_at")
+        await collection.create_index([("created_at", -1)], name="idx_created_at")
 
         # Index on status for filtering
-        await collection.create_index("status", name="idx_status")
+        await collection.create_index([("status", 1)], name="idx_status")
 
         # Compound index for listing
         await collection.create_index(
@@ -262,14 +218,14 @@ class MigrationManager:
         )
 
         # Index on state
-        await collection.create_index("state", name="idx_state")
+        await collection.create_index([("state", 1)], name="idx_state")
 
         # Index on created_at for sorting (descending)
         await collection.create_index([("created_at", -1)], name="idx_created_at_desc")
 
         # TTL index: expire documents after 90 days
         await collection.create_index(
-            "created_at",
+            [("created_at", 1)],
             expireAfterSeconds=7776000,  # 90 days
             name="idx_ttl_90days",
         )
@@ -289,14 +245,14 @@ class MigrationManager:
         collection = self.db["task_runs"]
 
         # Index on pipeline_run_id
-        await collection.create_index("pipeline_run_id", name="idx_pipeline_run_id")
+        await collection.create_index([("pipeline_run_id", 1)], name="idx_pipeline_run_id")
 
         # Index on state
-        await collection.create_index("state", name="idx_state")
+        await collection.create_index([("state", 1)], name="idx_state")
 
         # TTL index: expire after 90 days
         await collection.create_index(
-            "created_at",
+            [("created_at", 1)],
             expireAfterSeconds=7776000,  # 90 days
             name="idx_ttl_90days",
         )
@@ -316,16 +272,16 @@ class MigrationManager:
         collection = self.db["schedules"]
 
         # Index on project_id
-        await collection.create_index("project_id", name="idx_project_id")
+        await collection.create_index([("project_id", 1)], name="idx_project_id")
 
         # Index on pipeline_id
-        await collection.create_index("pipeline_id", name="idx_pipeline_id")
+        await collection.create_index([("pipeline_id", 1)], name="idx_pipeline_id")
 
         # Index on enabled status
-        await collection.create_index("enabled", name="idx_enabled")
+        await collection.create_index([("enabled", 1)], name="idx_enabled")
 
         # Index on next_run_at for scheduler queries
-        await collection.create_index("next_run_at", name="idx_next_run_at")
+        await collection.create_index([("next_run_at", 1)], name="idx_next_run_at")
 
         # Compound index for scheduler
         await collection.create_index(
@@ -440,12 +396,13 @@ class MigrationManager:
             raise
 
 
-async def init_database(db: AsyncDatabase) -> None:
+async def init_database(db: AsyncIOMotorDatabase) -> None:
     """
     Initialize database with all migrations
 
     Args:
-        db: Motor AsyncDatabase instance
+        db: Motor AsyncIOMotorDatabase instance
     """
     manager = MigrationManager(db)
     await manager.run_all_migrations()
+

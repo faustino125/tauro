@@ -37,7 +37,7 @@ class MongoDBClient:
         Connect to MongoDB
 
         Returns:
-            AsyncDatabase instance
+            AsyncIOMotorDatabase instance
 
         Raises:
             ConnectionFailure: If connection fails
@@ -196,3 +196,4 @@ def get_mongodb_client() -> MongoDBClient:
         raise RuntimeError("MongoDB client not initialized. Call init_mongodb() first.")
 
     return _mongodb_client
+

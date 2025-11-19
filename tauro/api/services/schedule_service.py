@@ -6,7 +6,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
 from datetime import datetime, timezone, timedelta
-from motor.motor_asyncio import AsyncDatabase  # type: ignore
+from motor.motor_asyncio import AsyncIOMotorDatabase  # type: ignore
 from croniter import croniter
 
 from tauro.api.schemas.models import (
@@ -43,12 +43,12 @@ class ScheduleService:
     Schedule management service.
     """
 
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: AsyncIOMotorDatabase):
         """
         Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance from Motor
+            db: AsyncIOMotorDatabase instance from Motor
         """
         self.db = db
         self.schedules_collection = db["schedules"]
@@ -422,3 +422,4 @@ class ScheduleService:
             raise ValueError(f"Unrecognized unit: {unit}")
 
         return unit_mapping[unit](value)
+

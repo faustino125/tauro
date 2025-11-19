@@ -6,7 +6,6 @@ import logging
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
 from datetime import datetime, timezone
-from motor.motor_asyncio import AsyncDatabase  # type: ignore
 
 from tauro.api.schemas.models import (
     RunCreate,
@@ -45,12 +44,12 @@ class RunService:
     Pipeline run management service.
     """
 
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: Any):
         """
         Initialize the service with a MongoDB instance.
 
         Args:
-            db: AsyncDatabase instance from Motor
+            db: AsyncDatabase instance from Motor (Motor 3.x+)
         """
         self.db = db
         self.runs_collection = db["pipeline_runs"]

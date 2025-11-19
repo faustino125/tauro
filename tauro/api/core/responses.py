@@ -37,7 +37,7 @@ class APIResponse(BaseModel):
     )
 
     class Config:
-        json_schema_extra = {
+        json_json_schema_extra = {
             "examples": [
                 {
                     "status": "success",
@@ -75,7 +75,7 @@ class AsyncResponse(BaseModel):
     )
 
     class Config:
-        json_schema_extra = {
+        json_json_schema_extra = {
             "example": {
                 "status": "accepted",
                 "task_id": "run-abc123",
@@ -107,7 +107,7 @@ class ListResponse(BaseModel):
     )
 
     class Config:
-        json_schema_extra = {
+        json_json_schema_extra = {
             "example": {
                 "status": "success",
                 "data": [{"id": "item-1"}, {"id": "item-2"}],
@@ -165,3 +165,4 @@ def list_response(items: List[Any], total: int, limit: int, offset: int) -> List
             has_previous=offset > 0,
         ),
     )
+

@@ -4,10 +4,12 @@ For licensing information, see the LICENSE file in the project root
 """
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 # Third-party
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 # Local
@@ -21,6 +23,7 @@ from tauro.api.routes import (
     runs_router,
     configs_router,
     config_versions_router,
+    logs_router,
 )
 
 
@@ -181,17 +184,29 @@ def create_app() -> FastAPI:
     app.include_router(projects_router, prefix=settings.api_prefix)
     app.include_router(runs_router, prefix=settings.api_prefix)
     app.include_router(scheduling_router, prefix=settings.api_prefix)
+    app.include_router(logs_router, prefix=settings.api_prefix)
     app.include_router(monitoring_router)  # No prefix for health/metrics
+
+    # Serve UI static files (production)
+    ui_dist_path = Path(__file__).parent.parent / "ui" / "dist"
+    if ui_dist_path.exists():
+        app.mount("/ui", StaticFiles(directory=str(ui_dist_path), html=True), name="ui")
+        logger.info(f"✓ UI mounted at /ui from {ui_dist_path}")
+    else:
+        logger.warning(f"UI dist not found at {ui_dist_path}. Run 'npm run build' in tauro/ui/")
 
     # Root endpoint
     @app.get("/")
     async def root():
-        """Root endpoint with API info"""
+        """Root endpoint - redirect to UI if available, otherwise API info"""
+        if ui_dist_path.exists():
+            return RedirectResponse(url="/ui")
         return {
             "name": settings.api_title,
             "version": settings.api_version,
             "docs": "/docs",
             "health": "/health",
+            "ui": "Run 'npm run build' in tauro/ui/ to enable web interface",
         }
 
     # Custom error handlers

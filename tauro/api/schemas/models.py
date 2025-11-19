@@ -2,7 +2,11 @@
 Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
 """
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, validator
+try:
+    from pydantic.v1 import root_validator
+except ImportError:
+    from pydantic import root_validator  # type: ignore
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -106,6 +110,16 @@ class RetryPolicy(BaseModel):
         if v not in allowed:
             raise ValueError(f"backoff_strategy must be one of {allowed}")
         return v
+
+    @model_validator(mode='after')
+    def validate_delays(self):
+        """Ensure max_delay >= initial_delay for retry strategy"""
+        if self.max_delay < self.initial_delay:
+            raise ValueError(
+                f"max_delay ({self.max_delay}s) must be >= "
+                f"initial_delay ({self.initial_delay}s)"
+            )
+        return self
 
     model_config = {
         "json_schema_extra": {

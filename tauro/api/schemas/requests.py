@@ -39,7 +39,7 @@ class PipelineRunRequest(BaseModel):
     _validate_params = validator("params", allow_reuse=True)(validate_json_params)
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "params": {"start_date": "2024-01-01", "end_date": "2024-01-31"},
                 "timeout": 3600,
@@ -104,7 +104,7 @@ class ScheduleCreateRequest(BaseModel):
         return v
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "pipeline_id": "etl_daily",
                 "kind": "CRON",
@@ -130,7 +130,7 @@ class ScheduleUpdateRequest(BaseModel):
     _validate_retry_policy = validator("retry_policy", allow_reuse=True)(validate_json_params)
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "enabled": False,
                 "max_concurrency": 2,
@@ -152,7 +152,7 @@ class RunCancelRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {"example": {"reason": "Cancelled by user"}}
+        json_schema_extra = {"example": {"reason": "Cancelled by user"}}
 
 
 # =============================================================================
@@ -169,3 +169,4 @@ __all__ = [
     "ScheduleUpdateRequest",
     "RunCancelRequest",
 ]
+
