@@ -35,11 +35,11 @@ class MLOpsExecutorIntegration:
             context: Tauro execution context (PREFERRED - auto-detects mode)
             mlops_context: MLOpsContext instance (LEGACY, optional)
             auto_init: Auto-initialize from context/env if not provided
-            
+
         Example:
             >>> # PREFERRED: Use context for auto-detection
             >>> integration = MLOpsExecutorIntegration(context=execution_context)
-            >>> 
+            >>>
             >>> # LEGACY: Manual MLOpsContext
             >>> mlops = MLOpsContext.from_env()
             >>> integration = MLOpsExecutorIntegration(mlops_context=mlops)
@@ -382,9 +382,7 @@ class MLOpsExecutorIntegration:
                 experiment_run_id=run_id,
             )
 
-            logger.info(
-                f"Registered model {model_name} v{model_version.version} from run {run_id}"
-            )
+            logger.info(f"Registered model {model_name} v{model_version.version} from run {run_id}")
 
         except Exception as e:
             logger.error(f"Failed to register model: {e}")

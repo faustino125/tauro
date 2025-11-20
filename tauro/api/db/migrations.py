@@ -27,10 +27,10 @@ class Migration(ABC):
 
 
 class Migration001Initial(Migration):
-    """Initial migration: create collections and indexes"""
+    """Initial migration: create collections"""
 
     version = 1
-    description = "Create initial collections and indexes"
+    description = "Create initial collections"
 
     async def up(self, db: AsyncIOMotorDatabase) -> None:
         """Create initial schema"""
@@ -73,9 +73,168 @@ class Migration001Initial(Migration):
             except Exception:
                 pass
 
-    async def _create_indexes(self, db: AsyncIOMotorDatabase) -> None:
-        """Create all required indexes - DEPRECATED: Use MigrationManager instead"""
-        pass  # This is now handled by MigrationManager.create_indexes()
+
+class Migration002Indexes(Migration):
+    """Add performance indexes to all collections"""
+
+    version = 2
+    description = "Create performance indexes for queries"
+
+    async def up(self, db: AsyncIOMotorDatabase) -> None:
+        """Create all required indexes"""
+        logger.info("Running migration 002: Creating indexes")
+
+        await self._create_projects_indexes(db)
+        await self._create_pipeline_runs_indexes(db)
+        await self._create_task_runs_indexes(db)
+        await self._create_schedules_indexes(db)
+        await self._create_config_versions_indexes(db)
+
+        logger.info("✓ Migration 002 completed")
+
+    async def down(self, db: AsyncIOMotorDatabase) -> None:
+        """Drop all indexes (except _id)"""
+        logger.info("Rolling back migration 002: Dropping indexes")
+
+        collections = ["projects", "pipeline_runs", "task_runs", "schedules", "config_versions"]
+
+        for collection_name in collections:
+            try:
+                collection = db[collection_name]
+                indexes = await collection.list_indexes().to_list(None)
+
+                for index in indexes:
+                    index_name = index.get("name")
+                    # Don't drop the _id_ index
+                    if index_name and index_name != "_id_":
+                        await collection.drop_index(index_name)
+                        logger.info(f"✓ Dropped index {index_name} from {collection_name}")
+            except Exception as e:
+                logger.warning(f"Error dropping indexes from {collection_name}: {e}")
+
+    async def _create_projects_indexes(self, db: AsyncIOMotorDatabase) -> None:
+        """Create indexes for projects collection"""
+        logger.debug("Creating indexes for 'projects' collection")
+        collection = db["projects"]
+
+        # Unique index on id
+        await collection.create_index([("id", 1)], unique=True, name="idx_id_unique")
+
+        # Unique index on name
+        await collection.create_index([("name", 1)], unique=True, name="idx_name_unique")
+
+        # Index on status for filtering
+        await collection.create_index([("status", 1)], name="idx_status")
+
+        # Compound index for listing (status + created_at)
+        await collection.create_index(
+            [("status", 1), ("created_at", -1)], name="idx_status_created"
+        )
+
+        logger.debug("✓ Projects indexes created")
+
+    async def _create_pipeline_runs_indexes(self, db: AsyncIOMotorDatabase) -> None:
+        """Create indexes for pipeline_runs collection"""
+        logger.debug("Creating indexes for 'pipeline_runs' collection")
+        collection = db["pipeline_runs"]
+
+        # Unique index on run id
+        await collection.create_index([("id", 1)], unique=True, name="idx_run_id_unique")
+
+        # Compound index on project_id and pipeline_id (most common query)
+        await collection.create_index(
+            [("project_id", 1), ("pipeline_id", 1)], name="idx_project_pipeline"
+        )
+
+        # Index on state for filtering
+        await collection.create_index([("state", 1)], name="idx_state")
+
+        # Index on created_at for sorting (descending)
+        await collection.create_index([("created_at", -1)], name="idx_created_at_desc")
+
+        # Compound index for common queries (project + state + time)
+        await collection.create_index(
+            [("project_id", 1), ("state", 1), ("created_at", -1)],
+            name="idx_project_state_created",
+        )
+
+        # TTL index: expire old runs after 90 days
+        await collection.create_index(
+            [("created_at", 1)],
+            expireAfterSeconds=7776000,  # 90 days
+            name="idx_ttl_90days",
+        )
+
+        logger.debug("✓ Pipeline runs indexes created")
+
+    async def _create_task_runs_indexes(self, db: AsyncIOMotorDatabase) -> None:
+        """Create indexes for task_runs collection"""
+        logger.debug("Creating indexes for 'task_runs' collection")
+        collection = db["task_runs"]
+
+        # Index on pipeline_run_id (foreign key lookup)
+        await collection.create_index([("pipeline_run_id", 1)], name="idx_pipeline_run_id")
+
+        # Index on state
+        await collection.create_index([("state", 1)], name="idx_state")
+
+        # Compound index for queries (run + state)
+        await collection.create_index(
+            [("pipeline_run_id", 1), ("state", 1)], name="idx_pipeline_run_state"
+        )
+
+        # TTL index: expire after 90 days
+        await collection.create_index(
+            [("started_at", 1)],
+            expireAfterSeconds=7776000,  # 90 days
+            name="idx_ttl_90days",
+        )
+
+        logger.debug("✓ Task runs indexes created")
+
+    async def _create_schedules_indexes(self, db: AsyncIOMotorDatabase) -> None:
+        """Create indexes for schedules collection"""
+        logger.debug("Creating indexes for 'schedules' collection")
+        collection = db["schedules"]
+
+        # Index on project_id
+        await collection.create_index([("project_id", 1)], name="idx_project_id")
+
+        # Index on pipeline_id
+        await collection.create_index([("pipeline_id", 1)], name="idx_pipeline_id")
+
+        # Index on enabled status
+        await collection.create_index([("enabled", 1)], name="idx_enabled")
+
+        # Index on next_run_at for scheduler queries
+        await collection.create_index([("next_run_at", 1)], name="idx_next_run_at")
+
+        # Compound index for scheduler (enabled + next_run_at)
+        await collection.create_index(
+            [("enabled", 1), ("next_run_at", 1)], name="idx_enabled_next_run"
+        )
+
+        logger.debug("✓ Schedules indexes created")
+
+    async def _create_config_versions_indexes(self, db: AsyncIOMotorDatabase) -> None:
+        """Create indexes for config_versions collection"""
+        logger.debug("Creating indexes for 'config_versions' collection")
+        collection = db["config_versions"]
+
+        # Compound index on project_id and pipeline_id
+        await collection.create_index(
+            [("project_id", 1), ("pipeline_id", 1)], name="idx_project_pipeline"
+        )
+
+        # Index on version_number (with project_id)
+        await collection.create_index(
+            [("project_id", 1), ("version_number", -1)], name="idx_project_version"
+        )
+
+        # Index on created_at
+        await collection.create_index([("created_at", -1)], name="idx_created_at_desc")
+
+        logger.debug("✓ Config versions indexes created")
 
 
 class MigrationRunner:
@@ -149,6 +308,7 @@ class MigrationRunner:
         """Get all migrations in order"""
         return [
             Migration001Initial(),
+            Migration002Indexes(),
             # Add more migrations here as they're created
             # IMPORTANT: Never modify existing migrations, always add new ones
         ]
@@ -189,6 +349,9 @@ class MigrationManager:
 
         collection = self.db["projects"]
 
+        # Unique index on id (ensure fast lookups and prevent duplicates)
+        await collection.create_index([("id", 1)], unique=True, name="idx_id_unique")
+
         # Unique index on name
         await collection.create_index([("name", 1)], unique=True, name="idx_name_unique")
 
@@ -203,6 +366,12 @@ class MigrationManager:
             [("status", 1), ("created_at", -1)], name="idx_status_created"
         )
 
+        # Index on embedded pipeline names (non-unique; aids filtering/search)
+        try:
+            await collection.create_index([("pipelines.name", 1)], name="idx_pipelines_name")
+        except Exception as e:
+            logger.debug(f"Could not create pipelines.name index: {e}")
+
         logger.debug("Projects indexes created")
 
     async def _create_pipeline_runs_indexes(self) -> None:
@@ -210,6 +379,9 @@ class MigrationManager:
         logger.debug("Creating indexes for 'pipeline_runs' collection")
 
         collection = self.db["pipeline_runs"]
+
+        # Unique index on run id
+        await collection.create_index([("id", 1)], unique=True, name="idx_run_id_unique")
 
         # Compound index on project_id and pipeline_id
         await collection.create_index(
@@ -405,4 +577,3 @@ async def init_database(db: AsyncIOMotorDatabase) -> None:
     """
     manager = MigrationManager(db)
     await manager.run_all_migrations()
-

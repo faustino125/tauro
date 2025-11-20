@@ -46,7 +46,7 @@ ENVIRONMENT_QUERY_DESCRIPTION = "Environment name"
 router = APIRouter(prefix="/projects/{project_id}/pipelines", tags=["pipelines"])
 
 
-async def _get_pipelines_config(
+def _get_pipelines_config(
     project_id: str,
     environment: str,
     settings,
@@ -55,70 +55,82 @@ async def _get_pipelines_config(
 ) -> Dict[str, Dict[str, Any]]:
     """
     Load pipelines configuration from either MongoDB or file system.
-    
+
     This is the single source of truth for loading pipelines configuration.
     Centralizing this logic eliminates duplication between endpoints.
-    
+
     Args:
         project_id: The project identifier
         environment: The environment name
         settings: Application settings
         config_service: Service for loading from MongoDB (if available)
         config_manager: Manager for loading from files (if available)
-        
+
     Returns:
         Dictionary mapping pipeline IDs to their configurations
-        
+
     Raises:
         HTTPException: 404 if config not found, 503 if services unavailable, 500 if error
     """
     project_id = validate_identifier(project_id, "project_id")
-    
+
     if settings.config_source == "mongo":
-        # Load from MongoDB via config service
-        if not config_service:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=ERROR_CONFIG_SERVICE_UNAVAILABLE,
-            )
-        try:
-            bundle = config_service.get_active_context(project_id, environment)
-            pipelines_config = bundle.pipelines_config
-            
-            if not isinstance(pipelines_config, dict):
-                raise ValueError("Pipelines config must be a dictionary")
-            
-            return pipelines_config
-            
-        except ActiveConfigNotFound as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            )
-        except ConfigRepositoryError as exc:
-            logger.error(f"Config repository error: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to load pipelines from configuration repository",
-            )
+        return _load_pipelines_from_mongo(project_id, environment, config_service)
     else:
-        # Load from file system via config manager
-        if not config_manager:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=ERROR_CONFIG_MANAGER_UNAVAILABLE,
-            )
-        try:
-            pipelines_config = config_manager.load_config("pipeline")
-            if not isinstance(pipelines_config, dict):
-                raise ValueError("Pipeline configuration must be a dictionary")
-            return pipelines_config
-        except Exception as exc:
-            logger.error(f"Error loading pipelines from files: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to load pipeline configuration",
-            )
+        return _load_pipelines_from_files(config_manager)
+
+
+def _load_pipelines_from_mongo(
+    project_id: str, environment: str, config_service
+) -> Dict[str, Dict[str, Any]]:
+    """Load pipelines from MongoDB via config service."""
+    if not config_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ERROR_CONFIG_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        bundle = config_service.get_active_context(project_id, environment)
+        pipelines_config = bundle.pipelines_config
+
+        if not isinstance(pipelines_config, dict):
+            raise ValueError("Pipelines config must be a dictionary")
+
+        return pipelines_config
+
+    except ActiveConfigNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+    except ConfigRepositoryError as exc:
+        logger.error(f"Config repository error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load pipelines from configuration repository",
+        )
+
+
+def _load_pipelines_from_files(config_manager) -> Dict[str, Dict[str, Any]]:
+    """Load pipelines from file system via config manager."""
+    if not config_manager:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ERROR_CONFIG_MANAGER_UNAVAILABLE,
+        )
+
+    try:
+        pipelines_config = config_manager.load_config("pipeline")
+        if not isinstance(pipelines_config, dict):
+            raise ValueError("Pipeline configuration must be a dictionary")
+        return pipelines_config
+    except Exception as exc:
+        logger.error(f"Error loading pipelines from files: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load pipeline configuration",
+        )
 
 
 def _pipeline_run_to_response(
@@ -246,8 +258,8 @@ async def list_pipelines(
     """List available pipelines for the given project/environment."""
     env = _resolve_environment(settings, environment)
 
-    # ✅ Use centralized helper function
-    pipelines_config = await _get_pipelines_config(
+    # Use centralized helper function (not async anymore)
+    pipelines_config = _get_pipelines_config(
         project_id, env, settings, config_service, config_manager
     )
 
@@ -278,8 +290,8 @@ async def get_pipeline(
     """Return details for a specific pipeline."""
     env = _resolve_environment(settings, environment)
 
-    # ✅ Use centralized helper function
-    pipelines_config = await _get_pipelines_config(
+    # Use centralized helper function (not async anymore)
+    pipelines_config = _get_pipelines_config(
         project_id, env, settings, config_service, config_manager
     )
 

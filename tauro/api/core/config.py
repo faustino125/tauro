@@ -36,8 +36,20 @@ class Settings(BaseSettings):
         default=["http://localhost:3000", "http://localhost:8000"], env="CORS_ORIGINS"
     )
     cors_allow_credentials: bool = True
-    cors_allow_methods: List[str] = ["*"]
-    cors_allow_headers: List[str] = ["*"]
+    cors_allow_methods: List[str] = Field(
+        default=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], env="CORS_ALLOW_METHODS"
+    )
+    cors_allow_headers: List[str] = Field(
+        default=[
+            "Accept",
+            "Accept-Language",
+            "Content-Type",
+            "Authorization",
+            "X-Request-ID",
+            "X-Requested-With",
+        ],
+        env="CORS_ALLOW_HEADERS",
+    )
 
     # =========================================================================
     # Tauro Core Configuration

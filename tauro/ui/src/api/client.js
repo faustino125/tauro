@@ -36,74 +36,111 @@ class TauroAPIClient {
     const url = `${this.baseURL}${endpoint}`
     const controller = new AbortController()
     const key = `${options.method || 'GET'} ${endpoint}`
+    let timeoutId
     
     // Cancel previous request to same endpoint
+    this._cancelPreviousRequest(key, controller)
+
+    try {
+      const headers = this._buildHeaders(options.headers)
+      
+      // Implement manual timeout since fetch does not support a timeout option
+      timeoutId = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT)
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers,
+        ...options,
+      })
+
+      return await this._handleResponse(response)
+      
+    } catch (error) {
+      throw this._handleRequestError(error, endpoint, timeoutId)
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId)
+      this.pendingRequests.delete(key)
+    }
+  }
+
+  /**
+   * Cancel previous pending request to the same endpoint
+   */
+  _cancelPreviousRequest(key, controller) {
     if (this.pendingRequests.has(key)) {
       const previous = this.pendingRequests.get(key)
       console.debug(`Cancelling previous request: ${key}`)
       previous.abort()
     }
     this.pendingRequests.set(key, controller)
+  }
 
-    try {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      }
-
-      // Add auth token if available
-      if (this.authToken) {
-        headers['Authorization'] = `Bearer ${this.authToken}`
-      }
-
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers,
-        timeout: API_CONFIG.TIMEOUT,
-        ...options,
-      })
-
-      // Handle non-JSON responses
-      const contentType = response.headers.get('content-type')
-      const isJson = contentType && contentType.includes('application/json')
-
-      if (!response.ok) {
-        const error = isJson 
-          ? await response.json().catch(() => ({ detail: response.statusText }))
-          : { detail: response.statusText }
-        
-        throw new APIError(
-          error.detail || error.message || 'API request failed',
-          response.status,
-          error.code,
-          error.details
-        )
-      }
-
-      return isJson ? await response.json() : await response.text()
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        console.debug(`Request cancelled: ${endpoint}`)
-        const cancelError = new Error('Request was cancelled')
-        cancelError.cancelled = true
-        throw cancelError
-      }
-      
-      // Re-throw APIError as-is
-      if (error instanceof APIError) {
-        throw error
-      }
-      
-      // Wrap other errors
-      throw new APIError(
-        error.message || 'Network request failed',
-        null,
-        'NETWORK_ERROR',
-        { originalError: error }
-      )
-    } finally {
-      this.pendingRequests.delete(key)
+  /**
+   * Build request headers with authentication
+   */
+  _buildHeaders(customHeaders = {}) {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...customHeaders,
     }
+
+    // Add auth token if available
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`
+    }
+
+    return headers
+  }
+
+  /**
+   * Handle fetch response and parse JSON
+   */
+  async _handleResponse(response) {
+    const contentType = response.headers.get('content-type')
+    const isJson = contentType?.includes('application/json')
+
+    if (!response.ok) {
+      const error = isJson 
+        ? await response.json().catch(() => ({ detail: response.statusText }))
+        : { detail: response.statusText }
+      
+      throw new APIError(
+        error.detail || error.message || 'API request failed',
+        response.status,
+        error.code,
+        error.details
+      )
+    }
+
+    return isJson ? await response.json() : await response.text()
+  }
+
+  /**
+   * Handle request errors (abort, network, etc)
+   */
+  _handleRequestError(error, endpoint, timeoutId) {
+    if (error.name === 'AbortError') {
+      const isTimeout = timeoutId == null
+      console.debug(`Request aborted (${isTimeout ? 'timeout' : 'cancel'}): ${endpoint}`)
+      
+      const abortErr = new Error(isTimeout ? 'Request timed out' : 'Request was cancelled')
+      abortErr.cancelled = !isTimeout
+      abortErr.timeout = isTimeout
+      return abortErr
+    }
+    
+    // Re-throw APIError as-is
+    if (error instanceof APIError) {
+      return error
+    }
+    
+    // Wrap other errors
+    return new APIError(
+      error.message || 'Network request failed',
+      null,
+      'NETWORK_ERROR',
+      { originalError: error }
+    )
   }
 
   // ===== Projects =====
@@ -147,10 +184,10 @@ class TauroAPIClient {
 
     const query = params.toString() ? `?${params}` : ''
     const response = await this.request(`/runs${query}`)
-    
     return {
       runs: response.data || [],
-      total: response.total || 0,
+      total: response.pagination?.total || 0,
+      pagination: response.pagination || null,
     }
   }
 
@@ -177,10 +214,10 @@ class TauroAPIClient {
 
     const query = params.toString() ? `?${params}` : ''
     const response = await this.request(`/runs/${runId}/logs${query}`)
-    
     return {
       logs: response.data || [],
-      total: response.total || 0,
+      total: response.pagination?.total || 0,
+      pagination: response.pagination || null,
     }
   }
 
@@ -231,11 +268,71 @@ class TauroAPIClient {
 
     const query = params.toString() ? `?${params}` : ''
     const response = await this.request(`/runs/${runId}/tasks${query}`)
-    
     return {
       tasks: response.data || [],
-      total: response.total || 0,
+      total: response.pagination?.total || 0,
+      pagination: response.pagination || null,
     }
+  }
+
+  // ===== Schedules =====
+
+  async listSchedules(filters = {}) {
+    const params = new URLSearchParams()
+    if (filters.pipelineId) params.append('pipeline_id', filters.pipelineId)
+    if (filters.enabled !== undefined) params.append('enabled', filters.enabled)
+    if (filters.limit !== undefined) params.append('limit', filters.limit)
+    if (filters.offset !== undefined) params.append('offset', filters.offset)
+
+    const query = params.toString() ? `?${params}` : ''
+    const response = await this.request(`/schedules${query}`)
+    return {
+      schedules: response.data || [],
+      total: response.pagination?.total || 0,
+      pagination: response.pagination || null,
+    }
+  }
+
+  async createSchedule(data) {
+    return this.request('/schedules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async updateSchedule(scheduleId, data) {
+    return this.request(`/schedules/${scheduleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteSchedule(scheduleId) {
+    return this.request(`/schedules/${scheduleId}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async pauseSchedule(scheduleId) {
+    return this.request(`/schedules/${scheduleId}/pause`, {
+      method: 'POST',
+    })
+  }
+
+  async resumeSchedule(scheduleId) {
+    return this.request(`/schedules/${scheduleId}/resume`, {
+      method: 'POST',
+    })
+  }
+
+  // ===== Monitoring & Stats =====
+
+  async getStats() {
+    return this.request('/stats')
+  }
+
+  async getHealth() {
+    return this.request('/health')
   }
 }
 

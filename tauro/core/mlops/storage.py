@@ -100,7 +100,7 @@ class LocalStorageBackend(StorageBackend):
     def _get_full_path(self, path: str) -> Path:
         """
         Get full path with security validation.
-        
+
         Prevents:
         - Absolute paths
         - Parent directory traversal
@@ -113,7 +113,7 @@ class LocalStorageBackend(StorageBackend):
         except Exception as e:
             logger.error(f"Invalid path '{path}': {e}")
             raise ValueError(f"Invalid path '{path}': {e}")
-        
+
         return full_path
 
     def write_dataframe(
@@ -288,18 +288,18 @@ class LocalStorageBackend(StorageBackend):
 class DatabricksStorageBackend(StorageBackend):
     """
     Databricks Unity Catalog storage backend.
-    
+
     ⚠️ WARNING: This backend is currently EXPERIMENTAL and partially implemented.
     Most operations will raise NotImplementedError or return placeholder data.
-    
+
     For production use with Databricks:
     1. Use Spark DataFrame API directly: spark.table(f"{catalog}.{schema}.{table}")
     2. Use UC Volumes API for artifacts: dbfs:/Volumes/{catalog}/{schema}/{path}
     3. Consider implementing full integration with databricks-sdk
-    
+
     Status:
     - ❌ read_dataframe: NotImplemented
-    - ❌ read_json: NotImplemented  
+    - ❌ read_json: NotImplemented
     - ❌ read_artifact: NotImplemented
     - ⚠️ write_dataframe: Placeholder only
     - ⚠️ write_json: Placeholder only

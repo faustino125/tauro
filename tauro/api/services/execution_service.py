@@ -87,7 +87,7 @@ class ExecutionService:
             if run.get("state") != RunState.PENDING.value:
                 raise InvalidExecutionError(
                     f"Cannot execute a run in state {run.get('state')}. "
-                    f"Only runs in PENDING can be executed."
+                    "Only runs in PENDING can be executed."
                 )
 
             # 4. CHANGE STATE: PENDING → RUNNING
@@ -153,8 +153,8 @@ class ExecutionService:
             params = run.get("params", {})
 
             logger.info(
-                f"Context built for pipeline {pipeline_id}, "
-                f"params={params}, timeout={timeout_seconds}s"
+                f"Context built for pipeline {pipeline_id}, params={params}, "
+                f"timeout={timeout_seconds}s"
             )
 
             # Execute pipeline (internal handles timeout and simulation)
@@ -291,7 +291,7 @@ class ExecutionService:
         # Only cancel if in RUNNING or PENDING
         if current_state not in [RunState.RUNNING.value, RunState.PENDING.value]:
             logger.warning(
-                f"Cannot cancel run {run_id}: " f"state is {current_state}, not RUNNING/PENDING"
+                f"Cannot cancel run {run_id}: state is {current_state}, not RUNNING/PENDING"
             )
             return False
 
@@ -434,4 +434,3 @@ class ExecutionService:
                 "error": str(e),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-

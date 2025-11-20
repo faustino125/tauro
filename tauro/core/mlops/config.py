@@ -28,7 +28,7 @@ class MLOpsContext:
     Centralized MLOps context for managing Model Registry and Experiment Tracking.
 
     PREFERRED: Use from_context() to auto-detect mode and configuration.
-    
+
     Supports both local and Databricks backends with automatic mode detection.
     """
 
@@ -39,21 +39,21 @@ class MLOpsContext:
     ):
         """
         Initialize MLOps context with pre-built components.
-        
+
         Args:
             model_registry: ModelRegistry instance
             experiment_tracker: ExperimentTracker instance
-            
+
         Note:
             Prefer using MLOpsContext.from_context() for automatic setup
             from Tauro execution context.
         """
         self.model_registry = model_registry
         self.experiment_tracker = experiment_tracker
-        
+
         # Expose storage for backward compatibility
         self.storage = model_registry.storage
-        
+
         logger.info("MLOpsContext initialized")
 
     @classmethod
@@ -67,27 +67,27 @@ class MLOpsContext:
     ) -> "MLOpsContext":
         """
         Create MLOpsContext from Tauro execution context (RECOMMENDED).
-        
+
         Automatically detects execution mode (local/databricks) and creates
         appropriate storage backend from context.global_settings.
-        
+
         Args:
             context: Tauro execution context
             registry_path: Model registry subdirectory
             tracking_path: Experiment tracking subdirectory
             metric_buffer_size: Metrics buffer size (P1 feature)
             auto_flush_metrics: Auto-flush metrics (P1 feature)
-        
+
         Returns:
             MLOpsContext with auto-configured components
-            
+
         Example:
             >>> from tauro.core.config import Context
             >>> from tauro.core.mlops.config import MLOpsContext
-            >>> 
+            >>>
             >>> context = Context(global_settings=..., ...)
             >>> mlops = MLOpsContext.from_context(context)
-            >>> 
+            >>>
             >>> # Use transparent API
             >>> exp = mlops.experiment_tracker.create_experiment("exp_1")
         """
@@ -96,17 +96,17 @@ class MLOpsContext:
             context,
             registry_path=registry_path,
         )
-        
+
         experiment_tracker = ExperimentTrackerFactory.from_context(
             context,
             tracking_path=tracking_path,
             metric_buffer_size=metric_buffer_size,
             auto_flush_metrics=auto_flush_metrics,
         )
-        
+
         mode = getattr(context, "execution_mode", "local")
         logger.info(f"MLOpsContext created from context (mode: {mode})")
-        
+
         return cls(
             model_registry=model_registry,
             experiment_tracker=experiment_tracker,
@@ -116,7 +116,7 @@ class MLOpsContext:
     def from_env(cls) -> "MLOpsContext":
         """
         Create MLOpsContext from environment variables (LEGACY).
-        
+
         ⚠️ DEPRECATED: Prefer using from_context() for better integration
         with Tauro's configuration system.
 
@@ -132,7 +132,7 @@ class MLOpsContext:
             "MLOpsContext.from_env() is deprecated. "
             "Use MLOpsContext.from_context() instead for better integration."
         )
-        
+
         backend = os.getenv("TAURO_MLOPS_BACKEND", "local")
 
         if backend == "local":
@@ -142,12 +142,12 @@ class MLOpsContext:
         elif backend == "databricks":
             catalog = os.getenv("TAURO_MLOPS_CATALOG", "main")
             schema = os.getenv("TAURO_MLOPS_SCHEMA", "ml_tracking")
-            
+
             if not catalog or not schema:
                 raise ValueError(
                     "TAURO_MLOPS_CATALOG and TAURO_MLOPS_SCHEMA required for Databricks backend"
                 )
-            
+
             storage = DatabricksStorageBackend(
                 catalog=catalog,
                 schema=schema,
@@ -157,10 +157,10 @@ class MLOpsContext:
             logger.info(f"MLOpsContext: Using DatabricksStorageBackend at {catalog}.{schema}")
         else:
             raise ValueError(f"Unknown TAURO_MLOPS_BACKEND: {backend}")
-        
+
         model_registry = ModelRegistry(storage)
         experiment_tracker = ExperimentTracker(storage)
-        
+
         return cls(
             model_registry=model_registry,
             experiment_tracker=experiment_tracker,

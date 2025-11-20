@@ -37,9 +37,7 @@ class TestStorageBackendFactory:
 
     def test_create_local_backend_custom_path(self):
         """Test creating local backend with custom path."""
-        context = MockContext(
-            mode="local", global_settings={"mlops_path": "/custom/mlruns"}
-        )
+        context = MockContext(mode="local", global_settings={"mlops_path": "/custom/mlruns"})
 
         backend = StorageBackendFactory.create_from_context(context)
 
@@ -51,9 +49,7 @@ class TestStorageBackendFactory:
         """Test creating local backend with override path."""
         context = MockContext(mode="local")
 
-        backend = StorageBackendFactory.create_from_context(
-            context, base_path="/override/path"
-        )
+        backend = StorageBackendFactory.create_from_context(context, base_path="/override/path")
 
         assert isinstance(backend, LocalStorageBackend)
         # Normalize path for cross-platform comparison
@@ -81,9 +77,7 @@ class TestStorageBackendFactory:
 
         # Mock databricks import to avoid dependency
         mock_databricks = MagicMock()
-        monkeypatch.setattr(
-            "tauro.core.mlops.storage.databricks", mock_databricks, raising=False
-        )
+        monkeypatch.setattr("tauro.core.mlops.storage.databricks", mock_databricks, raising=False)
 
         backend = StorageBackendFactory.create_from_context(context)
 
@@ -112,9 +106,7 @@ class TestStorageBackendFactory:
         )
 
         mock_databricks = MagicMock()
-        monkeypatch.setattr(
-            "tauro.core.mlops.storage.databricks", mock_databricks, raising=False
-        )
+        monkeypatch.setattr("tauro.core.mlops.storage.databricks", mock_databricks, raising=False)
 
         backend = StorageBackendFactory.create_from_context(context)
 
@@ -133,9 +125,7 @@ class TestStorageBackendFactory:
         context = MockContext(mode="databricks")
 
         mock_databricks = MagicMock()
-        monkeypatch.setattr(
-            "tauro.core.mlops.storage.databricks", mock_databricks, raising=False
-        )
+        monkeypatch.setattr("tauro.core.mlops.storage.databricks", mock_databricks, raising=False)
 
         backend = StorageBackendFactory.create_from_context(
             context,
@@ -184,9 +174,7 @@ class TestExperimentTrackerFactory:
 
     def test_from_context_local_custom_params(self):
         """Test creating ExperimentTracker with custom parameters."""
-        context = MockContext(
-            mode="local", global_settings={"mlops_path": "/custom/path"}
-        )
+        context = MockContext(mode="local", global_settings={"mlops_path": "/custom/path"})
 
         tracker = ExperimentTrackerFactory.from_context(
             context,
@@ -222,9 +210,7 @@ class TestExperimentTrackerFactory:
         )
 
         mock_databricks = MagicMock()
-        monkeypatch.setattr(
-            "tauro.core.mlops.storage.databricks", mock_databricks, raising=False
-        )
+        monkeypatch.setattr("tauro.core.mlops.storage.databricks", mock_databricks, raising=False)
 
         tracker = ExperimentTrackerFactory.from_context(context)
 
@@ -248,13 +234,9 @@ class TestModelRegistryFactory:
 
     def test_from_context_local_custom_params(self):
         """Test creating ModelRegistry with custom parameters."""
-        context = MockContext(
-            mode="local", global_settings={"mlops_path": "/custom/path"}
-        )
+        context = MockContext(mode="local", global_settings={"mlops_path": "/custom/path"})
 
-        registry = ModelRegistryFactory.from_context(
-            context, registry_path="custom_registry"
-        )
+        registry = ModelRegistryFactory.from_context(context, registry_path="custom_registry")
 
         assert registry is not None
         assert isinstance(registry.storage, LocalStorageBackend)
@@ -281,9 +263,7 @@ class TestModelRegistryFactory:
         )
 
         mock_databricks = MagicMock()
-        monkeypatch.setattr(
-            "tauro.core.mlops.storage.databricks", mock_databricks, raising=False
-        )
+        monkeypatch.setattr("tauro.core.mlops.storage.databricks", mock_databricks, raising=False)
 
         registry = ModelRegistryFactory.from_context(context)
 
@@ -347,9 +327,7 @@ class TestModeDetection:
         monkeypatch.setenv("DATABRICKS_TOKEN", "test_token")
 
         mock_databricks = MagicMock()
-        monkeypatch.setattr(
-            "tauro.core.mlops.storage.databricks", mock_databricks, raising=False
-        )
+        monkeypatch.setattr("tauro.core.mlops.storage.databricks", mock_databricks, raising=False)
 
         for mode in ["DISTRIBUTED", "Distributed", "distributed"]:
             context = MockContext(

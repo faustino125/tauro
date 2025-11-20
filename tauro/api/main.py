@@ -3,6 +3,7 @@ Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
 """
 import sys
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -55,6 +56,20 @@ def configure_logging():
         )
 
     logger.info(f"Logging configured: level={settings.log_level}")
+
+    # ---------------------------------------------------------------------
+    # Intercept standard logging and route through loguru for consistency
+    # ---------------------------------------------------------------------
+    class InterceptHandler(logging.Handler):
+        def emit(self, record):
+            try:
+                level = logger.level(record.levelname).name
+            except ValueError:
+                level = record.levelno
+            logger.log(level, record.getMessage())
+
+    logging.root.handlers = [InterceptHandler()]
+    logging.root.setLevel(settings.log_level)
 
 
 # =============================================================================

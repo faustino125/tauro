@@ -96,7 +96,7 @@ class TestModelRegistry:
         """Test that getting non-existent model raises ModelNotFoundError."""
         with pytest.raises(ModelNotFoundError) as exc_info:
             registry.get_model_version("nonexistent_model")
-        
+
         assert "nonexistent_model" in str(exc_info.value)
 
     def test_register_model(self, registry, dummy_model):
@@ -222,7 +222,7 @@ class TestExperimentTracker:
 
         with pytest.raises(InvalidMetricError) as exc_info:
             tracker.log_metric(run.run_id, "accuracy", "not_a_number")
-        
+
         assert "Expected int or float" in str(exc_info.value)
 
     def test_log_nan_metric(self, tracker):
@@ -231,8 +231,8 @@ class TestExperimentTracker:
         run = tracker.start_run(exp.experiment_id)
 
         with pytest.raises(InvalidMetricError) as exc_info:
-            tracker.log_metric(run.run_id, "loss", float('nan'))
-        
+            tracker.log_metric(run.run_id, "loss", float("nan"))
+
         assert "NaN" in str(exc_info.value)
 
     def test_log_artifact_nonexistent(self, tracker):

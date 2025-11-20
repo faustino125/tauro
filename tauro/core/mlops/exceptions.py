@@ -57,9 +57,7 @@ class RunNotActiveError(MLOpsException):
 
     def __init__(self, run_id: str):
         self.run_id = run_id
-        super().__init__(
-            f"Run '{run_id}' is not active. Use get_run() to access completed runs."
-        )
+        super().__init__(f"Run '{run_id}' is not active. Use get_run() to access completed runs.")
 
 
 class ArtifactNotFoundError(MLOpsException):
@@ -99,9 +97,7 @@ class StorageBackendError(MLOpsException):
         self.operation = operation
         self.path = path
         self.cause = cause
-        super().__init__(
-            f"Storage backend error during {operation} at '{path}': {str(cause)}"
-        )
+        super().__init__(f"Storage backend error during {operation} at '{path}': {str(cause)}")
 
 
 class ModelRegistrationError(MLOpsException):

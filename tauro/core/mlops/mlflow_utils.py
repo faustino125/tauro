@@ -17,13 +17,13 @@ from loguru import logger
 class MLflowConfig:
     """
     Configuración centralizada de MLflow para Tauro.
-    
+
     Soporta:
     - Variables de entorno
     - Configuración en YAML/JSON
     - Valores por defecto sensatos
     - Auto-detección de Databricks
-    
+
     Example:
         >>> config = MLflowConfig.from_env()
         >>> config = MLflowConfig.from_yaml("mlflow_config.yml")
@@ -32,7 +32,7 @@ class MLflowConfig:
         ...     experiment_name="my_pipeline",
         ... )
     """
-    
+
     def __init__(
         self,
         tracking_uri: Optional[str] = None,
@@ -45,7 +45,7 @@ class MLflowConfig:
     ):
         """
         Initialize MLflow configuration.
-        
+
         Args:
             tracking_uri: MLflow tracking server URI (None = local)
             experiment_name: Default experiment name
@@ -62,24 +62,24 @@ class MLflowConfig:
         self.nested_runs = nested_runs
         self.registry_uri = registry_uri or tracking_uri
         self.default_tags = default_tags or {}
-        
+
         # Auto-detect Databricks
         self.is_databricks = self._detect_databricks()
         if self.is_databricks:
             logger.info("Databricks environment detected")
-    
+
     def _detect_databricks(self) -> bool:
         """Detect if running on Databricks."""
         return (
             os.getenv("DATABRICKS_RUNTIME_VERSION") is not None
             or os.getenv("SPARK_HOME", "").find("databricks") >= 0
         )
-    
+
     @classmethod
     def from_env(cls, prefix: str = "MLFLOW_") -> "MLflowConfig":
         """
         Create configuration from environment variables.
-        
+
         Environment variables:
         - MLFLOW_TRACKING_URI: Tracking server URI
         - MLFLOW_EXPERIMENT_NAME: Experiment name
@@ -87,13 +87,13 @@ class MLflowConfig:
         - MLFLOW_ENABLE_AUTOLOG: Enable autologging (true/false)
         - MLFLOW_NESTED_RUNS: Use nested runs (true/false)
         - MLFLOW_REGISTRY_URI: Model registry URI
-        
+
         Args:
             prefix: Prefix for environment variables
-            
+
         Returns:
             MLflowConfig instance
-            
+
         Example:
             >>> os.environ["MLFLOW_TRACKING_URI"] = "http://localhost:5000"
             >>> config = MLflowConfig.from_env()
@@ -106,12 +106,12 @@ class MLflowConfig:
             nested_runs=os.getenv(f"{prefix}NESTED_RUNS", "true").lower() == "true",
             registry_uri=os.getenv(f"{prefix}REGISTRY_URI"),
         )
-    
+
     @classmethod
     def from_yaml(cls, config_path: str) -> "MLflowConfig":
         """
         Load configuration from YAML file.
-        
+
         YAML structure:
         ```yaml
         mlflow:
@@ -121,20 +121,20 @@ class MLflowConfig:
           enable_autolog: true
           nested_runs: true
         ```
-        
+
         Args:
             config_path: Path to YAML file
-            
+
         Returns:
             MLflowConfig instance
         """
         import yaml
-        
+
         with open(config_path) as f:
             data = yaml.safe_load(f)
-        
+
         mlflow_config = data.get("mlflow", {})
-        
+
         return cls(
             tracking_uri=mlflow_config.get("tracking_uri"),
             experiment_name=mlflow_config.get("experiment_name", "tauro_pipeline"),
@@ -144,15 +144,15 @@ class MLflowConfig:
             registry_uri=mlflow_config.get("registry_uri"),
             default_tags=mlflow_config.get("tags", {}),
         )
-    
+
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "MLflowConfig":
         """
         Create configuration from dictionary.
-        
+
         Args:
             config_dict: Configuration dictionary
-            
+
         Returns:
             MLflowConfig instance
         """
@@ -165,7 +165,7 @@ class MLflowConfig:
             registry_uri=config_dict.get("registry_uri"),
             default_tags=config_dict.get("tags", {}),
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
@@ -178,22 +178,22 @@ class MLflowConfig:
             "tags": self.default_tags,
             "is_databricks": self.is_databricks,
         }
-    
+
     def apply(self) -> None:
         """Apply configuration to MLflow environment."""
         try:
             import mlflow
-            
+
             if self.tracking_uri:
                 mlflow.set_tracking_uri(self.tracking_uri)
                 logger.info(f"Set MLflow tracking URI: {self.tracking_uri}")
-            
+
             if self.registry_uri:
                 mlflow.set_registry_uri(self.registry_uri)
                 logger.info(f"Set MLflow registry URI: {self.registry_uri}")
-            
+
             logger.info("MLflow configuration applied successfully")
-            
+
         except ImportError:
             logger.warning("MLflow not installed, configuration not applied")
 
@@ -201,14 +201,14 @@ class MLflowConfig:
 class MLflowHelper:
     """
     Helper utilities para trabajar con MLflow en Tauro.
-    
+
     Proporciona funciones de conveniencia para:
     - Logging de DataFrames
     - Logging de plots
     - Comparación de runs
     - Búsqueda de mejores modelos
     """
-    
+
     @staticmethod
     def log_dataframe_sample(
         df: Any,
@@ -218,7 +218,7 @@ class MLflowHelper:
     ) -> None:
         """
         Log muestra de DataFrame como artifact.
-        
+
         Args:
             df: pandas o Spark DataFrame
             name: Nombre del artifact
@@ -228,29 +228,29 @@ class MLflowHelper:
         try:
             import mlflow
             import tempfile
-            
+
             # Convert to pandas if needed
             if hasattr(df, "toPandas"):
                 df = df.limit(n_rows).toPandas()
             else:
                 df = df.head(n_rows)
-            
+
             # Save to temp file
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
                 df.to_csv(f.name, index=False)
                 temp_path = f.name
-            
+
             # Log artifact
             mlflow.log_artifact(temp_path, artifact_path or "data")
-            
+
             # Cleanup
             Path(temp_path).unlink(missing_ok=True)
-            
+
             logger.debug(f"Logged DataFrame sample: {name}")
-            
+
         except Exception as e:
             logger.warning(f"Could not log DataFrame sample: {e}")
-    
+
     @staticmethod
     def log_plot(
         fig: Any,
@@ -259,7 +259,7 @@ class MLflowHelper:
     ) -> None:
         """
         Log matplotlib/plotly figure como artifact.
-        
+
         Args:
             fig: matplotlib.figure.Figure o plotly.graph_objects.Figure
             name: Nombre del artifact
@@ -268,11 +268,11 @@ class MLflowHelper:
         try:
             import mlflow
             import tempfile
-            
+
             # Detect figure type and save
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 temp_path = f.name
-            
+
             if hasattr(fig, "savefig"):
                 # Matplotlib
                 fig.savefig(temp_path, bbox_inches="tight", dpi=150)
@@ -282,18 +282,18 @@ class MLflowHelper:
             else:
                 logger.warning(f"Unknown figure type: {type(fig)}")
                 return
-            
+
             # Log artifact
             mlflow.log_artifact(temp_path, artifact_path or "plots")
-            
+
             # Cleanup
             Path(temp_path).unlink(missing_ok=True)
-            
+
             logger.debug(f"Logged plot: {name}")
-            
+
         except Exception as e:
             logger.warning(f"Could not log plot: {e}")
-    
+
     @staticmethod
     def log_dict_as_json(
         data: Dict[str, Any],
@@ -302,7 +302,7 @@ class MLflowHelper:
     ) -> None:
         """
         Log dictionary como JSON artifact.
-        
+
         Args:
             data: Dictionary to log
             name: Nombre del artifact
@@ -312,20 +312,20 @@ class MLflowHelper:
             import mlflow
             import json
             import tempfile
-            
+
             with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                 json.dump(data, f, indent=2)
                 temp_path = f.name
-            
+
             mlflow.log_artifact(temp_path, artifact_path or "config")
-            
+
             Path(temp_path).unlink(missing_ok=True)
-            
+
             logger.debug(f"Logged JSON: {name}")
-            
+
         except Exception as e:
             logger.warning(f"Could not log JSON: {e}")
-    
+
     @staticmethod
     def get_best_run(
         experiment_name: str,
@@ -334,26 +334,26 @@ class MLflowHelper:
     ) -> Optional[Any]:
         """
         Get best run from experiment by metric.
-        
+
         Args:
             experiment_name: Experiment name
             metric: Metric to optimize
             mode: 'max' or 'min'
-            
+
         Returns:
             Best run object or None
         """
         try:
             import mlflow
             from mlflow.tracking import MlflowClient
-            
+
             client = MlflowClient()
             experiment = client.get_experiment_by_name(experiment_name)
-            
+
             if not experiment:
                 logger.warning(f"Experiment not found: {experiment_name}")
                 return None
-            
+
             # Search runs
             runs = client.search_runs(
                 experiment_ids=[experiment.experiment_id],
@@ -361,28 +361,28 @@ class MLflowHelper:
                 order_by=[f"metrics.{metric} {'DESC' if mode == 'max' else 'ASC'}"],
                 max_results=1,
             )
-            
+
             if runs:
                 return runs[0]
-            
+
             return None
-            
+
         except Exception as e:
             logger.warning(f"Could not get best run: {e}")
             return None
-    
+
     @staticmethod
     def log_system_metrics() -> None:
         """Log system metrics (CPU, memory, etc.)."""
         try:
             import mlflow
             import psutil
-            
+
             mlflow.log_metric("system_cpu_percent", psutil.cpu_percent())
             mlflow.log_metric("system_memory_percent", psutil.virtual_memory().percent)
-            
+
             logger.debug("Logged system metrics")
-            
+
         except ImportError:
             pass
         except Exception as e:
@@ -395,14 +395,14 @@ def setup_mlflow_for_tauro(
 ) -> MLflowConfig:
     """
     Setup completo de MLflow para Tauro.
-    
+
     Args:
         config: MLflowConfig instance
         config_path: Path to YAML config file
-        
+
     Returns:
         Applied MLflowConfig
-        
+
     Example:
         >>> config = setup_mlflow_for_tauro(config_path="mlflow_config.yml")
         >>> # O con variables de entorno:
@@ -413,6 +413,6 @@ def setup_mlflow_for_tauro(
             config = MLflowConfig.from_yaml(config_path)
         else:
             config = MLflowConfig.from_env()
-    
+
     config.apply()
     return config

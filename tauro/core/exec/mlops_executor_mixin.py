@@ -29,7 +29,7 @@ class MLOpsExecutorMixin:
         """Initialize MLOps integration with context awareness."""
         try:
             auto_init = os.getenv("TAURO_MLOPS_AUTO_INIT", "true").lower() == "true"
-            
+
             # ✅ NEW: Pass self.context to integration for auto-detection
             self.mlops_integration = MLOpsExecutorIntegration(
                 context=self.context,  # Enables auto mode detection

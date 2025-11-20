@@ -62,7 +62,7 @@ async def create_run(
     """
     try:
         logger.info(
-            f"Creating run for project={request.project_id}, " f"pipeline={request.pipeline_id}"
+            f"Creating run for project={request.project_id}, pipeline={request.pipeline_id}"
         )
 
         run = await run_service.create_run(
@@ -165,7 +165,7 @@ async def list_runs(
 
     except Exception as e:
         logger.error(f"Error listing runs: {e}")
-        raise error_response(
+        return error_response(
             code="INTERNAL_ERROR",
             message="Error listing runs",
             details={"error": str(e)},

@@ -36,8 +36,8 @@ class APIResponse(BaseModel):
         description=RESPONSE_TIMESTAMP_DESC,
     )
 
-    class Config:
-        json_json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "examples": [
                 {
                     "status": "success",
@@ -57,6 +57,7 @@ class APIResponse(BaseModel):
                 },
             ]
         }
+    }
 
 
 class AsyncResponse(BaseModel):
@@ -74,8 +75,8 @@ class AsyncResponse(BaseModel):
         description=RESPONSE_TIMESTAMP_DESC,
     )
 
-    class Config:
-        json_json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "status": "accepted",
                 "task_id": "run-abc123",
@@ -83,6 +84,7 @@ class AsyncResponse(BaseModel):
                 "timestamp": EXAMPLE_TIMESTAMP,
             }
         }
+    }
 
 
 class PaginationInfo(BaseModel):
@@ -106,8 +108,8 @@ class ListResponse(BaseModel):
         description=RESPONSE_TIMESTAMP_DESC,
     )
 
-    class Config:
-        json_json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "status": "success",
                 "data": [{"id": "item-1"}, {"id": "item-2"}],
@@ -121,6 +123,7 @@ class ListResponse(BaseModel):
                 "timestamp": EXAMPLE_TIMESTAMP,
             }
         }
+    }
 
 
 # =============================================================================
@@ -165,4 +168,3 @@ def list_response(items: List[Any], total: int, limit: int, offset: int) -> List
             has_previous=offset > 0,
         ),
     )
-

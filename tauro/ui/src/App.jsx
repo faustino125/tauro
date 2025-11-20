@@ -2,12 +2,14 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import Layout from './components/Layout'
+import DashboardPage from './pages/DashboardPage'
+import SchedulesPage from './pages/SchedulesPage'
+import PipelineEditorPage from './pages/PipelineEditorPage'
 import PipelinesPage from './pages/PipelinesPage'
 import PipelineDetailPage from './pages/PipelineDetailPage'
 import RunsPage from './pages/RunsPage'
 import RunDetailPage from './pages/RunDetailPage'
 import ErrorBoundary from './components/ErrorBoundary'
-import { API_CONFIG } from './config/constants'
 
 // Create React Query client with smart retry logic
 const queryClient = new QueryClient({
@@ -35,12 +37,15 @@ function App() {
         <Router>
           <Layout>
             <Routes>
-              <Route path="/" element={<Navigate to="/runs" replace />} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/schedules" element={<SchedulesPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:runId" element={<RunDetailPage />} />
               <Route path="/pipelines" element={<PipelinesPage />} />
               <Route path="/pipelines/:pipelineId" element={<PipelineDetailPage />} />
-              <Route path="*" element={<Navigate to="/runs" replace />} />
+              <Route path="/projects/:projectId/pipelines/:pipelineId/edit" element={<PipelineEditorPage />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </Layout>
         </Router>

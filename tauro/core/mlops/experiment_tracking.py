@@ -125,8 +125,8 @@ class ExperimentTracker:
     """
 
     def __init__(
-        self, 
-        storage: StorageBackend, 
+        self,
+        storage: StorageBackend,
         tracking_path: str = "experiment_tracking",
         metric_buffer_size: int = 100,
         auto_flush_metrics: bool = True,
@@ -279,15 +279,16 @@ class ExperimentTracker:
             raise InvalidMetricError(
                 key, value, f"Expected int or float, got {type(value).__name__}"
             )
-        
+
         # Check for NaN or Inf
         if isinstance(value, float):
             import math
+
             if math.isnan(value):
                 raise InvalidMetricError(key, value, "Value is NaN")
             if math.isinf(value):
                 raise InvalidMetricError(key, value, "Value is infinite")
-        
+
         run = self._get_active_run(run_id)
         now = datetime.now(timezone.utc).isoformat()
 
@@ -304,12 +305,12 @@ class ExperimentTracker:
         run.metrics[key].append(metric)
 
         logger.debug(f"Run {run_id}: Logged metric {key}={value} (step {step})")
-        
+
         # Incremental persistence: flush if buffer is full
         if run_id not in self._metric_counts:
             self._metric_counts[run_id] = 0
         self._metric_counts[run_id] += 1
-        
+
         if self.auto_flush_metrics and self._metric_counts[run_id] >= self.metric_buffer_size:
             self._flush_metrics(run_id)
             self._metric_counts[run_id] = 0
@@ -355,10 +356,11 @@ class ExperimentTracker:
         """
         # Verify artifact exists before logging
         from pathlib import Path
+
         artifact_file = Path(artifact_path)
         if not artifact_file.exists():
             raise ArtifactNotFoundError(artifact_path)
-        
+
         run = self._get_active_run(run_id)
 
         if not destination:
@@ -568,7 +570,7 @@ class ExperimentTracker:
         if not metric_filter:
             runs = self.list_runs(experiment_id)
             return [r["run_id"] for r in runs]
-        
+
         # Try to use metrics index for faster search
         try:
             return self._search_runs_optimized(experiment_id, metric_filter)
@@ -576,22 +578,24 @@ class ExperimentTracker:
             logger.debug(f"Falling back to full scan search: {e}")
             # Fallback to full scan
             return self._search_runs_full_scan(experiment_id, metric_filter)
-    
-    def _search_runs_optimized(self, experiment_id: str, metric_filter: Dict[str, tuple]) -> List[str]:
+
+    def _search_runs_optimized(
+        self, experiment_id: str, metric_filter: Dict[str, tuple]
+    ) -> List[str]:
         """Search using metrics index (fast path)."""
         metrics_index_path = f"{self.tracking_path}/metrics/index.parquet"
         metrics_df = self.storage.read_dataframe(metrics_index_path)
-        
+
         # Filter by experiment
         metrics_df = metrics_df[metrics_df["experiment_id"] == experiment_id]
-        
+
         # Apply metric filters
         for metric_name, (op, threshold) in metric_filter.items():
             col_name = f"metric_{metric_name}"
             if col_name not in metrics_df.columns:
                 # Metric not in index, fallback to full scan
                 raise ValueError(f"Metric {metric_name} not in index")
-            
+
             if op == ">":
                 metrics_df = metrics_df[metrics_df[col_name] > threshold]
             elif op == "<":
@@ -604,14 +608,16 @@ class ExperimentTracker:
                 metrics_df = metrics_df[metrics_df[col_name] == threshold]
             else:
                 raise ValueError(f"Unsupported operator: {op}")
-        
+
         return metrics_df["run_id"].tolist()
-    
-    def _search_runs_full_scan(self, experiment_id: str, metric_filter: Dict[str, tuple]) -> List[str]:
+
+    def _search_runs_full_scan(
+        self, experiment_id: str, metric_filter: Dict[str, tuple]
+    ) -> List[str]:
         """Search using full scan (fallback)."""
         runs = self.list_runs(experiment_id)
         matching_runs: List[str] = []
-        
+
         for run_summary in runs:
             run_id = run_summary["run_id"]
             run = self.get_run(run_id)
@@ -649,21 +655,20 @@ class ExperimentTracker:
     def _flush_metrics(self, run_id: str) -> None:
         """
         Flush metrics for a run to storage (incremental persistence).
-        
+
         Args:
             run_id: Run ID
         """
         if run_id not in self._active_runs:
             return
-        
+
         run = self._active_runs[run_id]
-        
+
         try:
             # Store current metrics snapshot
             metrics_path = f"{self.tracking_path}/metrics/{run.experiment_id}/{run_id}_metrics.json"
             metrics_data = {
-                key: [m.to_dict() for m in metrics]
-                for key, metrics in run.metrics.items()
+                key: [m.to_dict() for m in metrics] for key, metrics in run.metrics.items()
             }
             self.storage.write_json(metrics_data, metrics_path, mode="overwrite")
             logger.debug(f"Flushed metrics for run {run_id}")
@@ -696,7 +701,7 @@ class ExperimentTracker:
     def _update_experiments_index(self, experiment: Experiment) -> None:
         """Update experiments index with file locking."""
         lock_path = f"{self.tracking_path}/experiments/.index.lock"
-        
+
         with file_lock(lock_path, timeout=30.0):
             df = self._load_experiments_index()
 
@@ -727,7 +732,7 @@ class ExperimentTracker:
     def _update_runs_index(self, run: Run) -> None:
         """Update runs index with file locking and create metrics index."""
         lock_path = f"{self.tracking_path}/runs/.index.lock"
-        
+
         with file_lock(lock_path, timeout=30.0):
             df = self._load_runs_index()
 
@@ -747,46 +752,46 @@ class ExperimentTracker:
 
             index_path = f"{self.tracking_path}/runs/index.parquet"
             self.storage.write_dataframe(df, index_path, mode="overwrite")
-            
+
             # Create metrics index for faster search
             self._update_metrics_index(run)
 
     def _update_metrics_index(self, run: Run) -> None:
         """
         Update metrics index for faster search.
-        
+
         Creates a denormalized index with run_id and latest metric values.
         """
         try:
             metrics_index_path = f"{self.tracking_path}/metrics/index.parquet"
-            
+
             # Load existing index
             try:
                 metrics_df = self.storage.read_dataframe(metrics_index_path)
             except FileNotFoundError:
                 metrics_df = pd.DataFrame(columns=["run_id", "experiment_id"])
-            
+
             # Remove old entry for this run
             metrics_df = metrics_df[metrics_df["run_id"] != run.run_id]
-            
+
             # Create new row with latest metrics
             row_data = {
                 "run_id": run.run_id,
                 "experiment_id": run.experiment_id,
             }
-            
+
             # Add latest value for each metric
             for metric_name, metric_list in run.metrics.items():
                 if metric_list:
                     latest_value = metric_list[-1].value
                     row_data[f"metric_{metric_name}"] = latest_value
-            
+
             new_row = pd.DataFrame([row_data])
             metrics_df = pd.concat([metrics_df, new_row], ignore_index=True)
-            
+
             # Write back
             self.storage.write_dataframe(metrics_df, metrics_index_path, mode="overwrite")
             logger.debug(f"Updated metrics index for run {run.run_id}")
-            
+
         except Exception as e:
             logger.warning(f"Could not update metrics index: {e}")

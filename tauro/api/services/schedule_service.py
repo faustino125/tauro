@@ -422,4 +422,3 @@ class ScheduleService:
             raise ValueError(f"Unrecognized unit: {unit}")
 
         return unit_mapping[unit](value)
-

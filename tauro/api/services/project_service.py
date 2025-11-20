@@ -2,7 +2,7 @@
 Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
 """
-import logging
+from loguru import logger
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -16,9 +16,6 @@ from tauro.api.schemas.models import (
 )
 from tauro.api.schemas.project_validators import ProjectValidator
 from tauro.api.schemas.serializers import ProjectSerializer
-
-
-logger = logging.getLogger(__name__)
 
 
 class ProjectNotFoundError(Exception):

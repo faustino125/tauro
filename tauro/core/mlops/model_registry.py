@@ -123,7 +123,7 @@ class ModelRegistry:
         self.registry_path = registry_path
         self._ensure_registry_structure()
         logger.info(f"ModelRegistry initialized at {registry_path}")
-    
+
     @contextmanager
     def _registry_lock(self, timeout: float = 30.0):
         """Context manager for registry write operations"""
@@ -199,36 +199,36 @@ class ModelRegistry:
             description = validate_description(description)
             hyperparameters = validate_parameters(hyperparameters)
             tags = validate_tags(tags)
-            
+
             logger.debug(f"Input validation passed for model '{name}'")
-            
+
         except Exception as e:
             logger.error(f"Validation failed for model registration: {e}")
             raise ModelRegistrationError(name, str(e)) from e
-        
+
         # ARTIFACT VALIDATION: Check artifact exists and is valid
         try:
             artifact_file = Path(artifact_path)
             PathValidator.validate_file_exists(artifact_file)
             PathValidator.validate_is_file_or_dir(artifact_file)
             logger.debug(f"Artifact validation passed: {artifact_file}")
-            
+
         except Exception as e:
             logger.error(f"Artifact validation failed: {e}")
             raise ArtifactNotFoundError(artifact_path) from e
-        
+
         # ATOMIC OPERATION: Register under lock
         try:
             with self._registry_lock():
                 model_id = str(uuid4())
                 version = 1
-                
+
                 # Load current index
                 try:
                     models_df = self._load_models_index()
                 except Exception:
                     models_df = pd.DataFrame()
-                
+
                 # Check if model exists (increment version)
                 if name in models_df.get("name", []).values:
                     model_rows = models_df[models_df["name"] == name]
@@ -237,9 +237,9 @@ class ModelRegistry:
                     logger.debug(f"Model '{name}' exists, registering version {version}")
                 else:
                     logger.debug(f"Registering new model '{name}' as version 1")
-                
+
                 now = datetime.now(tz=timezone.utc).isoformat()
-                
+
                 # Create metadata
                 metadata = ModelMetadata(
                     name=name,
@@ -254,13 +254,13 @@ class ModelRegistry:
                     output_schema=output_schema,
                     dependencies=dependencies or [],
                 )
-                
+
                 # Copy artifact to storage
                 artifact_destination = f"{self.registry_path}/artifacts/{model_id}/v{version}"
                 artifact_metadata = self.storage.write_artifact(
                     str(artifact_file), artifact_destination, mode="overwrite"
                 )
-                
+
                 # Create version record
                 model_version = ModelVersion(
                     model_id=model_id,
@@ -273,25 +273,21 @@ class ModelRegistry:
                     experiment_run_id=experiment_run_id,
                     size_bytes=artifact_metadata.size_bytes,
                 )
-                
+
                 # Persist metadata
                 metadata_path = f"{self.registry_path}/metadata/{model_id}/v{version}.json"
-                self.storage.write_json(
-                    model_version.to_dict(), 
-                    metadata_path, 
-                    mode="overwrite"
-                )
-                
+                self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
+
                 # Update index
                 self._update_models_index(model_version)
-                
+
                 logger.info(
                     f"Registered model '{name}' version {version} "
                     f"(ID: {model_id}, size: {artifact_metadata.size_bytes} bytes)"
                 )
-                
+
                 return model_version
-            
+
         except ArtifactNotFoundError:
             raise
         except Exception as e:
@@ -449,7 +445,7 @@ class ModelRegistry:
     def _update_models_index(self, model_version: ModelVersion) -> None:
         """Update models index with file locking."""
         lock_path = f"{self.registry_path}/models/.index.lock"
-        
+
         with file_lock(lock_path, timeout=30.0):
             df = self._load_models_index()
 

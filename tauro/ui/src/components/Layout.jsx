@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Activity, List, GitBranch } from 'lucide-react'
+import { Activity, List, GitBranch, LayoutDashboard, Calendar } from 'lucide-react'
 import { APP_INFO } from '../config/constants'
 
 export default function Layout({ children }) {
@@ -10,8 +10,10 @@ export default function Layout({ children }) {
   }
 
   const navItems = [
+    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/runs', label: 'Runs', icon: List },
     { path: '/pipelines', label: 'Pipelines', icon: GitBranch },
+    { path: '/schedules', label: 'Schedules', icon: Calendar },
   ]
 
   return (

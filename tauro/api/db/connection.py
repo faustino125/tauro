@@ -196,4 +196,3 @@ def get_mongodb_client() -> MongoDBClient:
         raise RuntimeError("MongoDB client not initialized. Call init_mongodb() first.")
 
     return _mongodb_client
-
