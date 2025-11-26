@@ -3,7 +3,7 @@ name = "tauro"
 version = "0.1.2"
 description = "Tauro - Unified data pipeline framework for batch, streaming, and hybrid workflows"
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
-readme = "tauro/README.md"
+readme = "engine/README.md"
 license = "MIT"
 homepage = "https://github.com/faustino125/tauro"
 repository = "https://github.com/faustino125/tauro"
@@ -23,14 +23,12 @@ classifiers = [
 ]
 
 packages = [
-    { include = "tauro" }
+    { include = "engine" }
 ]
 
-# Exclude the FastAPI server package from distribution
 exclude = [
-  "tauro/api",
-  "tauro/api/*",
-  "tauro/api/**",
+    "engine/**/test",
+    "engine/**/__pycache__"
 ]
 
 [tool.poetry.dependencies]
@@ -60,7 +58,7 @@ mypy = "^1.8.0"
 ruff = "^0.1.0"
 
 [tool.poetry.scripts]
-tauro = "tauro.cli.cli:main"
+tauro = "engine.cli.cli:main"
 
 [tool.black]
 line-length = 100
@@ -81,10 +79,10 @@ show_error_codes = true
 [tool.pytest.ini_options]
 # Point pytest to the repo's test folders
 testpaths = [
-  "tauro/cli/test",
-  "tauro/core/test",
-  "tauro/core/config/test",
-  "tauro/core/exec/test",
+  "engine/cli/test",
+  "engine/core/test",
+  "engine/core/config/test",
+  "engine/core/exec/test",
 ]
 addopts = ["-ra", "--cov=tauro", "--cov-report=term-missing"]
 
