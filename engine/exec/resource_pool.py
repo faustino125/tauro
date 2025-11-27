@@ -18,13 +18,8 @@ class ResourceHandle:
         resource_type: str,
         cleanup_fn: Optional[Callable[[Any], None]] = None,
     ):
-        """Initialize resource handle.
-
-        Args:
-            resource_id: Unique identifier for this resource
-            resource: The actual resource object
-            resource_type: Type of resource (spark, pandas, gpu, connection, temp_file)
-            cleanup_fn: Optional custom cleanup function
+        """
+        Initialize resource handle.
         """
         self.resource_id = resource_id
         self.resource = resource
@@ -113,11 +108,7 @@ class ResourceHandle:
 
 
 class ResourcePool:
-    """Centralized resource pool for tracking and cleanup management.
-
-    Thread-safe registry of resources with guaranteed cleanup on release.
-    Supports multiple resource types: Spark, Pandas, GPU, Connections, Temp Files.
-    """
+    """Centralized resource pool for tracking and cleanup management."""
 
     def __init__(self):
         """Initialize resource pool with thread safety."""
@@ -126,15 +117,7 @@ class ResourcePool:
         self._node_resources: Dict[str, List[str]] = {}  # node_name -> resource_ids
 
     def node_context(self, node_id: str):
-        """Context manager for automatic resource cleanup.
-
-        Usage:
-            with resource_pool.node_context('my_node'):
-                # Work with resources
-                resource = load_data()
-                pool.register_resource('my_node', resource, 'spark')
-                # Automatic cleanup on exit
-        """
+        """Context manager for automatic resource cleanup."""
         return _NodeResourceContext(self, node_id)
 
 
@@ -163,17 +146,7 @@ class _NodeResourceContext:
         resource_type: str,
         cleanup_fn: Optional[Callable[[Any], None]] = None,
     ) -> str:
-        """Register a resource for tracking and automatic cleanup.
-
-        Args:
-            node_id: Identifier of the node owning this resource
-            resource: The resource object to track
-            resource_type: Type of resource (spark, pandas, gpu, connection, temp_file)
-            cleanup_fn: Optional custom cleanup function(resource) -> None
-
-        Returns:
-            Unique resource ID for later reference
-        """
+        """Register a resource for tracking and automatic cleanup."""
         with self._lock:
             resource_id = f"{node_id}_{len(self._resources)}"
 

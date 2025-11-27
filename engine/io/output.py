@@ -463,11 +463,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         full_table_name: str,
         config: UnityCatalogConfig,
     ) -> None:
-        """Run VACUUM on table if requested or retention configured.
-
-        Note: Delta Lake enforces a minimum retention of 168 hours (7 days) by default.
-        Lower values will be automatically adjusted to the minimum.
-        """
+        """Run VACUUM on table if requested or retention configured."""
         if not (config.vacuum or config.vacuum_retention_hours):
             return
 

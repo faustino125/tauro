@@ -125,7 +125,7 @@ def get_fallback_chain(env: str) -> List[str]:
 
     # Unknown environment - raise error
     raise ValueError(
-        f"Unknown environment '{env}'. " f"Valid environments: {', '.join(DEFAULT_ENVIRONMENTS)}"
+        f"Unknown environment '{env}'. Valid environments: {', '.join(DEFAULT_ENVIRONMENTS)}"
     )
 
 
@@ -248,17 +248,7 @@ class ConfigLoaderProtocol(Protocol):
 
 
 class SecurityValidator:
-    """Validates file paths and prevents directory traversal attacks.
-
-    Behavior is strict by default. To enable permissive behavior (less strict checks,
-    and allow absolute config directories outside current working directory), set
-    environment variable TAURO_PERMISSIVE_PATH_VALIDATION=1
-
-    In permissive mode we skip:
-      - rejecting hidden path parts ('.*')
-      - ownership check (st_uid != os.getuid())
-    but still block sensitive system directories and obvious traversal attempts.
-    """
+    """Validates file paths and prevents directory traversal attacks."""
 
     if os.name == "posix":
         _sensitive_list = [
@@ -288,12 +278,7 @@ class SecurityValidator:
 
     @staticmethod
     def validate_path(base_path: Path, target_path: Path) -> Path:
-        """Ensure target path is within base path boundaries and safe.
-
-        In strict mode (default) it enforces that target_path is inside base_path.
-        In permissive mode (TAURO_PERMISSIVE_PATH_VALIDATION=1) absolute target paths
-        outside base_path are allowed after basic checks.
-        """
+        """Ensure target path is within base path boundaries and safe."""
         permissive = SecurityValidator._is_permissive()
         try:
             resolved_base = base_path.resolve()
@@ -598,13 +583,7 @@ def validate_environment_name(env_name: str) -> bool:
 
 
 def normalize_environment(env_name: Optional[str]) -> Optional[str]:
-    """Normalize environment name: lower-case, map aliases, and trim.
-
-    Returns canonical name (e.g. 'production' -> 'prod', 'SANDBox_juan' -> 'sandbox_juan').
-    If env_name is falsy returns None.
-
-    Uses canonical environment definitions from common.constants.
-    """
+    """Normalize environment name: lower-case, map aliases, and trim."""
     if not env_name:
         return None
     env = env_name.strip().lower()
@@ -630,11 +609,7 @@ def normalize_environment(env_name: Optional[str]) -> Optional[str]:
 
 
 def allowed_environments() -> List[str]:
-    """Return the list of allowed canonical environments.
-
-    This includes DEFAULT_ENVIRONMENTS plus any additional comma-separated
-    environments defined in TAURO_ALLOWED_ENVS environment variable.
-    """
+    """Return the list of allowed canonical environments."""
     extra = os.getenv("TAURO_ALLOWED_ENVS", "")
     extras = [e.strip().lower() for e in extra.split(",") if e.strip()] if extra else []
     # Normalize extras as well
@@ -647,14 +622,7 @@ def allowed_environments() -> List[str]:
 
 
 def is_allowed_environment(env_name: str) -> bool:
-    """Check whether an environment is allowed (after normalization).
-
-    An environment is allowed if:
-    - It's a canonical environment from CanonicalEnvironment
-    - It's an alias that maps to a canonical environment
-    - It's a sandbox variant (sandbox or sandbox_<name>)
-    - It's in TAURO_ALLOWED_ENVS environment variable
-    """
+    """Check whether an environment is allowed (after normalization)."""
     if not is_valid_environment(env_name):
         return False
 

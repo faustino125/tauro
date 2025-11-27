@@ -239,12 +239,7 @@ class UnifiedPipelineState:
         node_type: NodeType,
         dependencies: Optional[List[str]] = None,
     ) -> None:
-        """Register a node in the unified state.
-
-        This method ensures that `dependents` relationships are consistent regardless
-        of the order in which nodes are registered. If a node A depends on B but B
-        is registered later, when B is registered it will also link A as dependent.
-        """
+        """Register a node in the unified state."""
         with self._lock:
             if node_name in self._nodes:
                 raise ValueError(f"Node '{node_name}' already registered")

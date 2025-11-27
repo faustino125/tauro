@@ -5,7 +5,7 @@ For licensing information, see the LICENSE file in the project root
 import gc
 import json
 import time
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -18,7 +18,7 @@ from engine.exec.resilience import RetryPolicy
 
 try:
     from engine.exec.mlflow_node_executor import MLflowNodeExecutor
-    from engine.mlops.mlflow_adapter import MLflowPipelineTracker, is_mlflow_available
+    from engine.mlops.mlflow import MLflowPipelineTracker, is_mlflow_available
 
     MLFLOW_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -26,6 +26,7 @@ except ImportError:
     MLflowNodeExecutor = None
     MLflowPipelineTracker = None
 from engine.exec.pipeline_validator import PipelineValidator
+from engine.exec.mlops_integration import MLOpsExecutorIntegration
 from engine.exec.utils import extract_pipeline_nodes, get_node_dependencies
 from engine.io.input import InputLoader
 from engine.io.output import DataOutputManager
@@ -295,21 +296,120 @@ class BatchExecutor(BaseExecutor):
         start_date = start_date or self.context.global_settings.get("start_date")
         end_date = end_date or self.context.global_settings.get("end_date")
 
-        ml_info = self._prepare_ml_info(pipeline_name, model_version, hyperparams)
+        # Prepare ml_info and allow CLI overrides
+        ml_info = self._build_ml_info(pipeline_name, model_version, hyperparams)
+
         self._log_pipeline_start(pipeline_name, ml_info, "BATCH")
 
+        # Initialize unified state
         self.unified_state = UnifiedPipelineState()
         self.unified_state.set_pipeline_status("running")
 
+        # Initialize MLOps integration (experiment/run lifecycle)
+        mlops_integration, mlops_run_id, _ = self._start_mlops_integration(
+            pipeline, pipeline_name, ml_info
+        )
+
         try:
+            # inject MLOps context into ml_info for nodes
+            if mlops_integration and mlops_run_id:
+                ml_info["mlops_integration"] = mlops_integration
+                ml_info["mlops_run_id"] = mlops_run_id
+
             self._execute_batch_flow(pipeline, node_name, start_date, end_date, ml_info)
             self.unified_state.set_pipeline_status("completed")
+
+            # Close MLOps run on success
+            if mlops_integration and mlops_run_id:
+                mlops_integration.end_pipeline_run(mlops_run_id)
+
         except Exception:
             self.unified_state.set_pipeline_status("failed")
+
+            # Close MLOps run as failed
+            if mlops_integration and mlops_run_id:
+                from engine.mlops.experiment_tracking import RunStatus
+
+                mlops_integration.end_pipeline_run(mlops_run_id, status=RunStatus.FAILED)
+
             raise
         finally:
             if self.unified_state:
                 self.unified_state.cleanup()
+
+    def _build_ml_info(
+        self,
+        pipeline_name: str,
+        model_version: Optional[str],
+        hyperparams: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build or fetch the ml_info and apply CLI overrides."""
+        if hasattr(self.context, "get_pipeline_ml_info"):
+            ml_info = self.context.get_pipeline_ml_info(pipeline_name) or {}
+        else:
+            ml_info = self._prepare_ml_info(pipeline_name, model_version, hyperparams)
+
+        # Allow CLI overrides to take precedence over config
+        if model_version is not None:
+            ml_info["model_version"] = model_version
+
+        if hyperparams:
+            merged_h = dict(ml_info.get("hyperparams", {}) or {})
+            merged_h.update(hyperparams)
+            ml_info["hyperparams"] = merged_h
+
+        return ml_info
+
+    def _start_mlops_integration(
+        self,
+        pipeline: Dict[str, Any],
+        pipeline_name: str,
+        ml_info: Dict[str, Any],
+    ) -> Tuple[Optional[MLOpsExecutorIntegration], Optional[str], Optional[str]]:
+        """Initialize MLOps integration and start a pipeline run if available."""
+        mlops_integration: Optional[MLOpsExecutorIntegration] = None
+        mlops_run_id: Optional[str] = None
+        experiment_id: Optional[str] = None
+
+        try:
+            mlops_integration = MLOpsExecutorIntegration(context=self.context)
+            if not mlops_integration.is_available():
+                return mlops_integration, None, None
+
+            pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
+            description = ml_info.get("description") or ""
+            tags = {
+                "project_name": ml_info.get("project_name", ""),
+                "model_name": ml_info.get("model_name", pipeline_name),
+                "pipeline_type": str(pipeline_type),
+            }
+
+            experiment_id = mlops_integration.create_pipeline_experiment(
+                pipeline_name=pipeline_name,
+                pipeline_type=str(pipeline_type),
+                description=description,
+                tags=tags,
+            )
+
+            if experiment_id:
+                mlops_run_id = mlops_integration.start_pipeline_run(
+                    experiment_id=experiment_id,
+                    pipeline_name=pipeline_name,
+                    model_version=str(ml_info.get("model_version") or ""),
+                    hyperparams=ml_info.get("hyperparams") or {},
+                    tags={
+                        "env": str(self.context.global_settings.get("env", "")),
+                        "execution_mode": str(getattr(self.context, "execution_mode", "")),
+                    },
+                )
+
+        except Exception:
+            # Do not fail the whole execution if MLOps integration fails to initialize.
+            mlops_integration = None
+            mlops_run_id = None
+            experiment_id = None
+
+        return mlops_integration, mlops_run_id, experiment_id
 
     def _execute_batch_flow(
         self,

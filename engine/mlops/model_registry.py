@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -10,7 +10,7 @@ import pandas as pd  # type: ignore
 from loguru import logger
 
 from engine.mlops.storage import StorageBackend
-from engine.mlops.locking import file_lock
+from engine.mlops.concurrency import file_lock
 from engine.mlops.validators import (
     validate_model_name,
     validate_framework,
@@ -60,9 +60,17 @@ class ModelMetadata:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelMetadata":
-        """Create from dictionary."""
-        data["stage"] = ModelStage(data.get("stage", "Staging"))
-        return cls(**data)
+        """Create from dictionary with safe field filtering."""
+        # Get valid field names for this dataclass
+        valid_fields = {f.name for f in fields(cls)}
+
+        # Filter only valid fields to avoid TypeError on unknown keys
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+
+        # Handle stage enum conversion
+        filtered_data["stage"] = ModelStage(filtered_data.get("stage", "Staging"))
+
+        return cls(**filtered_data)
 
 
 @dataclass
@@ -103,12 +111,6 @@ class ModelVersion:
 class ModelRegistry:
     """
     Model Registry for versionado y gestión de modelos.
-
-    Features:
-    - Register and version models
-    - Store model metadata and artifacts
-    - Manage model lifecycle (Staging, Production, Archived)
-    - Search and retrieve models by name, version, or stage
     """
 
     def __init__(self, storage: StorageBackend, registry_path: str = "model_registry"):
@@ -168,27 +170,6 @@ class ModelRegistry:
     ) -> ModelVersion:
         """
         Register a new model or version with validation and locking.
-
-        Args:
-            name: Model name
-            artifact_path: Path to model artifact (file or directory)
-            artifact_type: Type (sklearn, xgboost, pytorch, onnx, etc.)
-            framework: ML framework (sklearn, xgboost, pytorch, tensorflow, etc.)
-            description: Model description
-            hyperparameters: Hyperparameters used
-            metrics: Performance metrics
-            tags: Custom tags
-            input_schema: Input schema description
-            output_schema: Output schema description
-            dependencies: List of dependencies
-            experiment_run_id: Associated experiment run ID
-
-        Returns:
-            ModelVersion: Registered model version
-
-        Raises:
-            ArtifactNotFoundError: If artifact_path does not exist
-            ModelRegistrationError: If registration fails
         """
         # VALIDATION: Perform all validations before acquiring lock
         try:
@@ -278,8 +259,8 @@ class ModelRegistry:
                 metadata_path = f"{self.registry_path}/metadata/{model_id}/v{version}.json"
                 self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
-                # Update index
-                self._update_models_index(model_version)
+                # Update index (skip_lock=True since we're already under _registry_lock)
+                self._update_models_index(model_version, skip_lock=True)
 
                 logger.info(
                     f"Registered model '{name}' version {version} "
@@ -301,16 +282,6 @@ class ModelRegistry:
     ) -> ModelVersion:
         """
         Get specific model version.
-
-        Args:
-            name: Model name
-            version: Version number (latest if None)
-
-        Returns:
-            ModelVersion
-
-        Raises:
-            ModelNotFoundError: If model or version not found
         """
         models_df = self._load_models_index()
         model_rows = models_df[models_df["name"] == name]
@@ -330,6 +301,30 @@ class ModelRegistry:
         metadata_path = f"{self.registry_path}/metadata/{row['model_id']}/v{row['version']}.json"
         data = self.storage.read_json(metadata_path)
         return ModelVersion.from_dict(data)
+
+    def get_model_by_stage(self, name: str, stage: ModelStage) -> ModelVersion:
+        """Get latest model version for a given stage."""
+        models_df = self._load_models_index()
+        model_rows = models_df[models_df["name"] == name]
+
+        if model_rows.empty:
+            raise ModelNotFoundError(name)
+
+        candidates: List[ModelVersion] = []
+        for _, row in model_rows.iterrows():
+            metadata_path = (
+                f"{self.registry_path}/metadata/{row['model_id']}/v{row['version']}.json"
+            )
+            data = self.storage.read_json(metadata_path)
+            mv = ModelVersion.from_dict(data)
+            if mv.metadata.stage == stage:
+                candidates.append(mv)
+
+        if not candidates:
+            raise ModelNotFoundError(f"{name} in stage {stage.value}")
+
+        # Return highest version in the requested stage
+        return sorted(candidates, key=lambda mv: mv.version, reverse=True)[0]
 
     def list_models(self) -> List[Dict[str, Any]]:
         """List all registered models with latest version."""
@@ -383,14 +378,6 @@ class ModelRegistry:
     def promote_model(self, name: str, version: int, stage: ModelStage) -> ModelVersion:
         """
         Promote model to new stage.
-
-        Args:
-            name: Model name
-            version: Version number
-            stage: Target stage (Staging, Production, Archived)
-
-        Returns:
-            Updated ModelVersion
         """
         model_version = self.get_model_version(name, version)
         model_version.metadata.stage = stage
@@ -405,11 +392,6 @@ class ModelRegistry:
     def download_artifact(self, name: str, version: Optional[int], local_destination: str) -> None:
         """
         Download model artifact to local path.
-
-        Args:
-            name: Model name
-            version: Version number (latest if None)
-            local_destination: Local path to save artifact
         """
         model_version = self.get_model_version(name, version)
         self.storage.read_artifact(model_version.artifact_uri, local_destination)
@@ -442,11 +424,13 @@ class ModelRegistry:
         except FileNotFoundError:
             return pd.DataFrame(columns=["model_id", "name", "version", "created_at"])
 
-    def _update_models_index(self, model_version: ModelVersion) -> None:
-        """Update models index with file locking."""
+    def _update_models_index(self, model_version: ModelVersion, skip_lock: bool = False) -> None:
+        """
+        Update models index.
+        """
         lock_path = f"{self.registry_path}/models/.index.lock"
 
-        with file_lock(lock_path, timeout=30.0):
+        def _do_update():
             df = self._load_models_index()
 
             new_row = pd.DataFrame(
@@ -465,3 +449,9 @@ class ModelRegistry:
 
             index_path = f"{self.registry_path}/models/index.parquet"
             self.storage.write_dataframe(df, index_path, mode="overwrite")
+
+        if skip_lock:
+            _do_update()
+        else:
+            with file_lock(lock_path, timeout=30.0):
+                _do_update()

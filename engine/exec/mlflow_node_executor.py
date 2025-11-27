@@ -1,20 +1,10 @@
-"""
-MLflow Node Executor for Tauro.
-
-Ejecuta nodos de pipeline como MLflow steps, con tracking automático
-de métricas, parámetros y artefactos.
-
-Copyright (c) 2025 Faustino Lopez Ramos.
-For licensing information, see the LICENSE file in the project root
-"""
-
 import time
 from typing import Any, Dict, Optional
 
 from loguru import logger
 
 from engine.exec.node_executor import NodeExecutor
-from engine.mlops.mlflow_adapter import (
+from engine.mlops.mlflow import (
     MLflowPipelineTracker,
     is_mlflow_available,
 )
@@ -23,21 +13,6 @@ from engine.mlops.mlflow_adapter import (
 class MLflowNodeExecutor(NodeExecutor):
     """
     Enhanced NodeExecutor con integración MLflow.
-
-    Cada nodo se ejecuta dentro de un MLflow step context, permitiendo:
-    - Tracking automático de duración
-    - Logging de métricas y parámetros por nodo
-    - Artifacts por nodo
-    - Visualización jerárquica en MLflow UI
-
-    Example:
-        >>> executor = MLflowNodeExecutor(
-        ...     context=context,
-        ...     mlflow_tracker=tracker,
-        ...     input_loader=loader,
-        ...     output_manager=manager,
-        ... )
-        >>> executor.execute_single_node("train", start_date, end_date, ml_info)
     """
 
     def __init__(
@@ -51,14 +26,6 @@ class MLflowNodeExecutor(NodeExecutor):
     ):
         """
         Initialize MLflow Node Executor.
-
-        Args:
-            context: Tauro execution context
-            input_loader: Input data loader
-            output_manager: Output data manager
-            mlflow_tracker: MLflow tracker instance (se crea automáticamente si no se provee)
-            max_workers: Max parallel workers
-            enable_mlflow: Enable MLflow tracking
         """
         super().__init__(context, input_loader, output_manager, max_workers)
 
@@ -83,12 +50,6 @@ class MLflowNodeExecutor(NodeExecutor):
     ) -> None:
         """
         Execute single node con MLflow step tracking.
-
-        Args:
-            node_name: Node name
-            start_date: Start date
-            end_date: End date
-            ml_info: ML configuration and metadata
         """
         if not self.enable_mlflow or not self.mlflow_tracker:
             # Fallback to standard execution
@@ -166,8 +127,6 @@ class MLflowNodeExecutor(NodeExecutor):
     ) -> None:
         """
         Execute nodes in parallel con MLflow tracking.
-
-        Cada nodo se ejecuta como un MLflow step independiente.
         """
         if not self.enable_mlflow or not self.mlflow_tracker:
             # Fallback to standard execution
@@ -203,27 +162,6 @@ def create_mlflow_executor(
 ) -> NodeExecutor:
     """
     Factory function para crear MLflow-enabled executor.
-
-    Args:
-        context: Tauro execution context
-        input_loader: Input data loader
-        output_manager: Output data manager
-        mlflow_config: MLflow configuration override
-        max_workers: Max parallel workers
-
-    Returns:
-        MLflowNodeExecutor instance
-
-    Example:
-        >>> executor = create_mlflow_executor(
-        ...     context=context,
-        ...     input_loader=loader,
-        ...     output_manager=manager,
-        ...     mlflow_config={
-        ...         "tracking_uri": "http://localhost:5000",
-        ...         "experiment_name": "my_pipeline",
-        ...     },
-        ... )
     """
     if not is_mlflow_available():
         logger.warning("MLflow not available, falling back to standard executor")

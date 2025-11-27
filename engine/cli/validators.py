@@ -47,14 +47,6 @@ class ValidationError:
 class EnvironmentConfigValidator:
     """
     Validates completeness and consistency of environment configurations.
-
-    Checks:
-    - Base environment exists
-    - All declared environments have directories
-    - Fallback chains are valid
-    - Required config sections exist
-    - Config files are valid (JSON/YAML syntax)
-    - No missing required fields
     """
 
     REQUIRED_CONFIG_SECTIONS = [
@@ -82,9 +74,6 @@ class EnvironmentConfigValidator:
     def validate_project(self) -> List[ValidationError]:
         """
         Validate entire project configuration.
-
-        Returns:
-            List of validation errors (empty if valid)
         """
         self.errors = []
 

@@ -811,14 +811,7 @@ class StreamingValidator:
             )
 
     def _validate_time_interval(self, interval: str) -> bool:
-        """Validate time interval format and value constraints.
-
-        Valid formats: '10 seconds', '5 minutes', '1 hour', etc.
-        Only POSITIVE integers are allowed (rejects 0 and negative values).
-
-        Returns:
-            True if interval is valid, False otherwise
-        """
+        """Validate time interval format and value constraints."""
         if not isinstance(interval, str):
             return False
 

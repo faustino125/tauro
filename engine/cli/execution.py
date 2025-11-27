@@ -202,17 +202,9 @@ class PipelineExecutor:
             logger.error(f"Failed to list streaming pipelines: {e}")
             return []
 
-    def stop_streaming_pipeline(self, execution_id: str, timeout: int = 60) -> bool:
+    def stop_streaming_pipeline(self, execution_id: str) -> bool:
         """Stop a streaming pipeline."""
         try:
-            # Note: executor.stop_streaming_pipeline might not accept timeout in all versions,
-            # but we assume the underlying implementation handles it or we adapt.
-            # Checking core/exec/executor.py: stop_streaming_pipeline(execution_id, graceful=True)
-            # It doesn't seem to take timeout directly in the signature shown in previous context,
-            # but let's check if we can pass it or if we need to adapt.
-            # The core executor signature is: stop_streaming_pipeline(self, execution_id: str, graceful: bool = True) -> bool
-            # So we ignore timeout here for the core call, or we update core.
-            # For now, let's just call it with graceful=True.
             return self.executor.stop_streaming_pipeline(execution_id, graceful=True)
         except Exception as e:
             logger.error(f"Failed to stop streaming pipeline: {e}")

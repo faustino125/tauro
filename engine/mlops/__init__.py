@@ -1,9 +1,114 @@
 """Tauro MLOps public API.
+
 This module re-exports the most commonly used MLOps components for convenience.
+Provides unified access to Model Registry, Experiment Tracking, and supporting
+infrastructure for machine learning operations.
+
+Architecture Components:
+- protocols: Abstract interfaces (Protocol classes) for type safety
+- events: Event-driven observability and metrics collection
+- cache: Caching layer with LRU, TTL, and batch writing
+- base: Common base classes and mixins for components
+- health: Health checks and system diagnostics
+- concurrency: File locking, transactions, and synchronization primitives
+- mlflow: MLflow integration (consolidated module)
 """
 
-# Config and Context
-from engine.mlops.config import MLOpsContext
+# Config and Context (includes factories)
+from engine.mlops.config import (
+    MLOpsContext,
+    MLOpsConfig,
+    init_mlops,
+    get_mlops_context,
+    reset_mlops_context,
+    is_mlops_initialized,
+    get_current_backend_type,
+    get_current_config,
+    # Factories (consolidated from factory.py)
+    StorageBackendFactory,
+    ExperimentTrackerFactory,
+    ModelRegistryFactory,
+    create_storage_backend,
+    create_experiment_tracker,
+    create_model_registry,
+)
+
+# Protocols (Abstract Interfaces)
+from engine.mlops.protocols import (
+    StorageBackendProtocol,
+    ExperimentTrackerProtocol,
+    ModelRegistryProtocol,
+    ModelMetadataProtocol,
+    ModelVersionProtocol,
+    RunProtocol,
+    ExperimentProtocol,
+    LockProtocol,
+    EventEmitterProtocol,
+    EventCallback,
+    SerializableProtocol,
+    ValidatorProtocol,
+    MLOpsContextProtocol,
+)
+
+# Events and Observability
+from engine.mlops.events import (
+    EventType,
+    Event,
+    EventEmitter,
+    MetricsCollector,
+    HookType,
+    HooksManager,
+    AuditLogger,
+    AuditEntry,
+    get_event_emitter,
+    get_metrics_collector,
+    get_hooks_manager,
+    get_audit_logger,
+    emit_event,
+)
+
+# Cache Layer
+from engine.mlops.cache import (
+    CacheEntry,
+    CacheStats,
+    LRUCache,
+    TwoLevelCache,
+    BatchProcessor,
+    BatchOperation,
+    BatchResult,
+    CacheKeyBuilder,
+    CachedStorage,
+)
+
+# Base Classes and Mixins
+from engine.mlops.base import (
+    ComponentState,
+    ComponentStats,
+    BaseMLOpsComponent,
+    IndexManagerMixin,
+    ValidationMixin,
+    PathManager,
+    now_iso,
+    parse_iso,
+    age_seconds,
+)
+
+# Health Checks
+from engine.mlops.health import (
+    HealthStatus,
+    HealthCheckResult,
+    HealthReport,
+    HealthCheck,
+    StorageHealthCheck,
+    MemoryHealthCheck,
+    DiskHealthCheck,
+    ComponentHealthCheck,
+    HealthMonitor,
+    get_health_monitor,
+    check_health,
+    is_healthy,
+    is_ready,
+)
 
 # Model Registry
 from engine.mlops.model_registry import (
@@ -29,35 +134,63 @@ from engine.mlops.storage import (
     DatabricksStorageBackend,
 )
 
-# Locking Mechanisms
-from engine.mlops.locking import (
+# Locking Mechanisms and Concurrency (consolidated from locking.py + transaction.py)
+from engine.mlops.concurrency import (
     FileLock,
     file_lock,
     OptimisticLock,
+    ReadWriteLock,
+    LockManager,
+    LockStats,
+    get_lock_manager,
+    # Transactions
+    Transaction,
+    SafeTransaction,
+    TransactionState,
+    TransactionError,
+    RollbackError,
+    Operation,
+    transactional_operation,
 )
 
-# Exceptions
+# Resilience and Retry
+from engine.mlops.resilience import (
+    RetryConfig,
+    with_retry,
+    CircuitBreaker,
+    CircuitState,
+    ResourceTracker,
+    ResourceLimits,
+    CleanupManager,
+    register_cleanup,
+    get_cleanup_manager,
+)
+
+# Exceptions (Enhanced with error codes)
 from engine.mlops.exceptions import (
+    ErrorCode,
+    ErrorContext,
     MLOpsException,
     ModelNotFoundError,
     ModelVersionConflictError,
     ExperimentNotFoundError,
     RunNotFoundError,
     RunNotActiveError,
+    RunLimitExceededError,
     ArtifactNotFoundError,
     InvalidMetricError,
     InvalidParameterError,
     StorageBackendError,
+    StorageCircuitOpenError,
     ModelRegistrationError,
     SchemaValidationError,
     ConcurrencyError,
-)
-
-# Factories
-from engine.mlops.factory import (
-    StorageBackendFactory,
-    ExperimentTrackerFactory,
-    ModelRegistryFactory,
+    LockTimeoutError,
+    ConfigurationError,
+    BackendNotConfiguredError,
+    ResourceLimitError,
+    create_error_response,
+    wrap_exception,
 )
 
 # Validators
@@ -81,46 +214,111 @@ from engine.mlops.validators import (
     validate_description,
 )
 
-# Transactions
-from engine.mlops.transaction import (
-    Transaction,
-    SafeTransaction,
-    TransactionError,
-    RollbackError,
-    Operation,
-)
-
-# MLflow integration (optional)
+# MLflow integration (consolidated module)
 try:
-    from engine.mlops.mlflow_adapter import (
+    from engine.mlops.mlflow import (
         MLflowPipelineTracker,
-        is_mlflow_available,
-    )
-    from engine.mlops.mlflow_utils import (
         MLflowConfig,
         MLflowHelper,
+        MLflowNodeContext,
         setup_mlflow_for_tauro,
-    )
-    from engine.mlops.mlflow_decorators import (
         mlflow_track,
         log_dataframe_stats,
         log_model_metrics,
         log_confusion_matrix,
         log_feature_importance,
         log_training_curve,
-        MLflowNodeContext,
+        is_mlflow_available,
+        MLFLOW_AVAILABLE,
     )
 
-    MLFLOW_INTEGRATION_AVAILABLE = True
+    MLFLOW_INTEGRATION_AVAILABLE = MLFLOW_AVAILABLE
 except ImportError:
     MLFLOW_INTEGRATION_AVAILABLE = False
-    MLflowPipelineTracker = None
-    MLflowConfig = None
-    MLflowHelper = None
+    MLflowPipelineTracker = None  # type: ignore
+    MLflowConfig = None  # type: ignore
+    MLflowHelper = None  # type: ignore
+    is_mlflow_available = lambda: False  # type: ignore
 
 __all__ = [
     # Config and Context
     "MLOpsContext",
+    "MLOpsConfig",
+    "init_mlops",
+    "get_mlops_context",
+    "reset_mlops_context",
+    "is_mlops_initialized",
+    "get_current_backend_type",
+    "get_current_config",
+    # Factories
+    "StorageBackendFactory",
+    "ExperimentTrackerFactory",
+    "ModelRegistryFactory",
+    "create_storage_backend",
+    "create_experiment_tracker",
+    "create_model_registry",
+    # Protocols (Abstract Interfaces)
+    "StorageBackendProtocol",
+    "ExperimentTrackerProtocol",
+    "ModelRegistryProtocol",
+    "ModelMetadataProtocol",
+    "ModelVersionProtocol",
+    "RunProtocol",
+    "ExperimentProtocol",
+    "LockProtocol",
+    "EventEmitterProtocol",
+    "EventCallback",
+    "SerializableProtocol",
+    "ValidatorProtocol",
+    "MLOpsContextProtocol",
+    # Events and Observability
+    "EventType",
+    "Event",
+    "EventEmitter",
+    "MetricsCollector",
+    "HookType",
+    "HooksManager",
+    "AuditLogger",
+    "AuditEntry",
+    "get_event_emitter",
+    "get_metrics_collector",
+    "get_hooks_manager",
+    "get_audit_logger",
+    "emit_event",
+    # Cache Layer
+    "CacheEntry",
+    "CacheStats",
+    "LRUCache",
+    "TwoLevelCache",
+    "BatchProcessor",
+    "BatchOperation",
+    "BatchResult",
+    "CacheKeyBuilder",
+    "CachedStorage",
+    # Base Classes and Mixins
+    "ComponentState",
+    "ComponentStats",
+    "BaseMLOpsComponent",
+    "IndexManagerMixin",
+    "ValidationMixin",
+    "PathManager",
+    "now_iso",
+    "parse_iso",
+    "age_seconds",
+    # Health Checks
+    "HealthStatus",
+    "HealthCheckResult",
+    "HealthReport",
+    "HealthCheck",
+    "StorageHealthCheck",
+    "MemoryHealthCheck",
+    "DiskHealthCheck",
+    "ComponentHealthCheck",
+    "HealthMonitor",
+    "get_health_monitor",
+    "check_health",
+    "is_healthy",
+    "is_ready",
     # Model Registry - Core
     "ModelRegistry",
     "ModelMetadata",
@@ -136,29 +334,56 @@ __all__ = [
     "StorageBackend",
     "LocalStorageBackend",
     "DatabricksStorageBackend",
-    # Factories
-    "StorageBackendFactory",
-    "ExperimentTrackerFactory",
-    "ModelRegistryFactory",
-    # Locking Mechanisms
+    # Concurrency (Locking + Transactions)
     "FileLock",
     "file_lock",
     "OptimisticLock",
+    "ReadWriteLock",
+    "LockManager",
+    "LockStats",
+    "get_lock_manager",
+    "Transaction",
+    "SafeTransaction",
+    "TransactionState",
+    "TransactionError",
+    "RollbackError",
+    "Operation",
+    "transactional_operation",
+    # Resilience and Retry
+    "RetryConfig",
+    "with_retry",
+    "CircuitBreaker",
+    "CircuitState",
+    "ResourceTracker",
+    "ResourceLimits",
+    "CleanupManager",
+    "register_cleanup",
+    "get_cleanup_manager",
     # Exceptions
+    "ErrorCode",
+    "ErrorContext",
     "MLOpsException",
     "ModelNotFoundError",
     "ModelVersionConflictError",
     "ExperimentNotFoundError",
     "RunNotFoundError",
     "RunNotActiveError",
+    "RunLimitExceededError",
     "ArtifactNotFoundError",
     "InvalidMetricError",
     "InvalidParameterError",
     "StorageBackendError",
+    "StorageCircuitOpenError",
     "ModelRegistrationError",
     "SchemaValidationError",
     "ConcurrencyError",
-    # Validators - Classes
+    "LockTimeoutError",
+    "ConfigurationError",
+    "BackendNotConfiguredError",
+    "ResourceLimitError",
+    "create_error_response",
+    "wrap_exception",
+    # Validators
     "PathValidator",
     "NameValidator",
     "MetricValidator",
@@ -167,7 +392,6 @@ __all__ = [
     "FrameworkValidator",
     "ArtifactValidator",
     "ValidationError",
-    # Validators - Functions
     "validate_model_name",
     "validate_experiment_name",
     "validate_run_name",
@@ -177,16 +401,11 @@ __all__ = [
     "validate_parameters",
     "validate_tags",
     "validate_description",
-    # Transactions
-    "Transaction",
-    "SafeTransaction",
-    "TransactionError",
-    "RollbackError",
-    "Operation",
     # MLflow Integration
     "MLflowPipelineTracker",
     "MLflowConfig",
     "MLflowHelper",
+    "MLflowNodeContext",
     "setup_mlflow_for_tauro",
     "mlflow_track",
     "log_dataframe_stats",
@@ -194,7 +413,6 @@ __all__ = [
     "log_confusion_matrix",
     "log_feature_importance",
     "log_training_curve",
-    "MLflowNodeContext",
     "is_mlflow_available",
     "MLFLOW_INTEGRATION_AVAILABLE",
 ]

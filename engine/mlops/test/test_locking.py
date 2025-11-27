@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from engine.mlops.locking import FileLock, OptimisticLock
+from engine.mlops.concurrency import FileLock, OptimisticLock
 
 
 class LockError(Exception):

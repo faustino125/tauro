@@ -14,12 +14,6 @@ if TYPE_CHECKING:
 class MLOpsExecutorIntegration:
     """
     Integration between Executor and MLOps layer.
-
-    Manages:
-    - Experiment creation and run lifecycle
-    - Metric logging during node execution
-    - Artifact storage
-    - Model registration on pipeline completion
     """
 
     def __init__(
@@ -30,19 +24,6 @@ class MLOpsExecutorIntegration:
     ):
         """
         Initialize MLOps-Executor integration.
-
-        Args:
-            context: Tauro execution context (PREFERRED - auto-detects mode)
-            mlops_context: MLOpsContext instance (LEGACY, optional)
-            auto_init: Auto-initialize from context/env if not provided
-
-        Example:
-            >>> # PREFERRED: Use context for auto-detection
-            >>> integration = MLOpsExecutorIntegration(context=execution_context)
-            >>>
-            >>> # LEGACY: Manual MLOpsContext
-            >>> mlops = MLOpsContext.from_env()
-            >>> integration = MLOpsExecutorIntegration(mlops_context=mlops)
         """
         self.context = context
         self.mlops_context = mlops_context
@@ -81,15 +62,6 @@ class MLOpsExecutorIntegration:
     ) -> Optional[str]:
         """
         Create experiment for pipeline execution.
-
-        Args:
-            pipeline_name: Pipeline name
-            pipeline_type: Pipeline type (batch, streaming, hybrid)
-            description: Pipeline description
-            tags: Custom tags
-
-        Returns:
-            experiment_id or None
         """
         if not self.is_available():
             return None
@@ -127,16 +99,6 @@ class MLOpsExecutorIntegration:
     ) -> Optional[str]:
         """
         Start a run for pipeline execution.
-
-        Args:
-            experiment_id: Experiment ID
-            pipeline_name: Pipeline name
-            model_version: Model version (if applicable)
-            hyperparams: Hyperparameters
-            tags: Custom tags
-
-        Returns:
-            run_id or None
         """
         if not self.is_available():
             return None
@@ -179,14 +141,6 @@ class MLOpsExecutorIntegration:
     ) -> None:
         """
         Log node execution details.
-
-        Args:
-            run_id: Run ID
-            node_name: Node name
-            status: Execution status (completed, failed, etc.)
-            duration_seconds: Execution duration
-            metrics: Node-level metrics
-            error: Error message if failed
         """
         if not self.is_available() or not run_id:
             return
@@ -238,10 +192,6 @@ class MLOpsExecutorIntegration:
     ) -> None:
         """
         Log pipeline-level metrics.
-
-        Args:
-            run_id: Run ID
-            metrics: Dictionary of metrics
         """
         if not self.is_available() or not run_id:
             return
@@ -269,14 +219,6 @@ class MLOpsExecutorIntegration:
     ) -> Optional[str]:
         """
         Log artifact for run.
-
-        Args:
-            run_id: Run ID
-            artifact_path: Path to artifact
-            artifact_type: Type of artifact (model, dataset, plot, etc.)
-
-        Returns:
-            Artifact URI or None
         """
         if not self.is_available() or not run_id:
             return None
@@ -306,11 +248,6 @@ class MLOpsExecutorIntegration:
     ) -> None:
         """
         End pipeline run.
-
-        Args:
-            run_id: Run ID
-            status: Final status
-            summary: Summary of execution
         """
         if not self.is_available() or not run_id:
             return
@@ -354,17 +291,6 @@ class MLOpsExecutorIntegration:
     ) -> None:
         """
         Register trained model in Model Registry from run artifacts.
-
-        Args:
-            run_id: Source run ID
-            model_name: Model name
-            artifact_path: Path to model artifact
-            artifact_type: Model type (sklearn, xgboost, pytorch, etc.)
-            framework: ML framework
-            description: Model description
-            hyperparams: Hyperparameters used
-            metrics: Performance metrics
-            tags: Custom tags
         """
         if not self.is_available():
             return
@@ -394,13 +320,6 @@ class MLOpsExecutorIntegration:
     ) -> Any:
         """
         Get DataFrame comparing runs in experiment.
-
-        Args:
-            experiment_id: Experiment ID
-            metric_filter: Optional metric filters
-
-        Returns:
-            pandas.DataFrame or None
         """
         if not self.is_available():
             return None
@@ -424,13 +343,124 @@ class MLOpsExecutorIntegration:
             return None
 
 
+def _rt_resolve_model_name(
+    ml_context: Dict[str, Any], node_config: Dict[str, Any], cfg: Dict[str, Any]
+) -> str:
+    name = cfg.get("model_name")
+    if name:
+        return name
+    pipeline_cfg = ml_context.get("pipeline_config", {}) or {}
+    name = pipeline_cfg.get("model_name") or pipeline_cfg.get("name")
+    if name:
+        return name
+    if isinstance(node_config, dict):
+        return node_config.get("name") or "unnamed_model"
+    return "unnamed_model"
+
+
+def _rt_extract_fields(trainer_result: Dict[str, Any], ml_context: Dict[str, Any]) -> tuple:
+    artifact_type = trainer_result.get("artifact_type", "generic")
+    framework = trainer_result.get("framework", "generic")
+    metrics = trainer_result.get("metrics") or {}
+    hyperparams = trainer_result.get("hyperparams") or ml_context.get("hyperparams", {}) or {}
+    metadata = trainer_result.get("metadata") or {}
+    return artifact_type, framework, metrics, hyperparams, metadata
+
+
+def _rt_log_and_register(
+    mlops_integration: Any,
+    run_id: str,
+    model_name: str,
+    artifact_path: str,
+    artifact_type: str,
+    framework: str,
+    trainer_result: Dict[str, Any],
+    hyperparams: Dict[str, Any],
+    metrics: Dict[str, Any],
+    stage: str,
+) -> None:
+    # Registrar artifact en el tracker (queda asociado al run)
+    logged_artifact_path = mlops_integration.log_artifact(
+        run_id=run_id,
+        artifact_path=artifact_path,
+        artifact_type="model",
+    )
+
+    if not logged_artifact_path:
+        logger.warning(
+            f"No se pudo loggear el artifact del modelo para '{model_name}'; se omite el registro"
+        )
+        return
+
+    # Registrar modelo en el ModelRegistry a partir del run
+    tags = {"stage": str(stage)}
+
+    mlops_integration.register_model_from_run(
+        run_id=run_id,
+        model_name=model_name,
+        artifact_path=logged_artifact_path,
+        artifact_type=artifact_type,
+        framework=framework,
+        description=str(trainer_result.get("description", "")),
+        hyperparams=hyperparams,
+        metrics=metrics,
+        tags=tags,
+    )
+
+
+def register_trained_model_from_result(
+    ml_context: Dict[str, Any],
+    trainer_result: Dict[str, Any],
+    node_config: Dict[str, Any],
+    default_stage: str = "Staging",
+) -> None:
+    """Helper para registrar un modelo entrenado a partir del resultado de un nodo trainer."""
+
+    if not isinstance(ml_context, dict):
+        return
+
+    mlops_integration = ml_context.get("mlops_integration")
+    mlops_run_id = ml_context.get("mlops_run_id")
+
+    if not mlops_integration or not mlops_run_id:
+        return
+
+    if not isinstance(trainer_result, dict):
+        logger.debug("trainer_result no es un dict; se omite el registro de modelo")
+        return
+
+    artifact_path = trainer_result.get("artifact_path")
+    if not artifact_path:
+        logger.debug("trainer_result no contiene 'artifact_path'; se omite el registro de modelo")
+        return
+
+    cfg = node_config.get("config", {}) if isinstance(node_config, dict) else {}
+    model_name = _rt_resolve_model_name(ml_context, node_config, cfg)
+    artifact_type, framework, metrics, hyperparams, _ = _rt_extract_fields(
+        trainer_result, ml_context
+    )
+    stage = cfg.get("default_stage", default_stage)
+
+    try:
+        _rt_log_and_register(
+            mlops_integration=mlops_integration,
+            run_id=mlops_run_id,
+            model_name=model_name,
+            artifact_path=artifact_path,
+            artifact_type=artifact_type,
+            framework=framework,
+            trainer_result=trainer_result,
+            hyperparams=hyperparams,
+            metrics=metrics,
+            stage=stage,
+        )
+    except Exception as e:
+        logger.warning(f"Error en register_trained_model_from_result para '{model_name}': {e}")
+
+
 class MLInfoConfigLoader:
     """
     Loader for ML configuration from YAML/JSON/DSL files.
-
-    Supports:
-    - ml_config.yml / ml_config.json
-    - Inline DSL in node_config
     """
 
     @staticmethod
@@ -439,12 +469,6 @@ class MLInfoConfigLoader:
     ) -> Dict[str, Any]:
         """
         Load ML info from YAML or JSON file.
-
-        Args:
-            filepath: Path to configuration file
-
-        Returns:
-            ML info dictionary
         """
         path = Path(filepath)
 
@@ -481,13 +505,6 @@ class MLInfoConfigLoader:
     ) -> Dict[str, Any]:
         """
         Load ML info from context using existing method.
-
-        Args:
-            context: Execution context
-            pipeline_name: Pipeline name
-
-        Returns:
-            ML info dictionary
         """
         if not hasattr(context, "get_pipeline_ml_config"):
             return {}
@@ -506,13 +523,6 @@ class MLInfoConfigLoader:
     ) -> Dict[str, Any]:
         """
         Merge ML info dictionaries with override taking precedence.
-
-        Args:
-            base_ml_info: Base configuration
-            override_ml_info: Override configuration
-
-        Returns:
-            Merged configuration
         """
         merged = dict(base_ml_info)
         merged.update(override_ml_info)

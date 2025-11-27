@@ -7,12 +7,12 @@ execution mode configuration.
 import pytest
 from unittest.mock import MagicMock
 
-from tauro.core.mlops.factory import (
+from engine.mlops.config import (
     StorageBackendFactory,
     ExperimentTrackerFactory,
     ModelRegistryFactory,
 )
-from tauro.core.mlops.storage import LocalStorageBackend, DatabricksStorageBackend
+from engine.mlops.storage import LocalStorageBackend, DatabricksStorageBackend
 
 
 class MockContext:
@@ -277,7 +277,7 @@ class TestConvenienceAliases:
 
     def test_create_storage_backend_alias(self):
         """Test create_storage_backend convenience function."""
-        from tauro.core.mlops.factory import create_storage_backend
+        from engine.mlops.config import create_storage_backend
 
         context = MockContext(mode="local")
 
@@ -287,7 +287,7 @@ class TestConvenienceAliases:
 
     def test_create_experiment_tracker_alias(self):
         """Test create_experiment_tracker convenience function."""
-        from tauro.core.mlops.factory import create_experiment_tracker
+        from engine.mlops.config import create_experiment_tracker
 
         context = MockContext(mode="local")
 
@@ -298,7 +298,7 @@ class TestConvenienceAliases:
 
     def test_create_model_registry_alias(self):
         """Test create_model_registry convenience function."""
-        from tauro.core.mlops.factory import create_model_registry
+        from engine.mlops.config import create_model_registry
 
         context = MockContext(mode="local")
 

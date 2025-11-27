@@ -30,22 +30,6 @@ class PathValidator:
     def validate_path(path: str, base_path: Optional[Path] = None) -> Path:
         """
         Validate and sanitize a path.
-
-        Prevents:
-        - Absolute paths
-        - Parent directory traversal (.., ~)
-        - Path traversal attacks
-        - Paths outside base directory
-
-        Args:
-            path: Path string to validate
-            base_path: Optional base path to validate against
-
-        Returns:
-            Validated Path object
-
-        Raises:
-            ValidationError: If path is invalid
         """
         if not path or not isinstance(path, str):
             raise ValidationError("Path must be non-empty string")
@@ -97,22 +81,6 @@ class NameValidator:
     def validate_name(name: str, entity_type: str = "entity") -> str:
         """
         Validate a name (model, experiment, run, etc).
-
-        Requirements:
-        - Non-empty string
-        - 1-255 characters
-        - Only alphanumeric, underscore, dash, dot
-        - Must start with letter or number
-
-        Args:
-            name: Name to validate
-            entity_type: Type of entity (for error message)
-
-        Returns:
-            Validated name
-
-        Raises:
-            ValidationError: If name is invalid
         """
         # 1. Type and non-empty
         if not name or not isinstance(name, str):
@@ -148,21 +116,6 @@ class MetricValidator:
     def validate_metric_value(key: str, value: Any) -> float:
         """
         Validate a metric value.
-
-        Requirements:
-        - Must be numeric (int or float)
-        - Cannot be NaN
-        - Cannot be Inf (configurable)
-
-        Args:
-            key: Metric name
-            value: Metric value
-
-        Returns:
-            Validated float value
-
-        Raises:
-            InvalidMetricError: If value is invalid
         """
         # 1. Type check
         if not isinstance(value, (int, float)):
@@ -239,22 +192,6 @@ class ParameterValidator:
     ) -> Optional[Dict[str, Any]]:
         """
         Validate hyperparameters dict.
-
-        Requirements:
-        - Must be dict or None
-        - Max 1000 items
-        - Keys must be valid names
-        - Values must be serializable
-
-        Args:
-            parameters: Parameters dict
-            max_items: Maximum number of parameters
-
-        Returns:
-            Validated dict or None
-
-        Raises:
-            InvalidParameterError: If invalid
         """
         if parameters is None:
             return None
@@ -302,13 +239,6 @@ class MetadataValidator:
     ) -> Optional[Dict[str, str]]:
         """
         Validate tags dict.
-
-        Args:
-            tags: Tags dict
-            max_items: Maximum number of tags
-
-        Returns:
-            Validated dict or None
         """
         if tags is None:
             return None
@@ -367,13 +297,6 @@ class FrameworkValidator:
     def validate_framework(framework: str, allow_custom: bool = True) -> str:
         """
         Validate framework name.
-
-        Args:
-            framework: Framework name
-            allow_custom: Whether to allow "custom"
-
-        Returns:
-            Validated framework name
         """
         if not isinstance(framework, str):
             raise ValidationError(f"Framework must be string, got {type(framework).__name__}")
@@ -407,12 +330,6 @@ class ArtifactValidator:
     def validate_artifact_type(artifact_type: str) -> str:
         """
         Validate artifact type.
-
-        Args:
-            artifact_type: Artifact type (e.g., "sklearn", "pytorch", "onnx")
-
-        Returns:
-            Validated artifact type
         """
         if not artifact_type or not isinstance(artifact_type, str):
             raise ValidationError(

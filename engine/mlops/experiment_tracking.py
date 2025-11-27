@@ -1,26 +1,19 @@
-"""
-Experiment Tracking: Log de métricas, hiperparámetros y artefactos por cada run.
-
-Features:
-- Experiment and run management
-- Metric and parameter logging
-- Artifact storage with runs
-- Run comparison and search
-- Tag and annotation support
-"""
-
+import atexit
+import threading
+import weakref
+from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Set
 from uuid import uuid4
 
 import pandas as pd  # type: ignore
 from loguru import logger
 
 from engine.mlops.storage import StorageBackend
-from engine.mlops.locking import file_lock
+from engine.mlops.concurrency import file_lock
 from engine.mlops.validators import (
     validate_experiment_name,
     validate_run_name,
@@ -34,6 +27,13 @@ from engine.mlops.exceptions import (
     InvalidMetricError,
     ArtifactNotFoundError,
 )
+
+
+DEFAULT_MAX_ACTIVE_RUNS = 100
+DEFAULT_METRIC_BUFFER_SIZE = 100
+DEFAULT_STALE_RUN_AGE_SECONDS = 3600.0  # 1 hour
+METRICS_CLEANUP_THRESHOLD = 10000  # Max metrics per run before cleanup warning
+DEFAULT_MAX_METRICS_PER_KEY = 10000  # Max metrics per key in memory (rolling window)
 
 
 class RunStatus(str, Enum):
@@ -121,39 +121,95 @@ class Experiment:
 
 class ExperimentTracker:
     """
-    Experiment Tracking system para logging de métricas, parámetros y artefactos.
-
-    Features:
-    - Create and manage experiments
-    - Log runs with parameters, metrics, and artifacts
-    - Search and compare runs
-    - Tag and annotate runs
+    Experiment Tracking system for logging metrics, parameters, and artifacts.
     """
+
+    # Class-level registry for cleanup on exit
+    _instances: Set[weakref.ref] = set()
+    _instances_lock = threading.Lock()
 
     def __init__(
         self,
         storage: StorageBackend,
         tracking_path: str = "experiment_tracking",
-        metric_buffer_size: int = 100,
+        metric_buffer_size: int = DEFAULT_METRIC_BUFFER_SIZE,
         auto_flush_metrics: bool = True,
+        max_active_runs: int = DEFAULT_MAX_ACTIVE_RUNS,
+        auto_cleanup_stale: bool = True,
+        stale_run_age_seconds: float = DEFAULT_STALE_RUN_AGE_SECONDS,
+        max_metrics_per_key: int = DEFAULT_MAX_METRICS_PER_KEY,
     ):
         """
         Initialize Experiment Tracker.
-
-        Args:
-            storage: Storage backend for artifacts
-            tracking_path: Base path for tracking data
-            metric_buffer_size: Number of metrics to buffer before flush
-            auto_flush_metrics: Automatically flush metrics when buffer is full
         """
         self.storage = storage
         self.tracking_path = tracking_path
         self.metric_buffer_size = metric_buffer_size
         self.auto_flush_metrics = auto_flush_metrics
+        self.max_active_runs = max_active_runs
+        self.auto_cleanup_stale = auto_cleanup_stale
+        self.stale_run_age_seconds = stale_run_age_seconds
+        self.max_metrics_per_key = max_metrics_per_key
+
+        # Thread-safe active runs with LRU behavior
+        self._active_runs: OrderedDict[str, Run] = OrderedDict()
+        self._metric_counts: Dict[str, int] = {}
+        self._runs_lock = threading.RLock()
+
+        # Statistics
+        self._total_runs_started = 0
+        self._total_runs_completed = 0
+        self._total_runs_failed = 0
+        self._cleanup_count = 0
+
         self._ensure_tracking_structure()
-        self._active_runs: Dict[str, Run] = {}
-        self._metric_counts: Dict[str, int] = {}  # Track metrics per run
-        logger.info(f"ExperimentTracker initialized at {tracking_path}")
+
+        # Register for cleanup on exit
+        self._register_instance()
+
+        logger.info(
+            f"ExperimentTracker initialized at {tracking_path} "
+            f"(max_active_runs={max_active_runs})"
+        )
+
+    def _register_instance(self) -> None:
+        """Register this instance for cleanup on exit."""
+        with ExperimentTracker._instances_lock:
+            ref = weakref.ref(self, ExperimentTracker._cleanup_ref)
+            ExperimentTracker._instances.add(ref)
+
+        # Register cleanup only once
+        if not hasattr(ExperimentTracker, "_atexit_registered"):
+            atexit.register(ExperimentTracker._cleanup_all_instances)
+            ExperimentTracker._atexit_registered = True
+
+    @staticmethod
+    def _cleanup_ref(ref: weakref.ref) -> None:
+        """Callback when instance is garbage collected."""
+        with ExperimentTracker._instances_lock:
+            ExperimentTracker._instances.discard(ref)
+
+    @staticmethod
+    def _cleanup_all_instances() -> None:
+        """Clean up all tracker instances on process exit."""
+        with ExperimentTracker._instances_lock:
+            for ref in ExperimentTracker._instances.copy():
+                tracker = ref()
+                if tracker is not None:
+                    try:
+                        tracker._cleanup_active_runs()
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up tracker: {e}")
+
+    def _cleanup_active_runs(self) -> None:
+        """Clean up all active runs on shutdown."""
+        with self._runs_lock:
+            for run_id in tuple(self._active_runs.keys()):
+                try:
+                    self.end_run(run_id, RunStatus.FAILED)
+                    logger.warning(f"Auto-closed orphaned run: {run_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to close run {run_id}: {e}")
 
     def _ensure_tracking_structure(self) -> None:
         """Ensure tracking directory structure exists."""
@@ -182,14 +238,6 @@ class ExperimentTracker:
     ) -> Experiment:
         """
         Create new experiment.
-
-        Args:
-            name: Experiment name
-            description: Experiment description
-            tags: Custom tags
-
-        Returns:
-            Experiment
         """
         # Validate inputs
         name = validate_experiment_name(name)
@@ -228,17 +276,7 @@ class ExperimentTracker:
         parent_run_id: Optional[str] = None,
     ) -> Run:
         """
-        Start new experiment run.
-
-        Args:
-            experiment_id: Experiment ID
-            name: Run name
-            parameters: Hyperparameters
-            tags: Custom tags
-            parent_run_id: Parent run ID (for nested runs)
-
-        Returns:
-            Run
+        Start new experiment run with memory protection.
         """
         # Verify experiment exists
         self._get_experiment(experiment_id)
@@ -248,24 +286,105 @@ class ExperimentTracker:
             name = validate_run_name(name)
         tags = validate_tags(tags)
 
-        run_id = str(uuid4())
+        with self._runs_lock:
+            # Check memory limits and cleanup if needed
+            self._enforce_run_limits()
+
+            run_id = str(uuid4())
+            now = datetime.now(timezone.utc).isoformat()
+
+            run = Run(
+                run_id=run_id,
+                experiment_id=experiment_id,
+                name=name or f"run-{run_id[:8]}",
+                status=RunStatus.RUNNING,
+                created_at=now,
+                updated_at=now,
+                start_time=now,
+                parameters=parameters or {},
+                tags=tags or {},
+                parent_run_id=parent_run_id,
+            )
+
+            self._active_runs[run_id] = run
+            self._total_runs_started += 1
+
+        logger.info(f"Started run {run.name} (ID: {run_id})")
+        return run
+
+    def _enforce_run_limits(self) -> None:
+        """Enforce maximum active runs limit with cleanup."""
+        # First, try to clean up stale runs
+        if self.auto_cleanup_stale and len(self._active_runs) >= self.max_active_runs:
+            cleaned = self._cleanup_stale_runs_internal()
+            if cleaned > 0:
+                logger.info(f"Cleaned {cleaned} stale runs to make room")
+
+        # If still at limit, fail
+        if len(self._active_runs) >= self.max_active_runs:
+            raise RuntimeError(
+                f"Maximum active runs limit reached ({self.max_active_runs}). "
+                f"End existing runs or increase max_active_runs."
+            )
+
+    def _cleanup_stale_runs_internal(self) -> int:
+        """
+        Internal stale run cleanup without lock (caller must hold lock).
+        """
+        now = datetime.now(timezone.utc)
+        cleaned = 0
+
+        stale_run_ids = [
+            run_id
+            for run_id, run in self._active_runs.items()
+            if self._is_run_stale(run, now, self.stale_run_age_seconds)
+        ]
+
+        for run_id in stale_run_ids:
+            try:
+                # End run without lock (we already have it)
+                self._end_run_internal(run_id, RunStatus.FAILED)
+                cleaned += 1
+                self._cleanup_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to cleanup stale run {run_id}: {e}")
+
+        return cleaned
+
+    def _end_run_internal(self, run_id: str, status: RunStatus) -> Optional[Run]:
+        """End run without acquiring lock (for internal use)."""
+        if run_id not in self._active_runs:
+            return None
+
+        run = self._active_runs[run_id]
         now = datetime.now(timezone.utc).isoformat()
 
-        run = Run(
-            run_id=run_id,
-            experiment_id=experiment_id,
-            name=name or f"run-{run_id[:8]}",
-            status=RunStatus.RUNNING,
-            created_at=now,
-            updated_at=now,
-            start_time=now,
-            parameters=parameters or {},
-            tags=tags or {},
-            parent_run_id=parent_run_id,
-        )
+        run.status = status
+        run.updated_at = now
+        run.end_time = now
 
-        self._active_runs[run_id] = run
-        logger.info(f"Started run {run.name} (ID: {run_id})")
+        if run.start_time:
+            start = datetime.fromisoformat(run.start_time)
+            end = datetime.fromisoformat(now)
+            run.duration_seconds = (end - start).total_seconds()
+
+        # Persist run to storage
+        try:
+            run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
+            self.storage.write_json(run.to_dict(), run_path, mode="overwrite")
+            self._update_runs_index(run)
+        except Exception as e:
+            logger.error(f"Failed to persist run {run_id}: {e}")
+
+        # Remove from active runs
+        del self._active_runs[run_id]
+        self._metric_counts.pop(run_id, None)
+
+        if status == RunStatus.COMPLETED:
+            self._total_runs_completed += 1
+        else:
+            self._total_runs_failed += 1
+
         return run
 
     def log_metric(
@@ -277,19 +396,10 @@ class ExperimentTracker:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Log metric for run.
-
-        Args:
-            run_id: Run ID
-            key: Metric key
-            value: Metric value (must be numeric: int or float)
-            step: Training step/epoch
-            metadata: Additional metadata
-
-        Raises:
-            InvalidMetricError: If value is not numeric
-            RunNotActiveError: If run is not active
+        Log metric for run with memory protection.
         """
+        import math
+
         # Validate metric value type
         if not isinstance(value, (int, float)):
             raise InvalidMetricError(
@@ -298,38 +408,55 @@ class ExperimentTracker:
 
         # Check for NaN or Inf
         if isinstance(value, float):
-            import math
-
             if math.isnan(value):
                 raise InvalidMetricError(key, value, "Value is NaN")
             if math.isinf(value):
                 raise InvalidMetricError(key, value, "Value is infinite")
 
-        run = self._get_active_run(run_id)
-        now = datetime.now(timezone.utc).isoformat()
+        with self._runs_lock:
+            run = self._get_active_run(run_id)
+            now = datetime.now(timezone.utc).isoformat()
 
-        metric = Metric(
-            key=key,
-            value=value,
-            timestamp=now,
-            step=step,
-            metadata=metadata or {},
-        )
+            metric = Metric(
+                key=key,
+                value=value,
+                timestamp=now,
+                step=step,
+                metadata=metadata or {},
+            )
 
-        if key not in run.metrics:
-            run.metrics[key] = []
-        run.metrics[key].append(metric)
+            if key not in run.metrics:
+                run.metrics[key] = []
+            run.metrics[key].append(metric)
 
-        logger.debug(f"Run {run_id}: Logged metric {key}={value} (step {step})")
+            # Enforce rolling window limit per metric key
+            if len(run.metrics[key]) > self.max_metrics_per_key:
+                # Remove oldest metrics to maintain limit (rolling window)
+                excess = len(run.metrics[key]) - self.max_metrics_per_key
+                run.metrics[key] = run.metrics[key][excess:]
+                logger.debug(
+                    f"Run {run_id}: Trimmed {excess} old metrics for key '{key}' "
+                    f"(rolling window: {self.max_metrics_per_key})"
+                )
 
-        # Incremental persistence: flush if buffer is full
-        if run_id not in self._metric_counts:
-            self._metric_counts[run_id] = 0
-        self._metric_counts[run_id] += 1
+            # Track total metrics for memory warning
+            total_metrics = sum(len(m) for m in run.metrics.values())
+            if total_metrics > METRICS_CLEANUP_THRESHOLD:
+                logger.warning(
+                    f"Run {run_id} has {total_metrics} metrics. "
+                    "Consider flushing or ending the run to free memory."
+                )
 
-        if self.auto_flush_metrics and self._metric_counts[run_id] >= self.metric_buffer_size:
-            self._flush_metrics(run_id)
-            self._metric_counts[run_id] = 0
+            logger.debug(f"Run {run_id}: Logged metric {key}={value} (step {step})")
+
+            # Incremental persistence: flush if buffer is full
+            if run_id not in self._metric_counts:
+                self._metric_counts[run_id] = 0
+            self._metric_counts[run_id] += 1
+
+            if self.auto_flush_metrics and self._metric_counts[run_id] >= self.metric_buffer_size:
+                self._flush_metrics(run_id)
+                self._metric_counts[run_id] = 0
 
     def log_parameter(
         self,
@@ -339,11 +466,6 @@ class ExperimentTracker:
     ) -> None:
         """
         Log hyperparameter for run.
-
-        Args:
-            run_id: Run ID
-            key: Parameter key
-            value: Parameter value
         """
         run = self._get_active_run(run_id)
         run.parameters[key] = value
@@ -357,18 +479,6 @@ class ExperimentTracker:
     ) -> str:
         """
         Log artifact for run.
-
-        Args:
-            run_id: Run ID
-            artifact_path: Local path to artifact
-            destination: Destination path in storage (optional)
-
-        Returns:
-            Artifact URI in storage
-
-        Raises:
-            ArtifactNotFoundError: If artifact_path does not exist
-            RunNotActiveError: If run is not active
         """
         # Verify artifact exists before logging
         from pathlib import Path
@@ -408,51 +518,43 @@ class ExperimentTracker:
     def end_run(self, run_id: str, status: RunStatus = RunStatus.COMPLETED) -> Run:
         """
         End run and persist to storage.
-
-        Args:
-            run_id: Run ID
-            status: Final status
-
-        Returns:
-            Completed Run
         """
-        run = self._get_active_run(run_id)
+        with self._runs_lock:
+            run = self._get_active_run(run_id)
 
-        now = datetime.now(timezone.utc).isoformat()
-        run.status = status
-        run.updated_at = now
-        run.end_time = now
+            now = datetime.now(timezone.utc).isoformat()
+            run.status = status
+            run.updated_at = now
+            run.end_time = now
 
-        if run.start_time:
-            start = datetime.fromisoformat(run.start_time)
-            end = datetime.fromisoformat(now)
-            run.duration_seconds = (end - start).total_seconds()
+            if run.start_time:
+                start = datetime.fromisoformat(run.start_time)
+                end = datetime.fromisoformat(now)
+                run.duration_seconds = (end - start).total_seconds()
 
-        # Persist run to storage
-        run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
-        self.storage.write_json(run.to_dict(), run_path, mode="overwrite")
+            # Persist run to storage
+            run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
+            self.storage.write_json(run.to_dict(), run_path, mode="overwrite")
 
-        # Update runs index
-        self._update_runs_index(run)
+            # Update runs index
+            self._update_runs_index(run)
 
-        # Remove from active runs
-        del self._active_runs[run_id]
+            # Remove from active runs
+            del self._active_runs[run_id]
+            self._metric_counts.pop(run_id, None)
 
-        logger.info(f"Ended run {run.name} (ID: {run_id}) with status {status.value}")
-        return run
+            # Update statistics
+            if status == RunStatus.COMPLETED:
+                self._total_runs_completed += 1
+            else:
+                self._total_runs_failed += 1
+
+            logger.info(f"Ended run {run.name} (ID: {run_id}) with status {status.value}")
+            return run
 
     def get_run(self, run_id: str) -> Run:
         """
         Get run by ID.
-
-        Args:
-            run_id: Run ID
-
-        Returns:
-            Run
-
-        Raises:
-            RunNotFoundError: If run does not exist
         """
         if run_id in self._active_runs:
             return self._active_runs[run_id]
@@ -477,14 +579,6 @@ class ExperimentTracker:
     ) -> List[Dict[str, Any]]:
         """
         List runs in experiment.
-
-        Args:
-            experiment_id: Experiment ID
-            status_filter: Filter by status
-            tag_filter: Filter by tags
-
-        Returns:
-            List of run summaries
         """
         runs_df = self._load_runs_index()
         runs = runs_df[runs_df["experiment_id"] == experiment_id]
@@ -523,12 +617,6 @@ class ExperimentTracker:
     def compare_runs(self, run_ids: List[str]) -> pd.DataFrame:
         """
         Compare multiple runs as DataFrame.
-
-        Args:
-            run_ids: List of run IDs
-
-        Returns:
-            DataFrame with runs as rows and metrics/params as columns
         """
         rows = []
         for run_id in run_ids:
@@ -574,14 +662,6 @@ class ExperimentTracker:
     ) -> List[str]:
         """
         Search runs by metric thresholds using optimized metrics index.
-
-        Args:
-            experiment_id: Experiment ID
-            metric_filter: Dict of {metric_name: (operator, value)}
-                          e.g., {"accuracy": (">", 0.95)}
-
-        Returns:
-            List of matching run IDs
         """
         if not metric_filter:
             runs = self.list_runs(experiment_id)
@@ -659,11 +739,6 @@ class ExperimentTracker:
     ) -> None:
         """
         Download artifact from run.
-
-        Args:
-            run_id: Run ID
-            artifact_path: Path to artifact in storage
-            local_destination: Local destination path
         """
         self.storage.read_artifact(artifact_path, local_destination)
         logger.info(f"Downloaded artifact from run {run_id} to {local_destination}")
@@ -671,9 +746,6 @@ class ExperimentTracker:
     def _flush_metrics(self, run_id: str) -> None:
         """
         Flush metrics for a run to storage (incremental persistence).
-
-        Args:
-            run_id: Run ID
         """
         if run_id not in self._active_runs:
             return
@@ -775,8 +847,6 @@ class ExperimentTracker:
     def _update_metrics_index(self, run: Run) -> None:
         """
         Update metrics index for faster search.
-
-        Creates a denormalized index with run_id and latest metric values.
         """
         try:
             metrics_index_path = f"{self.tracking_path}/metrics/index.parquet"
@@ -811,3 +881,174 @@ class ExperimentTracker:
 
         except Exception as e:
             logger.warning(f"Could not update metrics index: {e}")
+
+    # =========================================================================
+    # Cleanup and Context Manager Methods
+    # =========================================================================
+
+    def _is_run_stale(self, run, now: datetime, max_age_seconds: float) -> bool:
+        """
+        Determine if a run is stale; returns True when run should be cleaned up.
+        """
+        if not run.start_time:
+            return False
+
+        try:
+            start_time = datetime.fromisoformat(run.start_time)
+            # Handle timezone-naive datetimes
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+
+            age_seconds = (now - start_time).total_seconds()
+            if age_seconds > max_age_seconds:
+                logger.warning(
+                    f"Run {run.run_id if hasattr(run, 'run_id') else 'unknown'} "
+                    f"({getattr(run, 'name', '')}) has been active for {age_seconds:.1f}s, marking as stale"
+                )
+                return True
+
+            return False
+
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Could not parse start_time for run {getattr(run, 'run_id', 'unknown')}: {e}. "
+                f"Run will NOT be marked as stale to prevent accidental cleanup."
+            )
+            # Do NOT treat parsing failures as stale - this could cause data loss
+            return False
+
+    def cleanup_stale_runs(
+        self,
+        max_age_seconds: float = 3600.0,
+        status: RunStatus = RunStatus.FAILED,
+    ) -> int:
+        """
+        Clean up runs that have been active for too long without completion.
+        """
+        with self._runs_lock:
+            now = datetime.now(timezone.utc)
+            cleaned_count = 0
+
+            # Identify stale runs first (avoid modifying dict during iteration)
+            stale_run_ids = [
+                run_id
+                for run_id, run in self._active_runs.items()
+                if self._is_run_stale(run, now, max_age_seconds)
+            ]
+
+            # Clean up stale runs
+            for run_id in stale_run_ids:
+                try:
+                    self._end_run_internal(run_id, status)
+                    cleaned_count += 1
+                    self._cleanup_count += 1
+                    logger.info(f"Cleaned up stale run {run_id}")
+                except Exception as e:
+                    logger.error(f"Failed to clean up stale run {run_id}: {e}")
+
+            if cleaned_count > 0:
+                logger.info(f"Cleaned up {cleaned_count} stale run(s)")
+
+            return cleaned_count
+
+    def get_active_runs_count(self) -> int:
+        """
+        Get the number of currently active runs.
+        """
+        with self._runs_lock:
+            return len(self._active_runs)
+
+    def list_active_runs(self) -> List[Dict[str, Any]]:
+        """
+        List all currently active runs with their metadata.
+        """
+        with self._runs_lock:
+            result = []
+            now = datetime.now(timezone.utc)
+
+            for run_id, run in self._active_runs.items():
+                age_seconds = None
+                if run.start_time:
+                    try:
+                        start_time = datetime.fromisoformat(run.start_time)
+                        if start_time.tzinfo is None:
+                            start_time = start_time.replace(tzinfo=timezone.utc)
+                        age_seconds = (now - start_time).total_seconds()
+                    except (ValueError, TypeError):
+                        pass
+
+                result.append(
+                    {
+                        "run_id": run_id,
+                        "name": run.name,
+                        "experiment_id": run.experiment_id,
+                        "start_time": run.start_time,
+                        "age_seconds": age_seconds,
+                        "metrics_count": sum(len(m) for m in run.metrics.values()),
+                        "parameters_count": len(run.parameters),
+                    }
+                )
+
+            return result
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get tracker statistics.
+
+        Returns:
+            Dictionary with tracker statistics
+        """
+        with self._runs_lock:
+            return {
+                "active_runs": len(self._active_runs),
+                "max_active_runs": self.max_active_runs,
+                "total_runs_started": self._total_runs_started,
+                "total_runs_completed": self._total_runs_completed,
+                "total_runs_failed": self._total_runs_failed,
+                "cleanup_count": self._cleanup_count,
+                "tracking_path": self.tracking_path,
+            }
+
+    @contextmanager
+    def run_context(
+        self,
+        experiment_id: str,
+        name: str = "",
+        parameters: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, str]] = None,
+        parent_run_id: Optional[str] = None,
+        fail_on_error: bool = True,
+    ) -> Generator[Run, None, None]:
+        """
+        Context manager for experiment runs with automatic cleanup.
+        """
+        run = self.start_run(
+            experiment_id=experiment_id,
+            name=name,
+            parameters=parameters,
+            tags=tags,
+            parent_run_id=parent_run_id,
+        )
+
+        try:
+            yield run
+            # Success - end with COMPLETED status
+            self.end_run(run.run_id, RunStatus.COMPLETED)
+            logger.debug(f"Run context completed successfully: {run.run_id}")
+
+        except Exception as e:
+            # Error - end with FAILED status (or COMPLETED if fail_on_error=False)
+            status = RunStatus.FAILED if fail_on_error else RunStatus.COMPLETED
+
+            try:
+                # Try to log the error before ending
+                self.set_tag(run.run_id, "error_type", type(e).__name__)
+                self.set_tag(run.run_id, "error_message", str(e)[:500])  # Truncate long messages
+            except Exception:
+                pass  # Don't fail if we can't log the error
+
+            self.end_run(run.run_id, status)
+            logger.warning(f"Run context ended with error: {run.run_id} - {e}")
+
+            # Re-raise the original exception
+            raise

@@ -274,11 +274,7 @@ class NodeExecutor:
         execution_order: List[str],
         node_configs: Dict[str, Dict[str, Any]],
     ) -> ThreadSafeExecutionState:
-        """Initialize thread-safe execution state with queues and tracking structures.
-
-        Returns:
-            ThreadSafeExecutionState instance with ready_queue, running, completed, failed flag, and results.
-        """
+        """Initialize thread-safe execution state with queues and tracking structures."""
         state = ThreadSafeExecutionState(execution_order, node_configs)
         logger.debug(f"Initial ready nodes: {list(state.ready_queue)}")
         return state

@@ -486,22 +486,6 @@ class AppConfigManager:
     def get_env_config(self, env: str) -> Dict[str, str]:
         """
         Get configuration paths for specific environment.
-
-        Process:
-        1. Normalize environment name (handle aliases, case, sandbox variants)
-        2. Validate environment is allowed
-        3. Resolve sandbox fallback if needed
-        4. Merge base configuration with environment-specific overrides
-        5. Validate and build absolute paths
-
-        Args:
-            env: Raw environment name (may include aliases)
-
-        Returns:
-            Dictionary mapping config keys to absolute paths
-
-        Raises:
-            ConfigurationError: If environment is invalid or required config missing
         """
         logger.debug(f"Loading config for environment: '{env}'")
 
@@ -531,20 +515,6 @@ class AppConfigManager:
     def _normalize_env(self, env: str) -> str:
         """
         Normalize and validate environment name.
-
-        Handles:
-        - Alias mapping (development → dev, production → prod)
-        - Case normalization
-        - Sandbox variant handling
-
-        Args:
-            env: Raw environment name
-
-        Returns:
-            Normalized environment name
-
-        Raises:
-            ConfigurationError: If environment is not valid/allowed
         """
         from engine.cli.core import normalize_environment, is_allowed_environment
 
@@ -571,24 +541,6 @@ class AppConfigManager:
     def _resolve_env_fallback(self, env: str, env_configs: Dict[str, Any]) -> str:
         """
         Resolve environment configuration with fallback chain.
-
-        For sandbox environments (sandbox, sandbox_alice):
-        - First tries sandbox_alice (if looking for sandbox_alice)
-        - Falls back to sandbox
-        - Falls back to base
-
-        For other environments:
-        - Must exist in env_configs or raises error
-
-        Args:
-            env: Normalized environment name
-            env_configs: Available environment configurations
-
-        Returns:
-            Resolved environment name (may be different from input due to fallback)
-
-        Raises:
-            ConfigurationError: If environment can't be resolved
         """
         from engine.cli.core import is_sandbox_environment, get_base_environment
 
@@ -639,23 +591,6 @@ class AppConfigManager:
     def _merge_base_and_env(self, env_configs: Dict[str, Any], env: str) -> Dict[str, str]:
         """
         Merge base configuration with environment-specific overrides.
-
-        Merging strategy:
-        1. Start with base configuration (foundation)
-        2. Override with environment-specific values
-        3. Environment values take precedence
-
-        Example:
-            base = {input: "config/input.yaml", output: "config/output.yaml"}
-            dev = {input: "config/dev/input.yaml"}
-            result = {input: "config/dev/input.yaml", output: "config/output.yaml"}
-
-        Args:
-            env_configs: All environment configurations
-            env: Target environment name
-
-        Returns:
-            Merged configuration (base + env specific)
         """
         base_config = env_configs.get("base", {})
         env_config = env_configs.get(env, {})
@@ -673,19 +608,6 @@ class AppConfigManager:
     def _validate_and_build_paths(self, merged: Dict[str, str]) -> Dict[str, str]:
         """
         Validate and build absolute paths from relative configuration paths.
-
-        Steps:
-        1. Skip empty paths
-        2. Resolve relative paths against base_path
-        3. Validate paths are within base_path (security check)
-        4. Check file existence (warning if missing)
-        5. Build absolute paths for result
-
-        Args:
-            merged: Merged configuration (base + env specific)
-
-        Returns:
-            Dictionary mapping keys to validated absolute paths
         """
         result: Dict[str, str] = {}
 

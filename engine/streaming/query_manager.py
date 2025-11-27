@@ -272,18 +272,7 @@ class StreamingQueryManager:
                 ) from e
 
     def _import_module_from_path(self, module_path: str, config_file_path: Optional[str] = None):
-        """Import module using importlib.util without modifying sys.path.
-
-        Args:
-            module_path: Module path (e.g., 'my_module' or 'package.my_module')
-            config_file_path: Optional path to config file to derive search directory
-
-        Returns:
-            Imported module object
-
-        Raises:
-            StreamingError: If module cannot be imported
-        """
+        """Import module using importlib.util without modifying sys.path."""
         # First, try standard import (for installed packages)
         try:
             return importlib.import_module(module_path)
@@ -500,15 +489,7 @@ class StreamingQueryManager:
             ) from e
 
     def _validate_checkpoint_not_in_use(self, checkpoint_path: str, node_name: str) -> None:
-        """Validate checkpoint location is not already in use by another active query.
-
-        Args:
-            checkpoint_path: The checkpoint location to validate
-            node_name: Name of the node requesting the checkpoint
-
-        Raises:
-            StreamingConfigurationError: If checkpoint is already in use
-        """
+        """Validate checkpoint location is not already in use by another active query."""
         with self._active_queries_lock:
             for query_key, query_info in self._active_queries.items():
                 existing_config = query_info.get("node_config", {})

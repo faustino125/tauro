@@ -1,116 +1,101 @@
 # MLOps Layer
 
-Capa MLOps integrada en Tauro para **Model Registry** y **Experiment Tracking**, con soporte dual para almacenamiento local (Parquet) y Databricks Unity Catalog.
+Integrated MLOps layer for Tauro providing **Model Registry** and **Experiment Tracking**, with dual support for local storage (Parquet) and Databricks Unity Catalog.
 
-## 🎯 Filosofía: Invisible hasta que se necesite
+## 🎯 Philosophy: Invisible Until Needed
 
-MLOps en Tauro está diseñado para ser:
-- **Zero-config para ETL**: No interfiere con pipelines de solo datos
-- **Auto-activado para ML**: Detecta automáticamente nodos ML
-- **Progresivamente complejo**: Configuración simple por defecto, control fino cuando se necesita
+MLOps in Tauro is designed to be:
+- **Zero-config for ETL**: Does not interfere with data-only pipelines
+- **Auto-activated for ML**: Automatically detects ML nodes
+- **Progressively complex**: Simple configuration by default, fine-grained control when needed
 
 ---
 
-## Características
+## ✨ Features
 
 ### Model Registry
-- ✅ Versionado automático de modelos
-- ✅ Metadatos estructurados (framework, hiperparámetros, métricas)
-- ✅ Almacenamiento de artefactos (sklearn, XGBoost, PyTorch, etc.)
-- ✅ Gestión del ciclo de vida (Staging → Production → Archived)
-- ✅ Búsqueda por nombre, versión y etapa
-- ✅ Tags y anotaciones
+- ✅ Automatic model versioning
+- ✅ Structured metadata (framework, hyperparameters, metrics)
+- ✅ Artifact storage (sklearn, XGBoost, PyTorch, etc.)
+- ✅ Lifecycle management (Staging → Production → Archived)
+- ✅ Search by name, version, and stage
+- ✅ Tags and annotations
 
 ### Experiment Tracking
-- ✅ Creación de experimentos y runs
-- ✅ Logging de métricas (con timestamps y steps)
-- ✅ Logging de hiperparámetros
-- ✅ Almacenamiento de artefactos por run
-- ✅ Comparación de runs (DataFrame)
-- ✅ Búsqueda de runs por métricas
-- ✅ Soporte para runs anidados (parent-child)
+- ✅ Experiment and run creation
+- ✅ Metric logging (with timestamps and steps)
+- ✅ Hyperparameter logging
+- ✅ Artifact storage per run
+- ✅ Run comparison (DataFrame)
+- ✅ Run search by metrics
+- ✅ Nested run support (parent-child)
 
 ### Backends
-- ✅ **Local**: Almacenamiento en Parquet (sin dependencias externas)
-- ✅ **Databricks**: Unity Catalog (con databricks-sql-connector)
+- ✅ **Local**: Parquet storage (no external dependencies)
+- ✅ **Databricks**: Unity Catalog (with databricks-sql-connector)
 
-### Integración con Exec
-- ✅ **Auto-detection**: Detecta nodos ML automáticamente
-- ✅ **Lazy initialization**: Solo se carga si hay nodos ML
-- ✅ **Factory pattern**: Auto-configura backend (local/Databricks)
-- ✅ **ml_info.yaml**: Configuración ML centralizada (opcional)
+### 🆕 Event System and Observability
+- ✅ **EventEmitter**: Pub/sub event system with history
+- ✅ **MetricsCollector**: Metrics collection (counters, gauges, timers)
+- ✅ **HooksManager**: Pre/post hooks for operations
+- ✅ **AuditLogger**: Audit logging with queries
+
+### 🆕 Cache Layer
+- ✅ **LRUCache**: Thread-safe LRU cache with TTL
+- ✅ **TwoLevelCache**: Two-level cache (L1 memory / L2 storage)
+- ✅ **BatchProcessor**: Batch operation processing
+- ✅ **CachedStorage**: Cache wrapper for storage backends
+
+### 🆕 Health Checks and Diagnostics
+- ✅ **HealthMonitor**: Central system health monitor
+- ✅ **StorageHealthCheck**: Storage status verification
+- ✅ **MemoryHealthCheck**: Memory usage monitoring
+- ✅ **DiskHealthCheck**: Disk space verification
+- ✅ **Liveness** and **readiness** probes (Kubernetes-style)
+
+### 🆕 Improved Architecture
+- ✅ **Protocols**: Abstract interfaces for all components
+- ✅ **Base Classes**: Base classes with lifecycle management
+- ✅ **Enhanced Exceptions**: Exceptions with error codes and context
+- ✅ **Resilience**: Retry policies and circuit breakers
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
-### Instalación
+### Installation
 
 ```bash
 pip install pandas loguru pyarrow
 
-# Para Databricks (opcional)
+# For Databricks (optional)
 pip install databricks-sql-connector
 ```
 
-### Uso Básico
-
-#### 1. Inicializar MLOps Context
-
-**Opción A: Desde Tauro Context (RECOMENDADO - Auto mode detection)**
+### Basic Usage
 
 ```python
-from tauro.core.config import Context
-from tauro.core.mlops.config import MLOpsContext
-
-# Crear context de Tauro
-context = Context(
-    global_settings="config/global_settings.yaml",
-    pipelines_config="config/pipelines.yaml",
-    nodes_config="config/nodes.yaml",
-    input_config="config/input.yaml",
-    output_config="config/output.yaml",
+from engine.mlops import (
+    MLOpsContext,
+    init_mlops,
+    get_mlops_context,
+    ModelStage,
+    RunStatus,
 )
 
-# MLOps auto-detecta modo (local/databricks) desde context
-mlops = MLOpsContext.from_context(context)
-# ✅ Auto-configura backend basado en execution_mode
-# ✅ Usa configuración de global_settings
-# ✅ Soporta P1 features (buffering, locking, etc.)
+# Initialize MLOps context
+ctx = init_mlops(backend_type="local", storage_path="./mlops_data")
+
+# Or using the global context
+mlops = get_mlops_context()
 ```
 
-**Opción B: Manual (Para uso standalone)**
-
-```python
-from tauro.core.mlops.config import MLOpsContext
-
-# Local backend explícito
-ctx = MLOpsContext(
-    backend_type="local",
-    storage_path="./mlops_data"
-)
-
-# Databricks backend explícito
-ctx = MLOpsContext(
-    backend_type="databricks",
-    databricks_catalog="main",
-    databricks_schema="ml_tracking",
-)
-```
-
-**Opción C: Desde variables de entorno (DEPRECATED)**
-
-```python
-# ⚠️ DEPRECATED: Use from_context() for auto mode detection
-ctx = MLOpsContext.from_env()
-```
-
-#### 2. Model Registry
+### Model Registry
 
 ```python
 registry = ctx.model_registry
 
-# Registrar modelo
+# Register model
 model_v1 = registry.register_model(
     name="credit_risk_model",
     artifact_path="/path/to/model.pkl",
@@ -121,234 +106,315 @@ model_v1 = registry.register_model(
     tags={"team": "ds", "project": "credit"}
 )
 
-# Listar modelos
-models = registry.list_models()
-
-# Obtener versión específica
-model = registry.get_model_version("credit_risk_model", version=1)
-
-# Promover a producción
+# Promote to production
 registry.promote_model("credit_risk_model", 1, ModelStage.PRODUCTION)
 
-# Descargar artefacto
-registry.download_artifact("credit_risk_model", None, "/local/path")
+# Get production model
+prod_model = registry.get_model_by_stage("credit_risk_model", ModelStage.PRODUCTION)
 ```
 
-#### 3. Experiment Tracking
+### Experiment Tracking
 
 ```python
 tracker = ctx.experiment_tracker
 
-# Crear experimento
+# Create experiment
 exp = tracker.create_experiment(
     name="model_tuning_v1",
     description="Hyperparameter tuning",
     tags={"team": "ds"}
 )
 
-# Iniciar run
-run = tracker.start_run(
-    exp.experiment_id,
-    name="trial_1",
-    parameters={"lr": 0.01, "batch_size": 32}
-)
-
-# Loguear métricas
-for epoch in range(10):
-    tracker.log_metric(run.run_id, "loss", 0.5 - epoch * 0.05, step=epoch)
-    tracker.log_metric(run.run_id, "accuracy", 0.7 + epoch * 0.03, step=epoch)
-
-# Loguear artefactos
-tracker.log_artifact(run.run_id, "/path/to/model.pkl")
-
-# Terminar run
-tracker.end_run(run.run_id, RunStatus.COMPLETED)
-
-# Buscar runs
-matching_runs = tracker.search_runs(
-    exp.experiment_id,
-    metric_filter={"accuracy": (">", 0.85)}
-)
-
-# Comparar runs
-comparison_df = tracker.compare_runs([run1.run_id, run2.run_id])
+# Start run with context manager
+with tracker.run_context(exp.experiment_id, name="trial_1") as run:
+    for epoch in range(10):
+        tracker.log_metric(run.run_id, "loss", 0.5 - epoch * 0.05, step=epoch)
+        tracker.log_metric(run.run_id, "accuracy", 0.7 + epoch * 0.03, step=epoch)
+    tracker.log_artifact(run.run_id, "/path/to/model.pkl")
+# Run is automatically finalized
 ```
 
 ---
 
-## 📦 Configuración con ml_info.yaml
+## 🆕 Event System
 
-Para proyectos ML complejos, puedes centralizar la configuración en `ml_info.yaml`:
+```python
+from engine.mlops import (
+    EventEmitter, 
+    EventType, 
+    get_event_emitter,
+    get_metrics_collector,
+)
 
-```yaml
-# config/ml_info.yaml
-mlops:
-  enabled: true
-  backend: "databricks"
-  experiment:
-    name: "customer-churn-prediction"
-    description: "Modelo de abandono de clientes"
-  model_registry:
-    catalog: "main"
-    schema: "ml_models"
-  tracking:
-    catalog: "main"
-    schema: "ml_experiments"
-  auto_log: true
+# Get global event emitter
+emitter = get_event_emitter()
+
+# Subscribe to events
+def on_model_registered(event):
+    print(f"Model registered: {event.data}")
+
+emitter.subscribe(EventType.MODEL_REGISTERED, on_model_registered)
+
+# Events are automatically emitted by components
+# You can also emit events manually:
+emitter.emit(EventType.MODEL_REGISTERED, {"name": "my_model", "version": 1})
 ```
 
-### Precedencia de Configuración
+### Metrics
 
-La configuración MLOps sigue esta jerarquía (de mayor a menor prioridad):
+```python
+metrics = get_metrics_collector()
 
-1. **Node config** (`nodes.yaml` - específico del nodo)
-2. **Pipeline config** (`pipelines.yaml` - nivel pipeline)
-3. **ml_info.yaml** (configuración ML centralizada)
-4. **Global settings** (`global_settings.yaml`)
-5. **Auto-defaults** (valores por defecto inteligentes)
+# Counters
+metrics.increment("models_registered")
+metrics.increment("api_requests", tags={"endpoint": "/models"})
 
-**Ejemplo de uso combinado:**
+# Gauges
+metrics.gauge("active_runs", 5)
 
-```yaml
-# config/nodes.yaml
-nodes:
-  train_model:
-    type: "ml_training"
-    config:
-      mlops:
-        experiment_name: "xgboost-tuning"  # ← Override solo esto
-        # Resto hereda de ml_info.yaml o global_settings
+# Timers
+with metrics.timer("training_duration"):
+    train_model()
+
+# Get summary
+summary = metrics.get_summary()
+print(summary)
 ```
 
-**Ventajas:**
-- ✅ Un solo lugar para configuración ML común
-- ✅ Override selectivo a nivel pipeline/nodo
-- ✅ Separación clara entre config ML y config datos
-- ✅ Reusabilidad entre pipelines ML
+### Hooks
 
-**Ver más:**
-- [SIMPLIFICATION_PROPOSAL.md](../../../SIMPLIFICATION_PROPOSAL.md) - Diseño completo
-- [MLOPS_SIMPLE_GUIDE.md](../../../MLOPS_SIMPLE_GUIDE.md) - Guía rápida con ejemplos
+```python
+from engine.mlops import HooksManager, HookType, get_hooks_manager
+
+hooks = get_hooks_manager()
+
+# Register pre-operation hook
+@hooks.register(HookType.PRE_MODEL_REGISTER)
+def validate_model(data):
+    if data.get("metrics", {}).get("accuracy", 0) < 0.5:
+        raise ValueError("Model accuracy too low")
+    return data
+
+# Register post-operation hook
+@hooks.register(HookType.POST_MODEL_REGISTER)
+def notify_slack(data):
+    send_slack_notification(f"New model: {data['name']}")
+    return data
+```
 
 ---
 
-## Arquitectura
+## 🆕 Cache Layer
+
+```python
+from engine.mlops import LRUCache, TwoLevelCache, CachedStorage
+
+# Simple LRU cache
+cache = LRUCache(max_size=1000, default_ttl=300)  # 5 min TTL
+cache.set("model:v1", model_metadata)
+cached = cache.get("model:v1")
+
+# Two-level cache
+l1_cache = LRUCache(max_size=100, default_ttl=60)   # Fast, small
+l2_cache = LRUCache(max_size=10000, default_ttl=3600)  # Large, slow
+two_level = TwoLevelCache(l1=l1_cache, l2=l2_cache)
+
+# Storage wrapper with cache
+cached_storage = CachedStorage(storage=storage_backend, cache=cache)
+# Reads are automatically cached
+data = cached_storage.read_json("path/to/config.json")
+```
+
+### Batch Processing
+
+```python
+from engine.mlops import BatchProcessor, BatchOperation
+
+def process_batch(operations):
+    for op in operations:
+        storage.write(op.key, op.value)
+
+processor = BatchProcessor(
+    process_func=process_batch,
+    batch_size=100,
+    flush_interval=5.0  # seconds
+)
+
+# Operations accumulate and are processed in batches
+processor.add(BatchOperation(key="k1", value="v1", operation_type="write"))
+processor.add(BatchOperation(key="k2", value="v2", operation_type="write"))
+# Manual flush if needed
+processor.flush()
+```
+
+---
+
+## 🆕 Health Checks
+
+```python
+from engine.mlops import (
+    HealthMonitor,
+    StorageHealthCheck,
+    MemoryHealthCheck,
+    DiskHealthCheck,
+    get_health_monitor,
+    check_health,
+    is_healthy,
+    is_ready,
+)
+
+# Get global monitor
+monitor = get_health_monitor()
+
+# Register health checks
+monitor.register(StorageHealthCheck("storage", storage_backend))
+monitor.register(MemoryHealthCheck("memory", warning_threshold=0.8))
+monitor.register(DiskHealthCheck("disk", path="/data", warning_threshold=0.9))
+
+# Check health
+report = check_health()
+print(f"Status: {report.overall_status}")
+for check in report.checks:
+    print(f"  {check.name}: {check.status} - {check.message}")
+
+# Kubernetes-style probes
+if is_healthy():  # Liveness
+    print("System is alive")
+
+if is_ready():  # Readiness
+    print("System is ready to accept traffic")
+```
+
+---
+
+## 🆕 Enhanced Exceptions
+
+```python
+from engine.mlops import (
+    ErrorCode,
+    ErrorContext,
+    MLOpsException,
+    ModelNotFoundError,
+    create_error_response,
+    wrap_exception,
+)
+
+# Exceptions with error codes
+try:
+    model = registry.get_model_version("nonexistent")
+except ModelNotFoundError as e:
+    print(f"Error code: {e.error_code}")  # ErrorCode.MODEL_NOT_FOUND
+    print(f"Context: {e.context}")
+
+# Create error response for APIs
+response = create_error_response(
+    error_code=ErrorCode.VALIDATION_ERROR,
+    message="Invalid model name",
+    details={"field": "name", "reason": "Must be alphanumeric"}
+)
+
+# Wrap external exceptions
+try:
+    external_operation()
+except Exception as e:
+    raise wrap_exception(e, ErrorCode.STORAGE_ERROR, "Failed to save model")
+```
+
+---
+
+## 🆕 Protocols (Interfaces)
+
+The system defines clear interfaces for all components:
+
+```python
+from engine.mlops import (
+    StorageBackendProtocol,
+    ExperimentTrackerProtocol,
+    ModelRegistryProtocol,
+    LockProtocol,
+    EventEmitterProtocol,
+)
+
+# Create custom implementation
+class MyCustomStorage:
+    """Implements StorageBackendProtocol."""
+    
+    def write_dataframe(self, df, path, mode="overwrite"):
+        ...
+    
+    def read_dataframe(self, path):
+        ...
+    
+    # ... remaining methods
+
+# Type checking works automatically
+def process_data(storage: StorageBackendProtocol):
+    df = storage.read_dataframe("data.parquet")
+    ...
+```
+
+---
+
+## 📦 Architecture
 
 ```
-tauro/core/mlops/
-├── __init__.py              # Public API
+engine/mlops/
+├── __init__.py              # Public API exports
+├── config.py                # MLOpsContext, configuration, and factories
 ├── storage.py               # Storage backends (Local, Databricks)
 ├── model_registry.py        # Model Registry implementation
 ├── experiment_tracking.py   # Experiment Tracking implementation
-├── config.py                # MLOpsContext y configuración
-├── example.py               # Ejemplos de uso
-└── README.md                # Esta documentación
-
-tauro/core/exec/
-├── mlops_auto_config.py     # Auto-detection y config merge
-└── executor.py              # Lazy initialization en BaseExecutor
+│
+├── protocols.py             # Abstract interfaces (Protocols)
+├── events.py                # Event system, metrics, hooks, audit
+├── cache.py                 # Caching layer (LRU, TwoLevel, Batch)
+├── base.py                  # Base classes and mixins
+├── health.py                # Health checks and diagnostics
+├── exceptions.py            # Enhanced exceptions with error codes
+│
+├── concurrency.py           # 🆕 Consolidated: locks, transactions
+├── mlflow.py                # 🆕 Consolidated: MLflow integration
+├── resilience.py            # Retry policies, circuit breakers
+├── validators.py            # Input validation
+│
+└── test/                    # Unit tests
+    ├── test_protocols.py
+    ├── test_events.py
+    ├── test_cache.py
+    ├── test_base.py
+    ├── test_health.py
+    ├── test_locking.py
+    ├── test_transaction.py
+    └── test_factory.py
 ```
 
-### Componentes Clave
+### Consolidated Modules (v2.0)
 
-1. **StorageBackend** (`storage.py`):
-   - Abstracción para local (Parquet) y Databricks (Unity Catalog)
-   - API unificada: write_dataframe, read_dataframe, write_json, etc.
+| Module | Contains | Replaces |
+|--------|----------|----------|
+| `concurrency.py` | FileLock, OptimisticLock, ReadWriteLock, Transaction, SafeTransaction | `locking.py`, `transaction.py` |
+| `mlflow.py` | MLflowPipelineTracker, mlflow_track decorator, MLflowHelper | `mlflow_adapter.py`, `mlflow_decorators.py`, `mlflow_utils.py` |
+| `config.py` | MLOpsContext, factories (StorageBackendFactory, etc.) | Original `config.py` + `factory.py` |
 
-2. **ModelRegistry** (`model_registry.py`):
-   - Versionado de modelos
-   - Lifecycle management (Staging/Production/Archived)
-   - Metadatos y artefactos
+### Main Components
 
-3. **ExperimentTracker** (`experiment_tracking.py`):
-   - Experiments y runs
-   - Métricas, hiperparámetros, artefactos
-   - Comparación de runs
-
-4. **MLOpsContext** (`config.py`):
-   - Factory para backend selection
-   - Configuración centralizada
-   - from_context() para auto mode detection
-
-5. **MLOpsAutoConfigurator** (`tauro/core/exec/mlops_auto_config.py`):
-   - Detecta automáticamente nodos ML (patterns)
-   - Genera configuración por defecto inteligente
-   - Merge jerárquico: node → pipeline → ml_info → global → auto
-
-6. **BaseExecutor Integration** (`tauro/core/exec/executor.py`):
-   - Lazy initialization: solo carga si hay nodos ML
-   - Property `mlops_context`: acceso on-demand
-   - Auto-skip para pipelines ETL puros
-
-### Storage Backend Abstraction
-
-Todos los componentes usan una abstracción `StorageBackend`:
-
-```python
-class StorageBackend(ABC):
-    def write_dataframe(df, path) -> StorageMetadata
-    def read_dataframe(path) -> pd.DataFrame
-    def write_json(data, path) -> StorageMetadata
-    def read_json(path) -> Dict
-    def write_artifact(src, dest) -> StorageMetadata
-    def read_artifact(src, dest_local) -> None
-    def exists(path) -> bool
-    def list_paths(prefix) -> List[str]
-    def delete(path) -> None
-```
-
-**LocalStorageBackend**: Usa Parquet para DataFrames, JSON para metadatos, archivos nativos para artefactos.
-
-**DatabricksStorageBackend**: Integración con Unity Catalog (requiere API adicional para escritura).
+| Component | Description |
+|-----------|-------------|
+| `StorageBackend` | Abstraction for local (Parquet) and Databricks (Unity Catalog) |
+| `ModelRegistry` | Model versioning, lifecycle, artifacts |
+| `ExperimentTracker` | Experiments, runs, metrics, parameters |
+| `MLOpsContext` | Factory and centralized configuration |
+| `EventEmitter` | Pub/sub system for events |
+| `MetricsCollector` | Operational metrics collection |
+| `HooksManager` | Pre/post hooks for extensibility |
+| `LRUCache` | In-memory cache with TTL |
+| `HealthMonitor` | Health checks and diagnostics |
 
 ---
 
-## Estructura de Datos
+## 🔧 Configuration
 
-### Model Registry
-
-```
-model_registry/
-├── models/
-│   ├── index.parquet                    # Índice de modelos
-│   └── .registry_marker.json
-├── metadata/
-│   └── {model_id}/
-│       ├── v1.json                      # Metadata v1
-│       ├── v2.json                      # Metadata v2
-│       └── ...
-└── artifacts/
-    └── {model_id}/
-        ├── v1/                          # Artefactos v1
-        ├── v2/                          # Artefactos v2
-        └── ...
-```
-
-### Experiment Tracking
-
-```
-experiment_tracking/
-├── experiments/
-│   ├── index.parquet                    # Índice de experimentos
-│   ├── {exp_id}.json                    # Metadata experimento
-│   └── ...
-├── runs/
-│   └── {exp_id}/
-│       ├── index.parquet                # Índice de runs
-│       ├── {run_id}.json                # Metadata run
-│       └── ...
-└── artifacts/
-    └── {run_id}/                        # Artefactos del run
-        ├── model.pkl
-        ├── predictions.parquet
-        └── ...
-```
-
----
-
-## Configuración
-
-### Variables de Entorno
+### Environment Variables
 
 ```bash
 # Local backend
@@ -363,366 +429,238 @@ DATABRICKS_HOST=https://workspace.cloud.databricks.com
 DATABRICKS_TOKEN=dapi1234567890abcdef
 ```
 
-### Inicialización Programática
+### Configuration with ml_info.yaml
 
-```python
-# Local
-ctx = MLOpsContext(
-    backend_type="local",
-    storage_path="./mlops_data"
-)
-
-# Databricks
-ctx = MLOpsContext(
-    backend_type="databricks",
-    databricks_catalog="my_catalog",
-    databricks_schema="mlops",
-    databricks_workspace_url="https://...",
-    databricks_token="dapi..."
-)
-```
-
----
-
-## API Reference
-
-### ModelRegistry
-
-#### `register_model()`
-```python
-def register_model(
-    name: str,
-    artifact_path: str,
-    artifact_type: str,
-    framework: str,
-    description: str = "",
-    hyperparameters: Dict = None,
-    metrics: Dict = None,
-    tags: Dict = None,
-    input_schema: Dict = None,
-    output_schema: Dict = None,
-    dependencies: List = None,
-    experiment_run_id: str = None,
-) -> ModelVersion
-```
-
-Registra un nuevo modelo o versión. Incrementa automáticamente el número de versión si el modelo ya existe.
-
-#### `get_model_version()`
-```python
-def get_model_version(
-    name: str,
-    version: int = None,
-) -> ModelVersion
-```
-
-Obtiene una versión específica (o la última si `version=None`).
-
-#### `list_models()` → `List[Dict]`
-
-Lista todos los modelos con su versión más reciente.
-
-#### `list_model_versions()` → `List[Dict]`
-
-Lista todas las versiones de un modelo.
-
-#### `promote_model()`
-```python
-def promote_model(
-    name: str,
-    version: int,
-    stage: ModelStage
-) -> ModelVersion
-```
-
-Promueve modelo a Staging, Production o Archived.
-
-#### `download_artifact()`
-```python
-def download_artifact(
-    name: str,
-    version: int,
-    local_destination: str
-) -> None
-```
-
-Descarga artefacto del modelo a ruta local.
-
----
-
-### ExperimentTracker
-
-#### `create_experiment()`
-```python
-def create_experiment(
-    name: str,
-    description: str = "",
-    tags: Dict = None,
-) -> Experiment
-```
-
-Crea nuevo experimento.
-
-#### `start_run()`
-```python
-def start_run(
-    experiment_id: str,
-    name: str = "",
-    parameters: Dict = None,
-    tags: Dict = None,
-    parent_run_id: str = None,
-) -> Run
-```
-
-Inicia nuevo run (se mantiene en memoria hasta `end_run()`).
-
-#### `log_metric()`
-```python
-def log_metric(
-    run_id: str,
-    key: str,
-    value: float,
-    step: int = 0,
-    metadata: Dict = None,
-) -> None
-```
-
-Loguea métrica para run (ej: loss, accuracy).
-
-#### `log_parameter()`
-```python
-def log_parameter(
-    run_id: str,
-    key: str,
-    value: Any,
-) -> None
-```
-
-Loguea hiperparámetro.
-
-#### `log_artifact()`
-```python
-def log_artifact(
-    run_id: str,
-    artifact_path: str,
-    destination: str = "",
-) -> str
-```
-
-Loguea artefacto (archivo o directorio). Retorna URI en storage.
-
-#### `end_run()`
-```python
-def end_run(
-    run_id: str,
-    status: RunStatus = RunStatus.COMPLETED,
-) -> Run
-```
-
-Termina run y persiste a storage.
-
-#### `get_run()` → `Run`
-
-Obtiene run por ID (activo o persistido).
-
-#### `list_runs()` → `List[Dict]`
-```python
-def list_runs(
-    experiment_id: str,
-    status_filter: RunStatus = None,
-    tag_filter: Dict = None,
-) -> List[Dict]
-```
-
-Lista runs en experimento con filtros opcionales.
-
-#### `compare_runs()` → `pd.DataFrame`
-```python
-def compare_runs(
-    run_ids: List[str]
-) -> pd.DataFrame
-```
-
-Compara múltiples runs como DataFrame (columnas = métricas/parámetros).
-
-#### `search_runs()` → `List[str]`
-```python
-def search_runs(
-    experiment_id: str,
-    metric_filter: Dict = None,  # {"metric": (">", threshold)}
-) -> List[str]
-```
-
-Busca runs que cumplen condiciones de métricas.
-
----
-
-## Ejemplos Completos
-
-### Entrenamiento de Modelo
-
-```python
-from tauro.core.mlops.config import MLOpsContext
-from tauro.core.mlops.experiment_tracking import RunStatus
-import pickle
-
-ctx = MLOpsContext(backend_type="local", storage_path="./mlops")
-tracker = ctx.experiment_tracker
-registry = ctx.model_registry
-
-# Crear experimento
-exp = tracker.create_experiment("xgboost_tuning")
-
-# Trial 1
-run1 = tracker.start_run(
-    exp.experiment_id,
-    name="trial_1",
-    parameters={"depth": 5, "lr": 0.1, "n_estimators": 100}
-)
-
-# Entrenar y loguear
-model1 = train_model(depth=5, lr=0.1, n_estimators=100)
-for epoch, metrics in training_loop(model1, train_data):
-    tracker.log_metric(run1.run_id, "train_loss", metrics["loss"], step=epoch)
-    tracker.log_metric(run1.run_id, "train_auc", metrics["auc"], step=epoch)
-
-# Guardar y loguear artefacto
-with open("model_trial1.pkl", "wb") as f:
-    pickle.dump(model1, f)
-tracker.log_artifact(run1.run_id, "model_trial1.pkl")
-
-# Evaluar
-eval_metrics = evaluate(model1, test_data)
-tracker.log_metric(run1.run_id, "test_auc", eval_metrics["auc"], step=0)
-tracker.log_metric(run1.run_id, "test_accuracy", eval_metrics["accuracy"], step=0)
-
-tracker.end_run(run1.run_id, RunStatus.COMPLETED)
-
-# Trial 2 (mejor config)
-run2 = tracker.start_run(
-    exp.experiment_id,
-    name="trial_2",
-    parameters={"depth": 8, "lr": 0.05, "n_estimators": 200}
-)
-# ... similar logging ...
-
-# Comparar y elegir mejor
-comparison = tracker.compare_runs([run1.run_id, run2.run_id])
-print(comparison)
-
-best_run_id = run2.run_id
-best_run = tracker.get_run(best_run_id)
-
-# Registrar en Model Registry
-registry.register_model(
-    name="xgboost_classifier",
-    artifact_path="model_trial2.pkl",
-    artifact_type="xgboost",
-    framework="xgboost",
-    hyperparameters=best_run.parameters,
-    metrics={"test_auc": 0.97, "test_accuracy": 0.91},
-    experiment_run_id=best_run_id,
-)
-
-# Promover a producción
-registry.promote_model("xgboost_classifier", 1, ModelStage.PRODUCTION)
-```
-
----
-
-## 🎓 Resumen: Tres Formas de Usar MLOps
-
-### 1. ETL Pipeline (Sin MLOps)
-```yaml
-# config/nodes.yaml
-nodes:
-  load_data:
-    function: "etl.load_csv"
-  transform:
-    function: "etl.clean_data"
-# ✅ MLOps auto-deshabilitado → Sin overhead
-```
-
-### 2. ML Pipeline Simple (Auto todo)
-```yaml
-# config/nodes.yaml
-nodes:
-  train_model:  # ← AUTO-DETECTADO
-    function: "ml.train_xgboost"
-# ✅ MLOps auto-habilitado
-# ✅ Backend desde global_settings
-# ✅ Experiment tracking automático
-```
-
-### 3. ML Production (ml_info.yaml)
 ```yaml
 # config/ml_info.yaml
 mlops:
   enabled: true
   backend: "databricks"
   experiment:
-    name: "production-model"
+    name: "customer-churn-prediction"
+    description: "Customer churn prediction model"
   model_registry:
     catalog: "main"
     schema: "ml_models"
-
-# config/nodes.yaml
-nodes:
-  train_model:
-    function: "ml.train_xgboost"
-    mlops:
-      experiment_name: "xgboost-v2"  # Override selectivo
-# ✅ Configuración centralizada
-# ✅ Override granular
-# ✅ Reusabilidad entre pipelines
-```
-
-## Integración con Spark/Databricks
-
-Para escribir en Unity Catalog desde Spark:
-
-```python
-# En Databricks notebook
-spark.createDataFrame(
-    comparison_df
-).write.mode("overwrite").option(
-    "overwriteSchema", "true"
-).saveAsTable("catalog.schema.run_comparison")
+  tracking:
+    catalog: "main"
+    schema: "ml_experiments"
+  auto_log: true
+  
+  # 🆕 Cache configuration
+  cache:
+    enabled: true
+    max_size: 1000
+    default_ttl: 300
+  
+  # 🆕 Health checks configuration
+  health:
+    enabled: true
+    memory_threshold: 0.85
+    disk_threshold: 0.90
 ```
 
 ---
 
-## Limitaciones Actuales
+## 📊 Data Structure
 
-1. **DatabricksStorageBackend**: Actualmente es una integración parcial. Para operaciones de lectura/escritura en UC se recomienda usar Spark API directamente.
-2. **Métricas**: Se almacenan en memoria durante run y se persisten al terminar.
-3. **Runs anidados**: Soportados pero sin validación de ciclos.
-4. **Concurrencia**: No hay mecanismo de locking para escribura concurrente.
+### Model Registry
+
+```
+model_registry/
+├── models/
+│   └── index.parquet              # Model index
+├── metadata/
+│   └── {model_id}/
+│       ├── v1.json                # Metadata v1
+│       └── v2.json                # Metadata v2
+└── artifacts/
+    └── {model_id}/
+        ├── v1/                    # Artifacts v1
+        └── v2/                    # Artifacts v2
+```
+
+### Experiment Tracking
+
+```
+experiment_tracking/
+├── experiments/
+│   ├── index.parquet              # Experiment index
+│   └── {exp_id}.json              # Experiment metadata
+├── runs/
+│   └── {exp_id}/
+│       ├── index.parquet          # Run index
+│       └── {run_id}.json          # Run metadata
+└── artifacts/
+    └── {run_id}/                  # Run artifacts
+```
 
 ---
 
-## Roadmap
-
-- [ ] Integración completa con Databricks UC (volumes)
-- [ ] Métricas incrementales (sin cargar todo en memoria)
-- [ ] Validación de esquemas (input/output)
-- [ ] Modelo Registry API HTTP
-- [ ] UI Web para visualización
-- [ ] Integración con MLflow
-
----
-
-## Desarrollo
-
-Ejecutar ejemplos:
+## 🧪 Testing
 
 ```bash
-cd tauro/core/mlops
-python example.py
+# Run all mlops module tests
+pytest engine/mlops/test/ -v
+
+# Specific tests
+pytest engine/mlops/test/test_protocols.py -v
+pytest engine/mlops/test/test_events.py -v
+pytest engine/mlops/test/test_cache.py -v
+pytest engine/mlops/test/test_health.py -v
 ```
 
 ---
 
-## License
+## 📚 API Reference
 
-MIT - Ver LICENSE en raíz del proyecto.
+### Main Exports
+
+```python
+from engine.mlops import (
+    # Context and Config
+    MLOpsContext, MLOpsConfig, init_mlops, get_mlops_context,
+    
+    # Protocols
+    StorageBackendProtocol, ExperimentTrackerProtocol, ModelRegistryProtocol,
+    
+    # Events
+    EventType, Event, EventEmitter, MetricsCollector, HooksManager, AuditLogger,
+    get_event_emitter, get_metrics_collector, get_hooks_manager,
+    
+    # Cache
+    LRUCache, TwoLevelCache, BatchProcessor, CachedStorage, CacheKeyBuilder,
+    
+    # Health
+    HealthMonitor, HealthStatus, StorageHealthCheck, MemoryHealthCheck,
+    get_health_monitor, check_health, is_healthy, is_ready,
+    
+    # Base
+    BaseMLOpsComponent, ComponentState, ValidationMixin, PathManager,
+    
+    # Model Registry
+    ModelRegistry, ModelMetadata, ModelVersion, ModelStage,
+    
+    # Experiment Tracking
+    ExperimentTracker, Experiment, Run, Metric, RunStatus,
+    
+    # Storage
+    LocalStorageBackend, DatabricksStorageBackend,
+    
+    # Exceptions
+    ErrorCode, MLOpsException, ModelNotFoundError, ExperimentNotFoundError,
+    
+    # Resilience
+    RetryConfig, with_retry, CircuitBreaker,
+)
+```
+
+---
+
+## 🎓 Usage Examples
+
+### 1. ETL Pipeline (No MLOps)
+
+```yaml
+nodes:
+  load_data:
+    function: "etl.load_csv"
+  transform:
+    function: "etl.clean_data"
+# ✅ MLOps auto-disabled → No overhead
+```
+
+### 2. ML Pipeline with Full Tracking
+
+```python
+from engine.mlops import (
+    init_mlops, ModelStage, RunStatus,
+    get_event_emitter, get_metrics_collector,
+)
+
+# Initialize
+ctx = init_mlops(backend_type="local", storage_path="./mlops")
+tracker = ctx.experiment_tracker
+registry = ctx.model_registry
+
+# Operational metrics
+metrics = get_metrics_collector()
+
+# Create experiment
+exp = tracker.create_experiment("xgboost_tuning")
+metrics.increment("experiments_created")
+
+# Train with tracking
+with tracker.run_context(exp.experiment_id, name="trial_1") as run:
+    with metrics.timer("training_time"):
+        model = train_model(params)
+    
+    # Log metrics
+    tracker.log_metric(run.run_id, "accuracy", 0.95)
+    tracker.log_metric(run.run_id, "auc", 0.98)
+    
+    # Log artifact
+    tracker.log_artifact(run.run_id, "model.pkl")
+    metrics.increment("models_trained")
+
+# Register best model
+version = registry.register_model(
+    name="xgboost_classifier",
+    artifact_path="model.pkl",
+    artifact_type="xgboost",
+    framework="xgboost",
+    metrics={"accuracy": 0.95, "auc": 0.98},
+)
+metrics.increment("models_registered")
+
+# Promote to production
+registry.promote_model("xgboost_classifier", version.version, ModelStage.PRODUCTION)
+```
+
+### 3. Health Monitoring in Production
+
+```python
+from engine.mlops import (
+    get_health_monitor, StorageHealthCheck, MemoryHealthCheck,
+    DiskHealthCheck, ComponentHealthCheck,
+)
+
+# Configure health checks
+monitor = get_health_monitor()
+monitor.register(StorageHealthCheck("storage", ctx.storage))
+monitor.register(MemoryHealthCheck("memory", warning_threshold=0.8))
+monitor.register(DiskHealthCheck("disk", path="./mlops", warning_threshold=0.9))
+monitor.register(ComponentHealthCheck("registry", ctx.model_registry))
+
+# Health check endpoint (Flask example)
+@app.route("/health")
+def health():
+    report = monitor.check_all()
+    status_code = 200 if report.is_healthy else 503
+    return jsonify(report.to_dict()), status_code
+
+@app.route("/ready")
+def ready():
+    return ("OK", 200) if monitor.is_ready() else ("Not Ready", 503)
+```
+
+---
+
+## 🛣️ Roadmap
+
+- [x] Event system and observability
+- [x] Cache layer with LRU and TTL
+- [x] Health checks and diagnostics
+- [x] Enhanced exceptions with error codes
+- [x] Protocols (abstract interfaces)
+- [ ] Full Databricks UC integration (volumes)
+- [ ] Incremental metrics (streaming)
+- [ ] Web UI for visualization
+- [ ] MLflow integration
+- [ ] Distributed model support
+
+---
+
+## 📄 License
+
+MIT - See LICENSE in project root.

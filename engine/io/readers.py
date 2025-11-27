@@ -161,14 +161,7 @@ class PickleReader(SparkReaderBase):
         return data
 
     def _read_distributed_pickle(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read pickle files using Spark distributed processing.
-
-        Note: To avoid OOM on the driver from collect(), a default record limit is applied
-        when 'max_records' is not specified. This can be disabled with max_records=0.
-
-        Security Warning: Reading untrusted pickle files can execute arbitrary code.
-        Only use with trusted data sources.
-        """
+        """Read pickle files using Spark distributed processing."""
         spark = self._ctx_spark()
         to_dataframe = config.get("to_dataframe", True)
 
@@ -301,16 +294,7 @@ class QueryReader(BaseIO):
     """Reader for executing SQL queries in Spark."""
 
     def read(self, _source: str, config: Dict[str, Any]) -> Any:
-        """Execute SQL query and return results.
-
-        Args:
-            _source: Not used for query execution (required by DataReader protocol).
-                     The actual query comes from config['query'].
-            config: Configuration dict containing the SQL query and options.
-
-        Returns:
-            Spark DataFrame with query results.
-        """
+        """Execute SQL query and return results."""
         try:
             query = (config or {}).get("query")
             if not query or not str(query).strip():

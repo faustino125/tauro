@@ -1,10 +1,3 @@
-"""
-Auto-configuration system for MLOps integration.
-
-This module provides transparent MLOps activation based on node patterns,
-making MLOps invisible for ETL pipelines while automatically enabling it
-for ML workloads.
-"""
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -52,18 +45,6 @@ class MLOpsAutoConfigurator:
     def should_enable_mlops(cls, node_config: Dict[str, Any]) -> bool:
         """
         Detect if a node needs MLOps automatically.
-
-        Detection heuristics:
-        1. Node name contains ML keywords
-        2. Function name contains ML library/method names
-        3. Explicit 'ml' section in config
-        4. Input/output references ML artifacts
-
-        Args:
-            node_config: Node configuration dictionary
-
-        Returns:
-            True if MLOps should be enabled for this node
         """
         # Explicit ML configuration
         if "ml" in node_config:
@@ -114,12 +95,6 @@ class MLOpsAutoConfigurator:
     def get_default_ml_config(cls, node_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate sensible ML defaults for a node.
-
-        Args:
-            node_config: Node configuration
-
-        Returns:
-            Default ML configuration with smart defaults
         """
         node_name = node_config.get("name", "unnamed_node")
 
@@ -149,22 +124,6 @@ class MLOpsAutoConfigurator:
     ) -> Dict[str, Any]:
         """
         Merge ML configurations with proper precedence.
-
-        Precedence (highest to lowest):
-        1. Node-level config (node_config['ml'])
-        2. Pipeline-level config
-        3. ml_info file/dict (from context.ml_info)
-        4. Global config
-        5. Auto-generated defaults
-
-        Args:
-            node_config: Node configuration
-            pipeline_ml_config: Pipeline-level ML config
-            global_ml_config: Global ML config
-            ml_info: ML info from context (file or dict)
-
-        Returns:
-            Merged ML configuration
         """
         # Start with auto-generated defaults
         merged = cls.get_default_ml_config(node_config)
@@ -192,13 +151,6 @@ class MLOpsAutoConfigurator:
     def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
         """
         Deep merge two dictionaries.
-
-        Args:
-            base: Base dictionary
-            override: Override dictionary
-
-        Returns:
-            Merged dictionary
         """
         result = base.copy()
 
@@ -214,12 +166,6 @@ class MLOpsAutoConfigurator:
     def detect_pipeline_ml_nodes(cls, nodes_config: Dict[str, Dict[str, Any]]) -> List[str]:
         """
         Detect which nodes in a pipeline need MLOps.
-
-        Args:
-            nodes_config: All node configurations
-
-        Returns:
-            List of node names that need MLOps
         """
         ml_nodes = []
 
@@ -238,13 +184,6 @@ class MLOpsAutoConfigurator:
     ) -> bool:
         """
         Determine if MLOps should be initialized for a pipeline.
-
-        Args:
-            nodes_config: Node configurations
-            global_settings: Global settings
-
-        Returns:
-            True if MLOps should be initialized
         """
         # Check global override
         mlops_global = global_settings.get("mlops", {})

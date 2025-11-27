@@ -351,19 +351,42 @@ class Context:
         }
 
     def get_pipeline_ml_info(self, pipeline_name: str) -> Dict[str, Any]:
-        """Combine base ml_info with pipeline-specific ML config."""
+        """Combine base ml_info with pipeline-specific ML config.
+
+        Normaliza y garantiza la presencia de campos clave usados por MLOps:
+
+        - ``project_name``: viene de ``global_settings['project_name']`` o "".
+        - ``model_name``: prioridad pipeline -> ml_info -> nombre de pipeline.
+        - ``model_version``: prioridad pipeline -> ml_info -> ``default_model_version``.
+        - ``hyperparams``: fusión de hyperparams de ml_info y del pipeline.
+
+        Esto permite que cualquier executor/integación MLOps consuma una estructura
+        homogénea sin depender de que el usuario defina todos los campos a mano.
+        """
         base = dict(getattr(self, "ml_info", {}) or {})
         pconf = self.get_pipeline_ml_config(pipeline_name)
 
+        # Merge hyperparameters: base (ml_info) <- pipeline override
         merged_hyper = dict(base.get("hyperparams", {}) or {})
         merged_hyper.update(pconf.get("hyperparams", {}) or {})
 
+        # Resolve model version with clear precedence
         model_version = (
             pconf.get("model_version") or base.get("model_version") or self.default_model_version
         )
 
+        # Normalize project_name (always present, even if empty)
+        project_name = (self.global_settings or {}).get("project_name", "")
+
+        # Resolve model_name with precedence: pipeline_config -> base ml_info -> pipeline_name
+        base_model_name = base.get("model_name") or ""
+        pipeline_model_name = pconf.get("model_name") or ""
+        model_name = pipeline_model_name or base_model_name or pipeline_name
+
         return {
             **base,
+            "project_name": project_name,
+            "model_name": model_name,
             "model_version": model_version,
             "hyperparams": merged_hyper,
             "pipeline_config": pconf,
