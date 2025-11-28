@@ -3,7 +3,7 @@ name = "tauro"
 version = "0.1.2"
 description = "Tauro - Unified data pipeline framework for batch, streaming, and hybrid workflows"
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
-readme = "engine/README.md"
+readme = "src/README.md"
 license = "MIT"
 homepage = "https://github.com/faustino125/tauro"
 repository = "https://github.com/faustino125/tauro"
@@ -23,12 +23,12 @@ classifiers = [
 ]
 
 packages = [
-    { include = "engine" }
+    { include = "core", from = "src" }
 ]
 
 exclude = [
-    "engine/**/test",
-    "engine/**/__pycache__"
+    "src/core/**/test",
+    "src/core/**/__pycache__"
 ]
 
 [tool.poetry.dependencies]
@@ -58,7 +58,7 @@ mypy = "^1.8.0"
 ruff = "^0.1.0"
 
 [tool.poetry.scripts]
-tauro = "engine.cli.cli:main"
+tauro = "core.cli.cli:main"
 
 [tool.black]
 line-length = 100
@@ -67,7 +67,7 @@ target-version = ['py39', 'py310', 'py311', 'py312']
 [tool.isort]
 profile = "black"
 line_length = 100
-known_first_party = ["tauro"]
+known_first_party = ["core"]
 
 [tool.mypy]
 python_version = "3.9"
@@ -79,12 +79,12 @@ show_error_codes = true
 [tool.pytest.ini_options]
 # Point pytest to the repo's test folders
 testpaths = [
-  "engine/cli/test",
-  "engine/core/test",
-  "engine/core/config/test",
-  "engine/core/exec/test",
+  "src/core/cli/test",
+  "src/core/test",
+  "src/core/config/test",
+  "src/core/exec/test",
 ]
-addopts = ["-ra", "--cov=tauro", "--cov-report=term-missing"]
+addopts = ["-ra", "--cov=core", "--cov-report=term-missing"]
 
 [tool.ruff]
 line-length = 100
