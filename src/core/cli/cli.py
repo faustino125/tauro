@@ -322,7 +322,7 @@ class UnifiedArgumentParser:
         """Create configured argument parser with subcommands."""
         parser = argparse.ArgumentParser(
             prog="tauro",
-            description="Tauro - Unified Scalable Data Pipeline Execution Framework",
+            description="Tauro - Data Pipeline Framework",
             epilog="""
             Unified CLI with subcommands for all Tauro operations.
 

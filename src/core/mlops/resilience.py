@@ -517,6 +517,37 @@ class CleanupManager:
                 logger.debug(f"Unregistered cleanup task: {name}")
             return removed
 
+    def _execute_single_task(
+        self, task: CleanupTask, timeout_per_task: float, silent: bool
+    ) -> bool:
+        """Execute a single cleanup task."""
+        try:
+            start = time.time()
+            task.callback()
+            elapsed = time.time() - start
+
+            if not silent and elapsed > timeout_per_task:
+                logger.warning(
+                    f"Cleanup task '{task.name}' took {elapsed:.2f}s "
+                    f"(expected < {timeout_per_task}s)"
+                )
+
+            if not silent:
+                logger.debug(f"Cleanup task '{task.name}' completed")
+            return True
+
+        except Exception as e:
+            if not silent:
+                logger.error(f"Cleanup task '{task.name}' failed: {e}")
+            return False
+
+    def _log_execution_summary(self, results: Dict[str, bool], silent: bool) -> None:
+        """Log the summary of cleanup execution."""
+        if not silent and results:
+            logger.info(
+                f"Cleanup completed: {sum(results.values())}/{len(results)} tasks successful"
+            )
+
     def execute(self, timeout_per_task: float = 5.0, silent: bool = False) -> Dict[str, bool]:
         """
         Execute all cleanup tasks.
@@ -534,34 +565,9 @@ class CleanupManager:
 
             results = {}
             for task in sorted_tasks:
-                try:
-                    start = time.time()
-                    task.callback()
-                    elapsed = time.time() - start
+                results[task.name] = self._execute_single_task(task, timeout_per_task, silent)
 
-                    if not silent and elapsed > timeout_per_task:
-                        logger.warning(
-                            f"Cleanup task '{task.name}' took {elapsed:.2f}s "
-                            f"(expected < {timeout_per_task}s)"
-                        )
-
-                    results[task.name] = True
-                    if not silent:
-                        logger.debug(f"Cleanup task '{task.name}' completed")
-
-                except Exception as e:
-                    results[task.name] = False
-                    if not silent:
-                        logger.error(f"Cleanup task '{task.name}' failed: {e}")
-
-            if not silent:
-                if results:
-                    logger.info(
-                        f"Cleanup completed: {sum(results.values())}/{len(results)} tasks successful"
-                    )
-                else:
-                    # No tasks: avoid noisy logs on simple invocations like --version
-                    pass
+            self._log_execution_summary(results, silent)
             return results
 
     def reset(self) -> None:
@@ -599,7 +605,7 @@ def _atexit_cleanup():
     """Run cleanup on process exit."""
     try:
         _cleanup_manager.execute(silent=True)
-    except Exception as e:
+    except Exception:
         pass
 
 

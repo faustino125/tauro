@@ -1,9 +1,9 @@
 .. Tauro documentation master file
 
-🐂 Tauro - Unified Data Pipeline Framework
+🐂 Tauro - Data Pipeline Framework
 ============================================
 
-**Tauro** is a unified data pipeline framework designed to simplify the development and orchestration of batch, streaming, and hybrid data workflows. Built for data engineers and ML practitioners, Tauro provides enterprise-grade reliability with developer-friendly simplicity.
+**Tauro** is a data pipeline framework designed to simplify the development and orchestration of batch, streaming, and hybrid data workflows. Built for data engineers and ML practitioners, Tauro provides enterprise-grade reliability with developer-friendly simplicity.
 
 .. image:: https://img.shields.io/badge/python-3.9%2B-blue.svg
    :target: https://www.python.org/downloads/

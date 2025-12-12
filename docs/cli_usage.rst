@@ -1,440 +1,243 @@
 CLI Usage
 =========
 
-This guide covers all command-line interface (CLI) usage for Tauro.
+The Tauro Command-Line Interface (CLI) is your primary tool for creating, managing, and executing data pipelines. This guide covers the most common and useful commands.
 
-Overview
---------
-
-Tauro provides a powerful CLI for:
-
-- Creating new projects from templates
-- Executing batch pipelines
-- Managing streaming pipelines
-- Validating configurations
-- Listing available pipelines and templates
-
-Basic Syntax
-------------
+For a complete list of all commands and options, you can always use the `--help` flag:
 
 .. code-block:: bash
 
-   tauro [OPTIONS] [COMMAND]
+   tauro --help
+   tauro --pipeline --help  # Help for a specific command
 
-Global Options
---------------
+Core Commands
+-------------
 
-.. code-block:: text
+These are the commands you'll use most frequently.
 
-   --version              Show version and exit
-   --help                 Show help message and exit
-   --verbose, -v          Enable verbose logging
-   --quiet, -q            Suppress non-essential output
-   --config PATH          Path to configuration file
+**Executing a Pipeline**
 
-Pipeline Execution
-------------------
-
-Execute a Pipeline
-~~~~~~~~~~~~~~~~~~
+This is the main command for running your batch pipelines. You need to specify the environment and the pipeline name.
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline sales_etl
+   # Usage: tauro --env [ENVIRONMENT] --pipeline [PIPELINE_NAME]
+   
+   # Example: Run the 'load' pipeline in the 'dev' environment
+   tauro --env dev --pipeline load
 
-With Date Range
-~~~~~~~~~~~~~~~
+**Listing Available Pipelines**
 
-.. code-block:: bash
-
-   tauro --env dev --pipeline sales_etl \
-     --start-date 2024-01-01 \
-     --end-date 2024-01-31
-
-Validate Only (Dry Run)
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   tauro --env dev --pipeline sales_etl --validate-only
-
-Execute Specific Node
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   tauro --env dev --pipeline sales_etl --node load_data
-
-With Verbose Output
-~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   tauro --env dev --pipeline sales_etl --verbose
-
-Pipeline Management
--------------------
-
-List All Pipelines
-~~~~~~~~~~~~~~~~~~
+To see all the pipelines defined in your project:
 
 .. code-block:: bash
 
    tauro --list-pipelines
 
-Show Pipeline Information
-~~~~~~~~~~~~~~~~~~~~~~~~~
+**Creating a New Project**
+
+To start a new project, use a template.
 
 .. code-block:: bash
 
-   tauro --pipeline-info sales_etl
+   # Usage: tauro --template [TEMPLATE_NAME] --project-name [YOUR_PROJECT_NAME]
 
-Validate Pipeline Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   # Example: Create a new project using the basic Medallion architecture
+   tauro --template medallion_basic --project-name new_etl_project
+
+Pipeline Execution Options
+--------------------------
+
+You can customize how your pipelines are executed with these options.
+
+**Running with a Date Range**
+
+For incremental or historical data processing, you can specify a date range.
 
 .. code-block:: bash
 
-   tauro --validate-pipeline sales_etl
+   tauro --env dev --pipeline transform --start-date 2024-01-01 --end-date 2024-01-31
 
-Project Generation
-------------------
+**Running a Single Node**
 
-List Available Templates
-~~~~~~~~~~~~~~~~~~~~~~~~
+To debug or re-run a specific part of a pipeline, you can execute a single node.
+
+.. code-block:: bash
+
+   # First, find the node name in your `nodes.yaml` file
+   # Then, run it with the --node flag
+   tauro --env dev --pipeline transform --node clean_customer_data
+
+**Performing a Dry Run (Validation)**
+
+To validate your pipeline's configuration and dependency graph without actually running the code, use `--validate-only`. This is useful for catching errors before a long-running job.
+
+.. code-block:: bash
+
+   tauro --env dev --pipeline aggregate --validate-only
+
+Project and Configuration
+-------------------------
+
+**Listing Available Templates**
+
+To see all available project templates:
 
 .. code-block:: bash
 
    tauro --list-templates
 
-Create Project from Template
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Validating Configuration**
+
+To parse and validate all your YAML configuration files for a specific environment:
 
 .. code-block:: bash
 
-   tauro --template medallion_basic --project-name my_project
+   tauro --validate-config --env dev
 
-With Specific Format
-~~~~~~~~~~~~~~~~~~~~
+This checks for correct syntax, references between files, and schema validation.
 
-.. code-block:: bash
 
-   tauro --template medallion_basic \
-     --project-name my_project \
-     --format json
+Streaming Pipelines
+-------------------
 
-Available Templates
-~~~~~~~~~~~~~~~~~~~
+Tauro also supports long-running streaming pipelines. These commands are grouped under the `stream` subcommand.
 
-- ``medallion_basic``: Basic Bronze-Silver-Gold architecture
-- ``medallion_advanced``: Advanced medallion with quality checks
-- ``streaming_kafka``: Kafka streaming pipeline
-- ``ml_training``: ML model training pipeline
-- ``hybrid_batch_stream``: Hybrid batch and streaming
-
-Streaming Commands
-------------------
-
-Start Streaming Pipeline
-~~~~~~~~~~~~~~~~~~~~~~~~
+**Starting a Streaming Pipeline**
 
 .. code-block:: bash
 
-   tauro stream run \
-     --config ./config \
-     --pipeline kafka_events
+   # Usage: tauro stream run --pipeline [PIPELINE_NAME]
 
-Check Streaming Status
-~~~~~~~~~~~~~~~~~~~~~~
+   # Example:
+   tauro stream run --pipeline live_dashboard_updates
 
-.. code-block:: bash
+**Listing Active Streams**
 
-   tauro stream status --execution-id abc123
-
-Stop Streaming Pipeline
-~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   tauro stream stop --execution-id abc123
-
-List Running Streams
-~~~~~~~~~~~~~~~~~~~~
+To see all currently running streaming pipelines managed by Tauro:
 
 .. code-block:: bash
 
    tauro stream list
 
-Configuration Commands
-----------------------
+**Checking the Status of a Stream**
 
-Discover Configuration Files
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Each streaming run is assigned an `execution_id`. You can use this ID to check its status.
 
 .. code-block:: bash
 
-   tauro config discover
+   tauro stream status --execution-id [EXECUTION_ID]
 
-Validate Configuration
-~~~~~~~~~~~~~~~~~~~~~~
+**Stopping a Stream**
 
-.. code-block:: bash
-
-   tauro config validate --env dev
-
-Show Configuration
-~~~~~~~~~~~~~~~~~~
+To gracefully stop a running stream:
 
 .. code-block:: bash
 
-   tauro config show --env dev
+   tauro stream stop --execution-id [EXECUTION_ID]
 
-Environment Management
-----------------------
+Advanced Execution & Debugging
+------------------------------
 
-List Environments
-~~~~~~~~~~~~~~~~~
+**Controlling Verbosity**
 
-.. code-block:: bash
-
-   tauro env list
-
-Show Environment Details
-~~~~~~~~~~~~~~~~~~~~~~~~
+Use `--verbose` or `-v` for detailed logs, and `--quiet` or `-q` to suppress non-essential output.
 
 .. code-block:: bash
 
-   tauro env show dev
+   tauro --env dev --pipeline load --verbose
 
-Switch Environment
-~~~~~~~~~~~~~~~~~~
+**Redirecting Logs to a File**
 
-.. code-block:: bash
-
-   tauro env set production
-
-Advanced Options
-----------------
-
-Execution Options
-~~~~~~~~~~~~~~~~~
+For production runs, it's best practice to save logs to a file.
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline etl \
-     --dry-run              # Show what would execute
-     --parallel             # Enable parallel execution
-     --retry-count 3        # Number of retries on failure
-     --timeout 3600         # Timeout in seconds
+   tauro --env prod --pipeline aggregate --log-file ./logs/aggregate_$(date +%Y%m%d).log
 
-Output Options
-~~~~~~~~~~~~~~
+**Overriding Configuration**
+
+You can override any configuration parameter from the command line using the `--param` option.
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline etl \
-     --output-format json   # Output format (json, yaml, text)
-     --log-file ./logs.txt  # Log to file
-     --no-color             # Disable colored output
+   # Override the output format for a specific run
+   tauro --env dev --pipeline load --param "output.file_format=parquet"
 
-Performance Options
-~~~~~~~~~~~~~~~~~~~
+Practical Scenarios
+-------------------
 
-.. code-block:: bash
+**Scenario 1: Daily ETL Run**
 
-   tauro --env dev --pipeline etl \
-     --workers 4            # Number of worker threads
-     --memory-limit 4G      # Memory limit
-     --cache-enabled        # Enable caching
-
-Examples
---------
-
-Example 1: Daily ETL Pipeline
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A common use case is a daily job that processes the previous day's data.
 
 .. code-block:: bash
 
-   # Process yesterday's data
-   tauro --env production --pipeline daily_sales_etl
+   # You can automate getting yesterday's date in your script
+   YESTERDAY=$(date -d "yesterday" +%Y-%m-%d)
 
-   # Process specific date
-   tauro --env production --pipeline daily_sales_etl \
-     --start-date 2024-03-15 \
-     --end-date 2024-03-15
+   tauro --env prod --pipeline daily_etl \
+     --start-date $YESTERDAY \
+     --end-date $YESTERDAY
 
-Example 2: Historical Backfill
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Scenario 2: Historical Data Backfill**
 
-.. code-block:: bash
-
-   # Backfill entire year
-   tauro --env production --pipeline sales_etl \
-     --start-date 2024-01-01 \
-     --end-date 2024-12-31 \
-     --parallel \
-     --workers 8
-
-Example 3: Validate Before Production
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When you deploy a new pipeline, you often need to process historical data.
 
 .. code-block:: bash
 
-   # Step 1: Validate configuration
-   tauro --env production --pipeline critical_etl --validate-only
+   # Process all of 2023 in parallel for faster execution
+   tauro --env prod --pipeline transform \
+     --start-date 2023-01-01 \
+     --end-date 2023-12-31 \
+     --parallel
 
-   # Step 2: Test with dry run
-   tauro --env production --pipeline critical_etl --dry-run
+**Scenario 3: Pre-deployment Validation**
 
-   # Step 3: Execute
-   tauro --env production --pipeline critical_etl
-
-Example 4: Streaming Pipeline
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Before deploying to production, you should always validate your pipeline.
 
 .. code-block:: bash
 
-   # Start streaming
-   EXEC_ID=$(tauro stream run --pipeline kafka_events --output-format json | jq -r '.execution_id')
+   # 1. Validate the configuration for the 'prod' environment
+   tauro --validate-config --env prod
 
-   # Monitor
-   watch -n 5 "tauro stream status --execution-id $EXEC_ID"
+   # 2. Do a dry-run of the pipeline to check dependencies and node ordering
+   tauro --env prod --pipeline critical_reporting --validate-only
 
-   # Stop when done
-   tauro stream stop --execution-id $EXEC_ID
-
-Example 5: Debugging Failed Pipeline
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Run with maximum verbosity
-   tauro --env dev --pipeline failing_pipeline \
-     --verbose \
-     --log-file ./debug.log \
-     --dry-run
-
-   # Execute specific failing node
-   tauro --env dev --pipeline failing_pipeline \
-     --node problematic_node \
-     --verbose
-
-Exit Codes
-----------
-
-Tauro uses standard exit codes:
-
-- ``0``: Success
-- ``1``: General error
-- ``2``: Configuration error
-- ``3``: Pipeline execution error
-- ``4``: Validation error
-- ``130``: User interrupted (Ctrl+C)
+   # 3. If both pass, you are ready to deploy and run.
+   tauro --env prod --pipeline critical_reporting
 
 Shell Integration
 -----------------
 
-Bash Completion
-~~~~~~~~~~~~~~~
+**Tab Completion**
+
+To make using the CLI even easier, you can enable tab completion for commands and arguments.
+
+- **For Bash**, add this to your `~/.bashrc`:
+  .. code-block:: bash
+
+     eval "$(_TAURO_COMPLETE=bash_source tauro)"
+
+- **For Zsh**, add this to your `~/.zshrc`:
+  .. code-block:: bash
+
+     eval "$(_TAURO_COMPLETE=zsh_source tauro)"
+
+**Useful Aliases**
+
+You can also create shell aliases to shorten common commands. Add these to your `~/.bashrc` or `~/.zshrc`.
 
 .. code-block:: bash
 
-   # Add to ~/.bashrc
-   eval "$(_TAURO_COMPLETE=bash_source tauro)"
-
-Zsh Completion
-~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Add to ~/.zshrc
-   eval "$(_TAURO_COMPLETE=zsh_source tauro)"
-
-Aliases
-~~~~~~~
-
-.. code-block:: bash
-
-   # Add to ~/.bashrc or ~/.zshrc
-   alias tp='tauro --env production'
-   alias td='tauro --env dev'
+   # General aliases
+   alias t='tauro'
    alias tl='tauro --list-pipelines'
 
-Tips and Best Practices
------------------------
+   # Environment-specific aliases
+   alias td='tauro --env dev'
+   alias tp='tauro --env prod'
 
-1. **Always validate first**
-
-   .. code-block:: bash
-
-      tauro --env prod --pipeline critical --validate-only
-
-2. **Use verbose mode for debugging**
-
-   .. code-block:: bash
-
-      tauro --env dev --pipeline failing --verbose
-
-3. **Save logs for production runs**
-
-   .. code-block:: bash
-
-      tauro --env prod --pipeline etl --log-file ./logs/$(date +%Y%m%d).log
-
-4. **Use environment variables**
-
-   .. code-block:: bash
-
-      export TAURO_ENV=production
-      export TAURO_CONFIG=./config
-      tauro --pipeline etl
-
-5. **Combine with other tools**
-
-   .. code-block:: bash
-
-      # With jq for JSON processing
-      tauro --output-format json --pipeline etl | jq '.metrics'
-
-      # With systemd for service
-      systemctl start tauro-pipeline
-
-Troubleshooting
----------------
-
-Command Not Found
-~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Use Python module
-   python -m tauro --help
-
-   # Or add to PATH
-   export PATH="$HOME/.local/bin:$PATH"
-
-Configuration Not Found
-~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Use explicit config path
-   tauro --config ./config/settings.yaml --env dev --pipeline etl
-
-Permission Denied
-~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Check file permissions
-   chmod +x $(which tauro)
-
-   # Or use sudo (not recommended)
-   sudo tauro --env prod --pipeline etl
-
-Next Steps
-----------
-
-- Learn :doc:`library_usage` for programmatic usage
-- Configure pipelines in :doc:`configuration`
-- Follow :doc:`tutorials/batch_etl` for hands-on examples
-- Check :doc:`advanced/troubleshooting` for common issues
+   # Now you can run pipelines like this:
+   # td --pipeline load
+   # tp --pipeline aggregate

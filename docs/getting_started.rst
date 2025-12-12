@@ -1,53 +1,76 @@
 Getting Started
 ===============
 
-Welcome to Tauro! This guide will help you get up and running with Tauro in minutes.
+This guide provides a hands-on introduction to Tauro, helping you install it and run your first data pipeline in minutes.
 
 What is Tauro?
 --------------
 
-Tauro is a unified data pipeline framework that simplifies:
+Tauro is a Python framework for building and orchestrating data pipelines. It's designed to help you reliably process data for analytics, machine learning, and business intelligence, whether you're working with batch files, real-time streams, or both.
 
-- **Batch Processing**: ETL pipelines with date-range processing
-- **Streaming**: Real-time data processing with Kafka, Kinesis
-- **Hybrid Workflows**: Combine batch and streaming
-- **MLOps**: Experiment tracking and model management
+Tauro's core philosophy is to provide a unified, enterprise-grade foundation for your data workflows, while maintaining developer-friendly simplicity. It helps you focus on your business logic, not on boilerplate code.
+
+Key use cases include:
+
+- **Declarative ETL/ELT**: Define batch pipelines in simple YAML files.
+- **Streaming Workflows**: Process real-time data from sources like Kafka.
+- **MLOps Pipelines**: Build reproducible data workflows for training and inference.
+- **Hybrid Processing**: Combine batch and streaming logic in a single framework.
 
 Prerequisites
 -------------
 
-Before you begin, ensure you have:
+- Python 3.9+
+- `pip` for package installation
 
-- Python 3.9 or newer
-- pip or poetry for package management
-- (Optional) Apache Spark 3.4+ for large-scale processing
+**(Optional) For specific features:**
+
+- Apache Spark 3.4+ (for Spark-based pipelines)
+- An account with a supported provider (e.g., Databricks, MLflow) for MLOps integrations.
 
 Installation
 ------------
 
-Basic Installation
-~~~~~~~~~~~~~~~~~~
+We strongly recommend installing Tauro in a virtual environment to avoid conflicts with system-wide packages.
+
+.. code-block:: bash
+
+   # Create and activate a virtual environment (macOS/Linux)
+   python3 -m venv venv
+   source venv/bin/activate
+
+   # Create and activate a virtual environment (Windows)
+   python -m venv venv
+   venv\Scripts\activate
+
+Once your environment is active, you can install Tauro.
+
+**1. Standard Installation**
+
+This installs the core framework, which is sufficient for many use cases.
 
 .. code-block:: bash
 
    pip install tauro
 
-With Optional Dependencies
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**2. Installation with Extras**
+
+Tauro uses "extras" to install dependencies for specific features. This keeps the core installation lightweight.
 
 .. code-block:: bash
 
-   # With Spark support
+   # To process data with Apache Spark
    pip install tauro[spark]
 
-   # With API and monitoring
-   pip install tauro[api,monitoring]
+   # For MLOps integrations (like MLflow)
+   pip install tauro[mlops]
 
-   # Everything
+   # To install all optional dependencies at once
    pip install tauro[all]
 
-From Source
-~~~~~~~~~~~
+**3. Installing from Source**
+
+If you want the latest development version, you can install from source.
 
 .. code-block:: bash
 
@@ -62,7 +85,7 @@ Verify Installation
 
    tauro --version
 
-You should see:
+The output should be similar to:
 
 .. code-block:: text
 
@@ -71,15 +94,18 @@ You should see:
 Your First Pipeline (CLI)
 --------------------------
 
-Step 1: Create a Project
-~~~~~~~~~~~~~~~~~~~~~~~~~
+The fastest way to start is with the Tauro CLI.
+
+**Step 1: Create a Project from a Template**
+
+Tauro includes project templates to get you started quickly. We'll use the `medallion_basic` template, which sets up a project for a three-layer Medallion architecture (Bronze, Silver, Gold).
 
 .. code-block:: bash
 
    tauro --template medallion_basic --project-name my_first_pipeline
    cd my_first_pipeline
 
-This creates a complete project structure:
+This command generates a directory with sample data, configuration, and placeholder pipeline scripts. The structure looks like this:
 
 .. code-block:: text
 
@@ -93,123 +119,154 @@ This creates a complete project structure:
    │   │   └── output.yaml
    │   └── dev/
    ├── data/
+   │   └── raw/
+   │       └── sample_data.csv
    ├── notebooks/
+   ├── pipelines/
+   │   ├── __init__.py
+   │   ├── load.py
+   │   ├── transform.py
+   │   └── aggregate.py
    └── settings.json
 
-Step 2: List Available Pipelines
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Step 2: List the Available Pipelines**
+
+Your project's pipelines are defined in `config/base/pipelines.yaml`. You can list them with the CLI.
 
 .. code-block:: bash
 
    tauro --list-pipelines
 
-Step 3: Run Your First Pipeline
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The output shows the three pipelines defined in the template:
+
+.. code-block:: text
+
+   Available pipelines:
+   - load: Ingests raw data into the Bronze layer.
+   - transform: Cleans and enriches data, moving it from Bronze to Silver.
+   - aggregate: Creates business-level aggregations, moving data from Silver to Gold.
+
+**Step 3: Run the 'load' Pipeline**
+
+Now, let's run the first pipeline, `load`. This pipeline reads the sample CSV file and writes it to a new location in the "Bronze" layer as a Delta Lake table.
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline bronze_ingestion
+   tauro --env dev --pipeline load
 
-Step 4: Check Results
-~~~~~~~~~~~~~~~~~~~~~
+You will see log messages as Tauro executes the nodes defined for this pipeline.
 
-Your processed data will be in the ``data/`` directory according to your configuration.
+**Step 4: Verify the Outcome**
+
+After the pipeline finishes, check the `data/bronze` directory. You will find a new folder containing the output, a Delta table. This confirms your pipeline ran successfully.
+
+This simple workflow is the foundation for all Tauro projects. You can now inspect the YAML files in the `config` directory and the Python files in the `pipelines` directory to see how it works.
 
 Your First Pipeline (Library)
 ------------------------------
 
-Create a Python Script
-~~~~~~~~~~~~~~~~~~~~~~
+For integration with other Python applications or for more complex orchestration, you can use Tauro as a library.
 
-Create ``my_pipeline.py``:
+**The Goal:** We will replicate the CLI command `tauro --env dev --pipeline load` using a Python script.
+
+Create a Python script named `run_pipeline.py` in the root of your `my_first_pipeline` project.
 
 .. code-block:: python
+   :emphasize-lines: 7
 
    from tauro import PipelineExecutor, ContextLoader
 
-   # Load configuration
-   context = ContextLoader().load_from_env("dev")
+   # Define the project's root directory.
+   # Tauro needs to know where your `settings.json` and `config` directory are located.
+   # For this script, it's the current directory.
+   project_path = "." 
 
-   # Create executor
+   # 1. Load the context
+   # This loads the 'dev' environment configuration by finding and reading settings.json.
+   # The `project_path` tells Tauro where to start looking.
+   context = ContextLoader(project_path).load_from_env("dev")
+
+   # 2. Create a pipeline executor
+   # The executor is responsible for running pipelines using the loaded context.
    executor = PipelineExecutor(context)
 
-   # Execute pipeline
-   result = executor.execute("bronze_ingestion")
+   # 3. Execute the 'load' pipeline
+   result = executor.execute("load")
 
-   # Check results
+   # 4. Print the results
    if result.success:
-       print(f"✅ Pipeline completed successfully!")
+       print(f"✅ Pipeline '{result.pipeline_name}' completed successfully!")
        print(f"   Nodes executed: {result.nodes_executed}")
-       print(f"   Time: {result.execution_time_seconds}s")
+       print(f"   Execution time: {result.execution_time_seconds:.2f}s")
    else:
        print(f"❌ Pipeline failed: {result.error_message}")
 
-Run the Script
-~~~~~~~~~~~~~~
+**Run the Script**
 
 .. code-block:: bash
 
-   python my_pipeline.py
+   python run_pipeline.py
+
+The output confirms the successful execution:
+
+.. code-block:: text
+
+   ✅ Pipeline 'load' completed successfully!
+      Nodes executed: ['load_raw_data']
+      Execution time: 1.23s
+
+This library-based approach is ideal for embedding Tauro in a larger application, such as a FastAPI service or an Airflow DAG.
+
 
 Next Steps
 ----------
 
-Now that you have Tauro installed and working, you can:
+Congratulations on running your first pipeline! Here’s what you can do next:
 
-1. **Learn CLI Usage**: See :doc:`cli_usage` for all CLI commands
-2. **Use as Library**: See :doc:`library_usage` for programmatic usage
-3. **Configure Pipelines**: See :doc:`configuration` for config options
-4. **Follow Tutorials**: Check out :doc:`tutorials/batch_etl` and others
-5. **Explore Examples**: See the ``examples/`` directory in the repository
+- **Explore the CLI**: Dive deeper into the command-line interface.
+  - See the :doc:`cli_usage` guide for a full list of commands and options.
 
-Common Issues
--------------
+- **Learn the Library**: Understand how to use Tauro programmatically.
+  - Read the :doc:`library_usage` guide for in-depth examples.
 
-Command Not Found
-~~~~~~~~~~~~~~~~~
+- **Understand Configuration**: Learn how to customize pipelines, nodes, and environments.
+  - See the :doc:`configuration` guide for details on the YAML-based setup.
 
-If ``tauro`` command is not found:
+- **Follow a Tutorial**: Work through a real-world example.
+  - The :doc:`tutorials/batch_etl` tutorial is a great place to start.
 
-.. code-block:: bash
+Troubleshooting and Help
+------------------------
 
-   # Use Python module syntax
-   python -m tauro --help
+**"Command not found" error**
 
-   # Or add to PATH (Linux/Mac)
-   export PATH="$HOME/.local/bin:$PATH"
+If your shell cannot find the `tauro` command, it's likely that the installation directory isn't in your system's `PATH`. You can either:
 
-   # Or add to PATH (Windows PowerShell)
-   $env:PATH += ";$HOME\.local\bin"
+1.  **Run as a module (recommended)**:
+    .. code-block:: bash
 
-Import Errors
-~~~~~~~~~~~~~
+       python -m tauro --version
 
-If you get import errors:
+2.  **Add the directory to your PATH**:
+    Find the directory with `pip show tauro` (look for `Location`) and add the `scripts` or `bin` subdirectory to your `PATH`.
 
-.. code-block:: bash
+**Configuration not found error**
 
-   # Ensure tauro is installed
-   pip show tauro
+Tauro needs to be run from your project's root directory (the one containing `settings.json`) to find its configuration. If you can't run it from there, you must specify the path to your configuration.
 
-   # Reinstall if needed
-   pip install --upgrade --force-reinstall tauro
+- **CLI**: Use the `--project-dir` flag:
+  .. code-block:: bash
 
-Configuration Not Found
-~~~~~~~~~~~~~~~~~~~~~~~
+     tauro --project-dir /path/to/my_first_pipeline --env dev --pipeline load
 
-If configuration files are not found:
+- **Library**: Pass the path to `ContextLoader`:
+  .. code-block:: python
 
-.. code-block:: python
+     context = ContextLoader("/path/to/my_first_pipeline").load_from_env("dev")
 
-   from tauro import ContextLoader
+**Get Community Support**
 
-   # Use explicit path
-   context = ContextLoader().load_from_config("./config/settings.yaml")
+If you're stuck, the Tauro community is here to help:
 
-Get Help
---------
-
-- **Documentation**: https://tauro.readthedocs.io
-- **GitHub Issues**: https://github.com/faustino125/tauro/issues
-- **Discussions**: https://github.com/faustino125/tauro/discussions
-- **Email**: faustinolopezramos@gmail.com
+- **GitHub Discussions**: For questions, ideas, and showing off what you've built.
+- **GitHub Issues**: For bug reports and feature requests.

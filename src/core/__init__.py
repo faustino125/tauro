@@ -11,9 +11,7 @@ try:  # pragma: no cover - metadata not available in editable installs
 except PackageNotFoundError:  # pragma: no cover
     __version__ = "0.1.3"
 
-__description__ = (
-    "Tauro - Unified data pipeline framework for batch, streaming, and hybrid workflows"
-)
+__description__ = "Tauro - Data pipeline framework for batch, streaming, and hybrid workflows"
 
 
 def about() -> Dict[str, str]:
