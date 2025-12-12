@@ -364,29 +364,86 @@ class SecurityValidator:
 
 
 class ConfigCache:
-    """Thread-safe cache for discovered configurations."""
+    """
+    Thread-safe cache for discovered configurations with TTL and invalidation.
+    """
 
-    _EXPIRATION_SECONDS = 300  # 5 minutes
+    _EXPIRATION_SECONDS = 300  # 5 minutes - configurable for different scenarios
     _cache: Dict[str, Dict[str, Any]] = {}
+    _timestamps: Dict[str, float] = {}  # Track individual key timestamps for monitoring
 
     @classmethod
     def get(cls, key: str) -> Optional[List[Tuple[Path, str]]]:
-        """Get cached configurations if not expired."""
-        if key in cls._cache:
-            cached = cls._cache[key]
-            if time.time() - cached["timestamp"] < cls._EXPIRATION_SECONDS:
-                return cached["configs"]
-        return None
+        """
+        Get cached configurations if not expired.
+        """
+        if key not in cls._cache:
+            return None
+
+        cached = cls._cache[key]
+        age = time.time() - cached["timestamp"]
+
+        # Check expiration
+        if age >= cls._EXPIRATION_SECONDS:
+            # Auto-remove expired entry
+            cls.invalidate(key)
+            return None
+
+        return cached["configs"]
 
     @classmethod
     def set(cls, key: str, configs: List[Tuple[Path, str]]) -> None:
-        """Cache configurations with timestamp."""
-        cls._cache[key] = {"configs": configs, "timestamp": time.time()}
+        """
+        Cache configurations with timestamp.
+        """
+        timestamp = time.time()
+        cls._cache[key] = {"configs": configs, "timestamp": timestamp}
+        cls._timestamps[key] = timestamp
+
+    @classmethod
+    def invalidate(cls, key: str) -> None:
+        """
+        Manually invalidate a specific cache entry.
+        """
+        cls._cache.pop(key, None)
+        cls._timestamps.pop(key, None)
+
+    @classmethod
+    def invalidate_all(cls, pattern: Optional[str] = None) -> None:
+        """
+        Invalidate all cache entries matching optional pattern.
+        """
+        if pattern is None:
+            cls._cache.clear()
+            cls._timestamps.clear()
+        else:
+            import re
+
+            regex = re.compile(pattern)
+            keys_to_remove = [k for k in cls._cache.keys() if regex.match(k)]
+            for key in keys_to_remove:
+                cls.invalidate(key)
 
     @classmethod
     def clear(cls) -> None:
-        """Clear all cached data."""
-        cls._cache.clear()
+        """Clear all cached data. Equivalent to invalidate_all()."""
+        cls.invalidate_all()
+
+    @classmethod
+    def get_cache_stats(cls) -> Dict[str, Any]:
+        """
+        Get cache statistics for monitoring and debugging.
+        """
+        now = time.time()
+        ages = [now - ts for ts in cls._timestamps.values()]
+
+        return {
+            "total_entries": len(cls._cache),
+            "oldest_age_seconds": max(ages) if ages else 0,
+            "newest_age_seconds": min(ages) if ages else 0,
+            "expiration_seconds": cls._EXPIRATION_SECONDS,
+            "entries": list(cls._cache.keys()),
+        }
 
 
 class LoggerManager:
@@ -539,12 +596,6 @@ def get_base_environment(env_name: str) -> str:
 def is_valid_environment(env: str) -> bool:
     """
     Check if an environment name is valid (canonical or alias).
-
-    Args:
-        env: Environment name to check
-
-    Returns:
-        True if valid (canonical or alias), False otherwise
     """
     if not isinstance(env, str):
         return False
@@ -575,11 +626,6 @@ def validate_environment_name(env_name: str) -> bool:
     if not norm:
         return False
     return is_allowed_environment(norm)
-
-
-# ----- New helpers for scalable env handling -----
-# Now uses canonical definitions from common
-# These are kept for backward compatibility but reference the canonical source
 
 
 def normalize_environment(env_name: Optional[str]) -> Optional[str]:

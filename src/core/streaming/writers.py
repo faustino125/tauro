@@ -6,7 +6,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict
 
 from loguru import logger  # type: ignore
-from pyspark.sql.streaming import DataStreamWriter, StreamingQuery  # type: ignore
+
+try:
+    from pyspark.sql.streaming import DataStreamWriter, StreamingQuery  # type: ignore
+except ImportError:
+    DataStreamWriter = Any  # type: ignore
+    StreamingQuery = Any  # type: ignore
 
 from core.streaming.exceptions import StreamingError, StreamingFormatNotSupportedError
 

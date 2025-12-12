@@ -9,13 +9,19 @@ import threading
 import importlib
 import importlib.util
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from copy import deepcopy
 
 from loguru import logger  # type: ignore
-from pyspark.sql import DataFrame  # type: ignore
-from pyspark.sql.streaming import StreamingQuery  # type: ignore
-import pyspark.sql.functions as f  # type: ignore
+
+try:
+    from pyspark.sql import DataFrame  # type: ignore
+    from pyspark.sql.streaming import StreamingQuery  # type: ignore
+    import pyspark.sql.functions as f  # type: ignore
+except ImportError:
+    DataFrame = Any  # type: ignore
+    StreamingQuery = Any  # type: ignore
+    f = None  # type: ignore
 
 DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
@@ -35,6 +41,66 @@ from core.streaming.exceptions import (
 from core.streaming.readers import StreamingReaderFactory
 from core.streaming.validators import StreamingValidator
 from core.streaming.writers import StreamingWriterFactory
+
+
+class TransformationRegistry:
+    """
+    Secure registry for streaming transformations.
+    """
+
+    _registry: Dict[str, Callable[[DataFrame], DataFrame]] = {}
+    _lock = threading.Lock()
+
+    @classmethod
+    def register(cls, key: str, func: Callable[[DataFrame], DataFrame]) -> None:
+        """
+        Register a transformation function.
+        """
+        if not key:
+            raise ValueError("Transformation key cannot be empty")
+
+        if not callable(func):
+            raise TypeError(f"Transformation must be callable, got {type(func)}")
+
+        with cls._lock:
+            cls._registry[key] = func
+            logger.debug(f"Registered transformation: {key}")
+
+    @classmethod
+    def get(cls, key: str) -> Callable[[DataFrame], DataFrame]:
+        """
+        Get a registered transformation function.
+        """
+        with cls._lock:
+            if key not in cls._registry:
+                available = list(cls._registry.keys())
+                raise ValueError(
+                    f"Transformation '{key}' not registered. " f"Available: {available}"
+                )
+            return cls._registry[key]
+
+    @classmethod
+    def list_transformations(cls) -> list:
+        """List all registered transformations."""
+        with cls._lock:
+            return list(cls._registry.keys())
+
+    @classmethod
+    def unregister(cls, key: str) -> bool:
+        """Unregister a transformation. Returns True if existed."""
+        with cls._lock:
+            if key in cls._registry:
+                del cls._registry[key]
+                logger.debug(f"Unregistered transformation: {key}")
+                return True
+            return False
+
+    @classmethod
+    def clear(cls) -> None:
+        """Clear all registered transformations."""
+        with cls._lock:
+            cls._registry.clear()
+            logger.debug("Cleared all transformations")
 
 
 class StreamingQueryManager:
@@ -204,60 +270,29 @@ class StreamingQueryManager:
                 ) from e
 
     def _apply_transformations(self, input_df: DataFrame, node_config: Dict[str, Any]) -> DataFrame:
-        """Apply transformations to the streaming DataFrame with error handling."""
+        """
+        Apply transformations to the streaming DataFrame with error handling.
+        """
         try:
             function_config = node_config.get("function")
             if not function_config:
                 logger.info("No transformation function specified, using input DataFrame as-is")
                 return input_df
 
-            module_path = function_config.get("module")
-            function_name = function_config.get("function")
+            transform_func = self._get_transform_function(function_config)
 
-            if not module_path or not function_name:
-                raise StreamingConfigurationError(
-                    "Function configuration must specify both module and function",
-                    config_section="function",
-                    config_value=function_config,
-                )
-
-            config_file_path = getattr(self.context, "_config_file_path", None)
-
-            # Import module using safe method that doesn't pollute sys.path
-            module = self._import_module_from_path(module_path, config_file_path)
-
-            if not hasattr(module, function_name):
-                available_functions = [
-                    attr for attr in dir(module) if callable(getattr(module, attr))
-                ]
-                raise StreamingError(
-                    f"Function '{function_name}' not found in module '{module_path}'. "
-                    f"Available functions: {available_functions[:10]}",
-                    error_code="FUNCTION_NOT_FOUND",
-                    context={
-                        "module_path": module_path,
-                        "function_name": function_name,
-                    },
-                )
-
-            transform_func = getattr(module, function_name)
-
-            logger.info(f"Applying transformation function '{function_name}' from '{module_path}'")
-
-            transformed_df = self._call_transform_func(
-                transform_func, input_df, node_config, module_path, function_name
-            )
+            transformed_df = self._call_transform_func(transform_func, input_df, node_config)
 
             if not isinstance(transformed_df, DataFrame):
                 raise StreamingError(
                     f"Transformation function must return a DataFrame, got {type(transformed_df)}",
                     error_code="INVALID_RETURN_TYPE",
                     context={
-                        "function_name": function_name,
                         "return_type": str(type(transformed_df)),
                     },
                 )
 
+            logger.info("Transformation applied successfully")
             return transformed_df
 
         except Exception as e:
@@ -270,6 +305,83 @@ class StreamingQueryManager:
                     error_code="TRANSFORMATION_FAILURE",
                     cause=e,
                 ) from e
+
+    def _get_transform_function(self, function_config: Dict[str, Any]) -> Callable:
+        """
+        Get transformation function from registry or via module loading.
+        """
+        transformation_key = function_config.get("key")
+
+        if transformation_key:
+            return self._get_registered_transformation(transformation_key)
+        else:
+            return self._get_transformation_from_module(function_config)
+
+    def _get_registered_transformation(self, transformation_key: str) -> Callable:
+        """
+        Get transformation from the registry.
+        """
+        try:
+            transform_func = TransformationRegistry.get(transformation_key)
+            logger.info(f"Applying registered transformation: '{transformation_key}'")
+            return transform_func
+        except ValueError as e:
+            logger.error(f"Transformation not found: {transformation_key}")
+            available = TransformationRegistry.list_transformations()
+            raise StreamingConfigurationError(
+                str(e),
+                config_section="function.key",
+                config_value=transformation_key,
+                context={"available_transformations": available},
+            ) from e
+
+    def _get_transformation_from_module(self, function_config: Dict[str, Any]) -> Callable:
+        """
+        Load transformation from module via dynamic import (legacy support).
+        """
+        module_path = function_config.get("module")
+        function_name = function_config.get("function")
+
+        if not module_path or not function_name:
+            raise StreamingConfigurationError(
+                "Function configuration must specify either 'key' (for registered transformations) "
+                "or both 'module' and 'function' (deprecated: requires STREAMING_UNSAFE_IMPORT=true)",
+                config_section="function",
+                config_value=function_config,
+            )
+
+        # Check if dynamic imports are enabled (default: disabled for security)
+        enable_unsafe = os.getenv("STREAMING_UNSAFE_IMPORT", "false").lower() == "true"
+        if not enable_unsafe:
+            raise StreamingConfigurationError(
+                "Dynamic module imports are disabled by default for security reasons. "
+                "Use TransformationRegistry.register() to register transformations, "
+                "or set STREAMING_UNSAFE_IMPORT=true to enable (not recommended for production)",
+                config_section="function",
+                config_value=function_config,
+            )
+
+        logger.warning(
+            "Using unsafe dynamic imports for transformation. "
+            "This is disabled by default. Consider using TransformationRegistry instead."
+        )
+
+        config_file_path = getattr(self.context, "_config_file_path", None)
+        module = self._import_module_from_path(module_path, config_file_path)
+
+        if not hasattr(module, function_name):
+            available_functions = [attr for attr in dir(module) if callable(getattr(module, attr))]
+            raise StreamingError(
+                f"Function '{function_name}' not found in module '{module_path}'. "
+                f"Available functions: {available_functions[:10]}",
+                error_code="FUNCTION_NOT_FOUND",
+                context={
+                    "module_path": module_path,
+                    "function_name": function_name,
+                },
+            )
+
+        return getattr(module, function_name)
 
     def _import_module_from_path(self, module_path: str, config_file_path: Optional[str] = None):
         """Import module using importlib.util without modifying sys.path."""
@@ -309,19 +421,18 @@ class StreamingQueryManager:
         transform_func,
         input_df: DataFrame,
         node_config: Dict[str, Any],
-        module_path: str,
-        function_name: str,
     ) -> DataFrame:
-        """Call the transform function and wrap execution errors."""
+        """
+        Call the transform function with error handling.
+        """
         try:
             return transform_func(input_df, node_config)
         except Exception as e:
             raise StreamingError(
-                f"Error executing transformation function '{function_name}': {str(e)}",
+                f"Error executing transformation function: {str(e)}",
                 error_code="TRANSFORMATION_ERROR",
                 context={
-                    "module_path": module_path,
-                    "function_name": function_name,
+                    "function_callable": str(transform_func),
                 },
                 cause=e,
             ) from e

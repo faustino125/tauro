@@ -623,6 +623,146 @@ print(query.lastProgress) # Last progress update
 
 ---
 
+## Query Health Monitoring and Failure Detection
+
+### Understanding Query States
+
+Streaming queries can be in several states:
+
+| State | Meaning | Action |
+|-------|---------|--------|
+| **ACTIVE** | Query running, processing data | Normal operation |
+| **STALLED** | Running but no progress for timeout | May need investigation |
+| **FAILED** | Query exception or error | Immediate attention required |
+| **COMPLETED** | Query gracefully stopped | Normal for bounded queries |
+
+### QueryHealthMonitor: Automatic Health Checks
+
+The `QueryHealthMonitor` continuously checks query health:
+
+```python
+from tauro.streaming import QueryHealthMonitor
+from pyspark.sql.streaming import StreamingQuery
+
+# Create a health monitor
+monitor = QueryHealthMonitor(
+    query=spark_query_object,
+    query_name="my_query",
+    timeout_seconds=300  # Detect stalls after 5 minutes
+)
+
+# Check health
+is_healthy, error_message = monitor.check_health()
+
+if not is_healthy:
+    print(f"Query problem: {error_message}")
+    # Examples:
+    # "Query failed with exception: org.apache.spark.sql..."
+    # "Query stalled: no progress for 325.1s (timeout: 300s)"
+```
+
+### What QueryHealthMonitor Detects
+
+```python
+# 1. Query Exceptions
+# Detects if query encountered an exception and stopped
+
+# 2. Query Stopped
+# Detects if query is no longer active (isActive=false)
+
+# 3. Stalled Queries
+# Detects if query hasn't processed data in the specified timeout
+# (Uses lastProgress.batchId to track activity)
+
+# 4. Distinguishes graceful stops from errors
+# - No progress but still active: stalled (timeout issue)
+# - No progress and inactive: may be gracefully stopped (OK)
+# - Exception available: definitely failed (error)
+```
+
+### Monitoring in Pipelines
+
+Health monitoring happens automatically in `StreamingPipelineManager`:
+
+```python
+spm = StreamingPipelineManager(context)
+exec_id = spm.start_pipeline("pipeline", config)
+
+# Background monitor thread checks health every 5 seconds
+# Failed queries are automatically detected and reported
+
+# Get status with health information
+while True:
+    status = spm.get_pipeline_status(exec_id)
+    
+    if status["status"] == "error":
+        print(f"Pipeline error: {status['error']}")
+        break
+    
+    if status["status"] == "running":
+        active = status.get("active_queries", 0)
+        total = status.get("total_queries", 0)
+        print(f"Progress: {active}/{total} queries active")
+    
+    import time
+    time.sleep(10)
+```
+
+### Example: Custom Health Checking
+
+```python
+from tauro.streaming import QueryHealthMonitor
+
+def monitor_query_with_alerts(query, query_name, timeout=300, alert_callback=None):
+    """Monitor a query and trigger alerts on failures."""
+    monitor = QueryHealthMonitor(query, query_name, timeout_seconds=timeout)
+    
+    import time
+    while query.isActive:
+        is_healthy, error_message = monitor.check_health()
+        
+        if not is_healthy:
+            if error_message and alert_callback:
+                alert_callback(query_name, error_message)
+                break
+        
+        print(f"[{query_name}] Status: {'✓ Healthy' if is_healthy else '✗ Problem'}")
+        time.sleep(30)
+
+# Usage with alerting
+def send_alert(query_name, error):
+    print(f"🚨 ALERT: {query_name} - {error}")
+    # Send to Slack, PagerDuty, etc.
+
+query = sqm.create_and_start_query(config)
+monitor_query_with_alerts(
+    query,
+    "events_sink",
+    timeout=300,
+    alert_callback=send_alert
+)
+```
+
+### Log Analysis for Failed Queries
+
+```python
+# Pipeline manager logs detected failures:
+# [ERROR] Pipeline 'exec_123' has failed queries: [('transform', 'org.apache.spark.sql.SparkException: ...')]
+# [WARN] Query 'source' stalled: no progress for 325.3s (timeout: 300s)
+
+# In production, monitor logs for these patterns:
+import logging
+logger = logging.getLogger("tauro.streaming")
+logger.setLevel(logging.DEBUG)
+
+# Look for:
+# - "has failed queries"
+# - "stalled: no progress"
+# - "Error monitoring"
+```
+
+---
+
 ## Pipeline Management
 
 ### StreamingPipelineManager
@@ -711,6 +851,177 @@ for i in range(10):
 # Monitor and retrieve
 for eid in exec_ids:
     results = spm.get_results(eid)
+```
+
+---
+
+## Pipeline Dependencies and Node Synchronization
+
+### Why Node Dependencies Matter
+
+In multi-node pipelines, you often need to ensure execution order:
+- Node B reads output from Node A → A must complete first
+- Node C aggregates from Nodes A and B → both must be running
+- Node D depends on transformed output from C → C must be active
+
+The `depends_on` field ensures correct execution order and prevents race conditions.
+
+### Defining Dependencies
+
+Each node can specify `depends_on` to list its dependencies:
+
+```yaml
+type: streaming
+nodes:
+  - name: "source"
+    input: { format: "kafka", ... }
+    output: { format: "delta", ... }
+    # No dependencies - starts first
+  
+  - name: "transform"
+    depends_on: ["source"]  # ← Waits for "source" to be running
+    input: { format: "delta", path: "/output/source", ... }
+    output: { format: "delta", ... }
+  
+  - name: "aggregate"
+    depends_on: ["transform"]  # ← Waits for "transform"
+    input: { format: "delta", path: "/output/transform", ... }
+    output: { format: "delta", ... }
+  
+  - name: "parallel_sink"
+    depends_on: ["source"]  # ← Waits for "source", runs in parallel with "transform"
+    input: { format: "delta", path: "/output/source", ... }
+    output: { format: "delta", ... }
+```
+
+### Execution Order Visualization
+
+```
+Timeline of execution with dependencies:
+
+Time →
+|
+├─ [source]════════════════════════════════════════════► (depends on: none)
+│     │
+│     └─► [transform]════════════════════════════════► (depends on: source)
+│              │
+│              └─► [aggregate]════════════════════► (depends on: transform)
+│
+└─► [parallel_sink]════════════════════════════════► (depends on: source, runs in parallel)
+```
+
+### Dependency Validation
+
+The `StreamingPipelineManager` automatically validates:
+
+```python
+# ✅ Valid: Linear dependency chain
+{
+    "nodes": [
+        {"name": "a", "depends_on": []},
+        {"name": "b", "depends_on": ["a"]},
+        {"name": "c", "depends_on": ["b"]},
+    ]
+}
+
+# ✅ Valid: Diamond dependency (multiple parents, single child)
+{
+    "nodes": [
+        {"name": "a", "depends_on": []},
+        {"name": "b", "depends_on": []},
+        {"name": "c", "depends_on": ["a", "b"]},  # Waits for both
+    ]
+}
+
+# ❌ Invalid: Circular dependency
+{
+    "nodes": [
+        {"name": "a", "depends_on": ["b"]},
+        {"name": "b", "depends_on": ["a"]},  # Circular!
+    ]
+}
+# Raises: StreamingPipelineError - Circular dependency detected
+
+# ❌ Invalid: Non-existent dependency
+{
+    "nodes": [
+        {"name": "a", "depends_on": ["nonexistent"]},  # 'nonexistent' not defined
+    ]
+}
+# Raises: StreamingPipelineError - Dependency not found
+```
+
+### Advanced Example: Multi-Source Pipeline
+
+```python
+pipeline_config = {
+    "type": "streaming",
+    "nodes": [
+        # Source 1: Kafka events
+        {
+            "name": "events_kafka",
+            "input": {
+                "format": "kafka",
+                "options": {"subscribe": "events-topic", ...}
+            },
+            "output": {"format": "delta", "path": "/staging/events", ...},
+            "streaming": {"trigger": {"type": "processing_time", "interval": "10s"}, ...}
+        },
+        
+        # Source 2: User master data (Delta)
+        {
+            "name": "users_delta",
+            "input": {
+                "format": "delta_stream",
+                "path": "/data/users",
+            },
+            "output": {"format": "delta", "path": "/staging/users", ...},
+            "streaming": {"trigger": {"type": "processing_time", "interval": "10s"}, ...}
+        },
+        
+        # Join: Combine events + users
+        {
+            "name": "enriched_events",
+            "depends_on": ["events_kafka", "users_delta"],  # ← Wait for both
+            "input": {"format": "delta", "path": "/staging/events", ...},
+            "function": {
+                "key": "join_with_users"  # Reads /staging/users in transformation
+            },
+            "output": {"format": "delta", "path": "/processed/enriched", ...},
+            "streaming": {"trigger": {"type": "processing_time", "interval": "15s"}, ...}
+        },
+        
+        # Aggregate: Run after join
+        {
+            "name": "aggregates",
+            "depends_on": ["enriched_events"],  # ← Wait for join
+            "input": {"format": "delta", "path": "/processed/enriched", ...},
+            "output": {"format": "delta", "path": "/analytics/aggregates", ...},
+            "streaming": {"trigger": {"type": "processing_time", "interval": "30s"}, ...}
+        },
+    ]
+}
+
+spm = StreamingPipelineManager(context)
+exec_id = spm.start_pipeline("analytics", pipeline_config)
+```
+
+### Handling Dependency Failures
+
+If a dependency fails, dependent nodes won't start:
+
+```python
+status = spm.get_pipeline_status(exec_id)
+
+if status["status"] == "error":
+    print(f"Pipeline failed: {status['error']}")
+    
+    # Check which queries failed
+    for query_name, query_status in status.get("query_statuses", {}).items():
+        if not query_status.get("isActive"):
+            print(f"  - Query '{query_name}' is not running")
+            if query_status.get("exception"):
+                print(f"    Exception: {query_status['exception']}")
 ```
 
 ---
@@ -980,6 +1291,114 @@ node_config = {
 
 ---
 
+## Security and Transformation Management
+
+### TransformationRegistry: Safe Transformation Execution
+
+The `TransformationRegistry` provides a secure, whitelist-based approach to transformation functions, preventing code injection vulnerabilities.
+
+#### Why Whitelist Registration?
+
+Dynamic module loading can expose your system to code injection attacks. The registry ensures:
+- ✅ Only pre-registered transformations can be executed
+- ✅ No arbitrary code execution from configuration
+- ✅ Thread-safe concurrent access
+- ✅ Clear audit trail of allowed transformations
+
+#### Registering Transformations
+
+```python
+from tauro.streaming import TransformationRegistry
+
+# Define your transformation function
+def clean_and_enrich(df, config):
+    """Clean and enrich streaming data."""
+    from pyspark.sql.functions import col, current_timestamp
+    
+    df = df.filter(col("value").isNotNull())
+    df = df.withColumn("processed_at", current_timestamp())
+    
+    return df
+
+# Register at startup (before pipelines run)
+TransformationRegistry.register("clean_and_enrich", clean_and_enrich)
+
+# List all registered transformations
+available = TransformationRegistry.list_transformations()
+print(f"Available: {available}")
+```
+
+#### Using Registered Transformations
+
+```python
+# In your node configuration:
+node_config = {
+    "name": "transform_events",
+    "input": {"format": "kafka", ...},
+    "function": {
+        "key": "clean_and_enrich"  # ← Reference to registered function
+    },
+    "output": {"format": "delta", ...},
+}
+```
+
+#### Legacy Mode (Unsafe, Not Recommended)
+
+For backward compatibility, dynamic module loading is still supported but **disabled by default**:
+
+```python
+# To enable dynamic imports (not recommended for production):
+import os
+os.environ["STREAMING_UNSAFE_IMPORT"] = "true"
+
+# Then use module/function syntax:
+node_config = {
+    "function": {
+        "module": "mymodule",
+        "function": "my_transform"
+    }
+}
+```
+
+**⚠️ WARNING**: Dynamic module loading is disabled by default for security. Only enable if absolutely necessary and in controlled environments.
+
+#### Best Practices for Transformations
+
+```python
+# ✅ DO: Register transformations at application startup
+def startup():
+    TransformationRegistry.register("extract_fields", extract_fields)
+    TransformationRegistry.register("filter_nulls", filter_nulls)
+    TransformationRegistry.register("add_timestamp", add_timestamp)
+
+# ✅ DO: Keep transformations pure (deterministic, no side effects)
+def filter_valid_events(df, config):
+    return df.filter(df.value > 0)  # Deterministic
+
+# ❌ DON'T: Use random or time-dependent operations
+def add_random_id(df, config):
+    import random
+    # Don't do this - non-deterministic!
+    random_id = random.randint(1, 100)
+    return df.withColumn("id", random_id)
+
+# ✅ DO: Use config parameter for parameterization
+def filter_by_threshold(df, config):
+    threshold = config.get("threshold", 0)
+    return df.filter(df.value > threshold)
+
+# Usage:
+TransformationRegistry.register("filter_by_threshold", filter_by_threshold)
+node_config = {
+    "function": {
+        "key": "filter_by_threshold",
+        "params": {"threshold": 100}  # Passed to config
+    }
+}
+```
+
+---
+
 ## Testing and Development
 
 ### Using Rate Source for Testing
@@ -1072,6 +1491,140 @@ def test_invalid_kafka_missing_server(validator):
 | Checkpoint locked error | `FileAlreadyExistsException` | Query already running | Verify only one query uses each checkpoint location |
 | Memory issues | `OutOfMemory` on Executor | High batch sizes | Reduce `maxRatePerPartition` or `rowsPerSecond` |
 | Slow query startup | Long initialization time | Complex parsing or large schemas | Simplify JSON schema or reduce initial data volume |
+| Query fails silently | No error, just stops | Exception in transformation | Enable `DEBUG` logging, check `lastProgress` |
+| Stalled query (no progress) | `isActive=true` but no data processed | Timeout, blocking operation, or source empty | Check `QueryHealthMonitor` logs for stall detection |
+| Dependency not found | `StreamingPipelineError: ... not defined` | `depends_on` references missing node | Verify all node names in `depends_on` list exist |
+| Circular dependency | `StreamingPipelineError: Circular dependency` | Node A depends on B, B depends on A | Audit pipeline DAG, visualize dependencies |
+| Query state inconsistent | Pipeline reports running but queries inactive | Race condition in monitoring | Ensure only one pipeline manager per context |
+| Transformation fails | `TRANSFORMATION_FAILURE` error | Code error in transformation function | Test transformation separately with sample data |
+| JSON parsing fails | `from_json error` | Schema mismatch or malformed JSON | Validate JSON structure, test with `parse_json: false` first |
+| Watermark not working | Late data still dropped | Column name mismatch | Ensure watermark column matches actual event time column |
+
+### Query Failure Scenarios
+
+#### Scenario 1: Query Fails During Startup
+
+```python
+# Symptoms: Query created but throws exception immediately
+try:
+    query = sqm.create_and_start_query(config)
+except StreamingQueryError as e:
+    print(f"Failed to start: {e.context}")
+    # Common causes:
+    # - Source connection failed (Kafka broker down, permissions)
+    # - Schema mismatch or invalid JSON
+    # - Writer configuration invalid
+
+# Solution:
+# 1. Verify source connectivity
+#    kafka: telnet broker 9092
+#    delta: ls /path/to/table/_delta_log
+#    file: ls /path/to/files
+
+# 2. Test with simpler config (e.g., console writer)
+# 3. Check permissions (read source, write checkpoint)
+```
+
+#### Scenario 2: Query Starts But Stalls
+
+```python
+# Symptoms: Query isActive=true, but lastProgress.batchId not changing
+# Detected by: QueryHealthMonitor timeout
+
+# Causes:
+# 1. Source has no data → normal, waiting
+# 2. Blocking operation in transformation → deadlock
+# 3. Executor crash without exception → lost worker
+# 4. Network partition → queries continue but can't write
+
+# Solution:
+# 1. Check source for data
+#    kafka: ./bin/kafka-consumer-groups.sh --describe
+#    rate: should always generate data
+
+# 2. Test transformation standalone:
+def test_transform():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.appName("test").getOrCreate()
+    df = spark.range(10).toDF("value")
+    result = my_transformation(df, {})
+    result.show()
+
+# 3. Check logs for executor failures
+# 4. Reduce batch size if memory issues
+
+# Enable QueryHealthMonitor timeout detection:
+# Default: 300 seconds, can be configured
+monitor = QueryHealthMonitor(query, query_name, timeout_seconds=120)
+```
+
+#### Scenario 3: Query Fails With Exception
+
+```python
+# Symptoms: lastProgress shows successful batches, then exception
+# detected by: QueryHealthMonitor exception detection
+
+# Causes:
+# 1. Source connection lost mid-stream
+# 2. Malformed data in stream
+# 3. Sink (Delta) lock or permission issue
+# 4. Executor out of memory
+
+# Solution:
+# 1. Check exception message:
+exception = query.exception()
+if exception:
+    print(f"Error: {exception}")
+    # Examples:
+    # - "org.apache.spark.sql.SparkException: Job aborted"
+    # - "java.io.IOException: Cannot write to checkpoint"
+    # - "OutOfMemoryError: Java heap space"
+
+# 2. Address root cause:
+# - Connection lost: improve network resilience
+# - Malformed data: add validation in transformation
+# - Lock error: ensure unique checkpoint per query
+# - OOM: reduce batch size or memory per executor
+
+# 3. Implement retry logic:
+def create_query_with_retry(sqm, config, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return sqm.create_and_start_query(config)
+        except StreamingQueryError as e:
+            if attempt < max_retries - 1:
+                print(f"Attempt {attempt+1} failed, retrying...")
+                import time
+                time.sleep(5 * (attempt + 1))  # Exponential backoff
+            else:
+                raise
+```
+
+#### Scenario 4: Dependency Failure Cascades
+
+```python
+# Scenario: Node A fails, Node B (depends_on A) never starts
+
+# Symptoms:
+# - Node A: error status
+# - Node B: waiting status (never transitions to running)
+
+status = spm.get_pipeline_status(exec_id)
+for node_name, query_status in status.get("query_statuses", {}).items():
+    if query_status.get("exception"):
+        print(f"{node_name} failed: {query_status['exception']}")
+        # Find dependent nodes
+        dependent = [
+            n for n in config["nodes"]
+            if exec_id in n.get("depends_on", [])
+        ]
+        print(f"  Blocked: {dependent}")
+
+# Solution:
+# 1. Fix the failing node (A)
+# 2. Restart pipeline
+# 3. Or isolate Node B in separate pipeline if independent
+```
 
 ### Debug Mode
 
@@ -1081,26 +1634,77 @@ Enable verbose logging:
 import logging
 from loguru import logger
 
+# Set logging level
 logger.enable("tauro.streaming")
 logger.add(sys.stderr, level="DEBUG")
+
+# Or use standard Python logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Check specific loggers:
+logging.getLogger("tauro.streaming.pipeline_manager").setLevel(logging.DEBUG)
+logging.getLogger("tauro.streaming.query_manager").setLevel(logging.DEBUG)
 ```
 
 ### Monitoring Query Progress
 
 ```python
 from tauro.streaming.query_manager import StreamingQueryManager
+from tauro.streaming import QueryHealthMonitor
+import time
 
 sqm = StreamingQueryManager(context)
 query = sqm.create_and_start_query(config)
 
-# Monitor in a loop
-import time
+# Monitor with health checking
+monitor = QueryHealthMonitor(query, "my_query", timeout_seconds=300)
+
 while query.isActive:
+    is_healthy, error = monitor.check_health()
+    
+    if not is_healthy:
+        print(f"Query problem: {error}")
+        break
+    
     progress = query.lastProgress
-    print(f"Processed: {progress['numInputRows']}, "
-          f"Batch: {progress['batchId']}, "
-          f"Duration: {progress['durationMs']}ms")
+    if progress:
+        print(f"Batch {progress['batchId']}: "
+              f"Processed {progress['numInputRows']} rows in "
+              f"{progress['durationMs'].get('total', 0)}ms")
+    
     time.sleep(10)
+```
+
+### Pipeline Diagnostics
+
+```python
+from tauro.streaming import StreamingPipelineManager
+
+spm = StreamingPipelineManager(context)
+exec_id = spm.start_pipeline("test", config)
+
+# Monitor with detailed diagnostics
+import time
+import json
+
+for _ in range(5):
+    status = spm.get_pipeline_status(exec_id)
+    
+    print(f"Pipeline Status: {status['status']}")
+    print(f"Active Queries: {status.get('active_queries', 0)}")
+    print(f"Failed Queries: {status.get('failed_queries', 0)}")
+    
+    # Check individual query statuses
+    for query_name, query_status in status.get("query_statuses", {}).items():
+        is_active = query_status.get("isActive", False)
+        has_error = "exception" in query_status
+        print(f"  - {query_name}: {'✓' if is_active else '✗'} "
+              f"{'[ERROR]' if has_error else ''}")
+        
+        if has_error:
+            print(f"      {query_status['exception']}")
+    
+    time.sleep(30)
 ```
 
 ---
@@ -1330,495 +1934,5 @@ query = writer.write(df, **options)
 ## License
 
 Copyright (c) 2025 Faustino Lopez Ramos. For licensing information, see the LICENSE file in the project root.
-
----
-
-## Notes
-
-- The streaming module does not manage cross-dependencies with batch nodes. When using hybrid pipelines, ensure orchestrators (in `tauro.exec`) coordinate sequencing appropriately.
-- Checkpoint locations must be accessible from all Spark executors. Use distributed storage (HDFS, S3, ADLS) for production deployments.
-- Use a centralized `format_policy` via `Context` to maintain batch/streaming compatibility throughout your project.
-- For advanced Spark tuning, consult the [Spark Structured Streaming Programming Guide](https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html).
-
-````
-
-This module is designed to work with both:
-- A Context object (e.g., from `tauro.config.Context`)
-- Context-like dicts (e.g., for tests or simple scripts)
-
-It also integrates with an optional format policy (`context.format_policy`) to keep batch/streaming compatibility in check when used alongside hybrid pipelines.
-
----
-
-## Key Features
-
-- Declarative streaming configuration (inputs, transformations, outputs)
-- Readers for Kafka and Delta Change Data Feed (plus testing readers like rate/memory)
-- Writers for Delta and Console (extensible to new sinks)
-- Robust validation with actionable error messages
-- Managed lifecycle via StreamingQueryManager and StreamingPipelineManager
-- Sensible defaults (trigger, output mode, checkpoint handling)
-- Context-aware: works with `context.spark` provided as attribute or key
-
----
-
-## Components Overview
-
-- Constants
-  - StreamingFormat, StreamingTrigger, StreamingOutputMode, PipelineType
-  - DEFAULT_STREAMING_CONFIG
-  - STREAMING_FORMAT_CONFIGS (required/optional options per source)
-  - STREAMING_VALIDATIONS (limits and invariants)
-- Exceptions
-  - StreamingError (base, with enhanced context)
-  - StreamingValidationError
-  - StreamingFormatNotSupportedError
-  - StreamingQueryError
-  - StreamingPipelineError
-  - Utilities: `handle_streaming_error` decorator, `create_error_context` builder
-- Readers
-  - KafkaStreamingReader
-  - DeltaStreamingReader
-  - Factory: StreamingReaderFactory (maps format -> reader)
-- Writers
-  - ConsoleStreamingWriter
-  - DeltaStreamingWriter
-  - Factory: StreamingWriterFactory (maps sink -> writer)
-- Validators
-  - StreamingValidator (pipeline- and node-level validation)
-- Managers
-  - StreamingQueryManager (single-node query lifecycle)
-  - StreamingPipelineManager (orchestrates multi-node streaming pipelines)
-
----
-
-## Supported Streaming Formats
-
-Inputs (via Readers):
-- kafka
-- delta_stream (Delta Change Data Feed)
-- file_stream (planned/optional)
-- kinesis (planned/optional)
-- socket (testing/dev)
-- rate (testing)
-- memory (testing)
-
-Outputs (via Writers):
-- delta
-- console
-
-Note: Additional formats/sinks can be implemented by adding new Reader/Writer classes and updating the respective factories.
-
----
-
-## Configuration Model
-
-A streaming node configuration generally contains:
-- name: Logical node name.
-- input: Input source config (format, options, optional watermark).
-- transforms: Optional list of transformation callables or references (pipeline-specific).
-- output: Sink config (format, path/schema/table_name, options).
-- streaming: Node-level streaming parameters (trigger, output mode, checkpoint location, etc.).
-
-Example (Kafka -> Delta):
-
-```yaml
-name: "events_to_delta"
-input:
-  format: "kafka"
-  options:
-    kafka.bootstrap.servers: "broker:9092"
-    subscribe: "events"
-    startingOffsets: "latest"
-  parse_json: true
-  json_schema: ${PYTHON_SCHEMA_OBJECT}  # provided via code (not YAML)
-output:
-  format: "delta"
-  path: "/mnt/delta/events_cdf"
-  options:
-    mergeSchema: "true"
-streaming:
-  trigger:
-    type: "processing_time"
-    interval: "30 seconds"
-  output_mode: "append"
-  checkpoint_location: "/mnt/checkpoints/events_to_delta"
-  query_name: "events_to_delta_query"
-```
-
-Example (Delta CDF -> Console):
-
-```yaml
-name: "delta_cdf_debug"
-input:
-  format: "delta_stream"
-  path: "/mnt/delta/events"
-  options:
-    readChangeFeed: "true"
-    startingVersion: "latest"
-output:
-  format: "console"
-  options:
-    numRows: 20
-    truncate: false
-streaming:
-  trigger:
-    type: "once"
-  output_mode: "append"
-```
-
----
-
-## Readers
-
-### KafkaStreamingReader
-
-- Required options:
-  - `kafka.bootstrap.servers`
-  - Exactly one of: `subscribe`, `subscribePattern`, `assign`
-- Optional options (common examples):
-  - `startingOffsets`, `endingOffsets`, `failOnDataLoss`, `includeHeaders`
-- Parsing:
-  - If `parse_json: true` and `json_schema` supplied, the reader extracts `value` as JSON into columns.
-
-Example:
-
-```python
-node_config = {
-    "name": "events",
-    "input": {
-        "format": "kafka",
-        "options": {
-            "kafka.bootstrap.servers": "broker:9092",
-            "subscribe": "events",
-            "startingOffsets": "latest",
-        },
-        "parse_json": True,
-        "json_schema": my_structtype_schema,
-    },
-    "output": {"format": "console"},
-}
-```
-
-### DeltaStreamingReader (Delta CDF)
-
-- Requires a `path` (Delta table location)
-- Common options:
-  - `readChangeFeed: "true"`
-  - `startingVersion`: `"latest"` or a numeric version
-  - `endingVersion`: optional
-
-Example:
-
-```python
-node_config = {
-    "name": "cdf_insights",
-    "input": {
-        "format": "delta_stream",
-        "path": "/mnt/delta/my_table",
-        "options": {
-            "readChangeFeed": "true",
-            "startingVersion": "latest",
-        },
-    },
-    "output": {"format": "console"},
-}
-```
-
----
-
-## Writers
-
-### DeltaStreamingWriter
-
-- Requires `path` for the sink
-- Applies options and defaults
-  - Default: `mergeSchema: "true"` if not provided
-- Uses Spark Structured Streaming `start(path)` to begin the query
-
-### ConsoleStreamingWriter
-
-- Debug/testing sink
-- Options:
-  - `numRows` (default 20)
-  - `truncate` (default False)
-
----
-
-## StreamingQueryManager
-
-Creates and starts a streaming query from a node configuration:
-1. Validates node config with `StreamingValidator.validate_streaming_node_config()`
-2. Loads input with the appropriate reader
-3. Applies optional transformations (if defined in the node config)
-4. Configures trigger, output mode, query name, checkpoint location
-5. Creates writer and starts the query
-
-Basic usage:
-
-```python
-from tauro.streaming.query_manager import StreamingQueryManager
-
-sqm = StreamingQueryManager(context)
-query = sqm.create_and_start_query(
-    node_config=my_node_config,
-    execution_id="exec-123",
-    pipeline_name="streaming_pipeline",
-)
-
-# You can await or monitor the query
-print(query.id, query.status)
-```
-
-Checkpoint Location:
-- Provide `streaming.checkpoint_location` in the node config for a deterministic location.
-- If not provided, you can derive one from context (e.g., `context.output_path`) before starting.
-
-Watermarking:
-- Supported via `input.watermark` within the node config.
-- Ensure the watermark column exists and matches event-time semantics.
-
----
-
-## StreamingPipelineManager
-
-Coordinates multi-node streaming pipelines, handling:
-- Validation of pipeline-level config
-- Creating and starting each node’s streaming query in a managed thread pool
-- Tracking status, errors, query handles, and execution metadata
-- Graceful shutdown via stop semantics
-
-Basic usage:
-
-```python
-from tauro.streaming.pipeline_manager import StreamingPipelineManager
-
-spm = StreamingPipelineManager(context, max_concurrent_pipelines=3)
-
-execution_id = spm.start_pipeline(
-    pipeline_name="events_ingestion",
-    pipeline_config={
-        "type": "streaming",
-        "nodes": [ node_config1, node_config2 ],
-        "streaming": {
-            "trigger": {"type": "processing_time", "interval": "10 seconds"},
-            "output_mode": "append",
-        },
-    },
-)
-
-# Inspect running pipelines
-print(spm.status(execution_id))
-# Stop if needed
-spm.stop_pipeline(execution_id, timeout=60)
-```
-
-Notes:
-- `StreamingPipelineManager` uses a `ThreadPoolExecutor` under the hood with `max_concurrent_pipelines`.
-- Validates pipeline shape and node configs using `StreamingValidator`.
-
----
-
-## Validation
-
-`StreamingValidator` performs comprehensive checks:
-- Pipeline-level:
-  - type must be one of `streaming` or `hybrid` (when streaming present)
-  - `nodes` must be a non-empty list
-- Node-level:
-  - `input.format` must be supported
-  - Required options per format (e.g., Kafka, Delta CDF)
-  - Kafka: exactly one of `subscribe`, `subscribePattern`, `assign`
-  - Optional policy-based checks (if `context.format_policy` is available)
-
-Usage:
-
-```python
-from tauro.streaming.validators import StreamingValidator
-
-validator = StreamingValidator(format_policy=getattr(context, "format_policy", None))
-validator.validate_streaming_pipeline_config(pipeline_config)
-for node in pipeline_config["nodes"]:
-    if isinstance(node, dict):
-        validator.validate_streaming_node_config(node)
-```
-
-Validation errors raise `StreamingValidationError` with enriched context (field, expected, actual).
-
----
-
-## Error Handling
-
-The module uses structured exceptions with rich context:
-- StreamingError (base)
-- StreamingValidationError
-- StreamingFormatNotSupportedError
-- StreamingQueryError (query lifecycle failures)
-- StreamingPipelineError (pipeline lifecycle failures)
-
-Patterns:
-- Many public methods are decorated with `@handle_streaming_error`, converting unexpected exceptions into the appropriate streaming exception with contextual data (operation, component, node/pipeline).
-- `create_error_context` is used to attach operation-specific metadata (e.g., `pipeline_name`, `execution_id`, `node_name`).
-
-Troubleshooting:
-- Inspect the exception message and `.context` dict for details.
-- Use `.get_full_traceback()` where available to dump cause chains.
-
----
-
-## Context Integration
-
-Readers access Spark via `context.spark`, where:
-- `context` can be an object with a `spark` attribute (e.g., from `tauro.config.Context`)
-- or a dict-style context with a `"spark"` key (commonly used in tests)
-
-The managers also try to use `context.format_policy` (if available) to harmonize with batch/streaming rules.
-
----
-
-## Default Settings and Triggers
-
-From `DEFAULT_STREAMING_CONFIG`:
-- trigger:
-  - type: `processing_time`
-  - interval: `10 seconds`
-- output_mode: `append`
-- checkpoint_location: `/tmp/checkpoints` (override in production)
-- watermark: `{"column": None, "delay": "10 seconds"}`
-- options: `{}` (writer options)
-
-Triggers:
-- processing_time (interval)
-- once
-- continuous
-- available_now (where supported)
-
-Example (available now):
-
-```yaml
-streaming:
-  trigger:
-    type: "available_now"
-  output_mode: "append"
-```
-
----
-
-## Testing and Development
-
-Recommended approaches:
-- Use `rate` input format to generate test data at a controlled rate.
-- Use `memory` or `console` writers for quick feedback loops.
-- Provide small schemas and simple transformations to validate the end-to-end setup.
-
-Example (rate -> console):
-
-```python
-node_config = {
-    "name": "rate_debug",
-    "input": {
-        "format": "rate",
-        "options": {"rowsPerSecond": 5},
-    },
-    "output": {"format": "console", "options": {"numRows": 5, "truncate": False}},
-    "streaming": {
-        "trigger": {"type": "processing_time", "interval": "5 seconds"},
-        "output_mode": "append",
-        "query_name": "rate_debug_query",
-        "checkpoint_location": "/tmp/checkpoints/rate_debug",
-    },
-}
-```
-
----
-
-## Best Practices
-
-- Always set a dedicated `checkpoint_location` per node for exactly-once semantics and fault tolerance.
-- Keep Kafka options minimal and explicit; ensure only one subscription method is used.
-- For Delta CDF, ensure the table has change data feed enabled and permissions set.
-- Use `available_now` or `once` triggers for ingesting bounded backlogs where appropriate.
-- Propagate a coherent format policy across Context and streaming validators for consistency with batch pipelines.
-
----
-
-## Minimal End-to-End Example
-
-```python
-from tauro.config import Context
-from tauro.streaming.query_manager import StreamingQueryManager
-
-# 1) Build a context (could also be a dict with 'spark')
-context = Context(...)
-
-# 2) Define a streaming node (Kafka -> Delta)
-node = {
-    "name": "events_to_delta",
-    "input": {
-        "format": "kafka",
-        "options": {
-            "kafka.bootstrap.servers": "broker:9092",
-            "subscribe": "events",
-            "startingOffsets": "latest",
-        },
-        "parse_json": True,
-        "json_schema": schema,  # Provide a pyspark.sql.types.StructType
-    },
-    "output": {
-        "format": "delta",
-        "path": "/mnt/delta/events",
-        "options": {"mergeSchema": "true"},
-    },
-    "streaming": {
-        "trigger": {"type": "processing_time", "interval": "15 seconds"},
-        "output_mode": "append",
-        "checkpoint_location": "/mnt/checkpoints/events_to_delta",
-        "query_name": "events_to_delta_q",
-    },
-}
-
-# 3) Start the query
-sqm = StreamingQueryManager(context)
-query = sqm.create_and_start_query(node, execution_id="exec-001", pipeline_name="ingestion")
-print(f"Started query id={query.id}, name={query.name}")
-```
-
----
-
-## Extending the Module
-
-- Add a new Reader
-  - Implement a subclass of `BaseStreamingReader`
-  - Register it in `StreamingReaderFactory` mapped from a new `StreamingFormat` or string format
-- Add a new Writer
-  - Implement a subclass of `BaseStreamingWriter`
-  - Register it in `StreamingWriterFactory`
-
-Make sure to:
-- Update `STREAMING_FORMAT_CONFIGS` with required/optional options (for readers)
-- Enhance `StreamingValidator` to recognize format-specific rules as needed
-- Add targeted tests covering normal and invalid configurations
-
----
-
-## Troubleshooting
-
-- Spark is None
-  - Ensure your context exposes `spark` (either as an attribute or dict key).
-- Kafka subscription error
-  - Provide exactly one of `subscribe`, `subscribePattern`, or `assign`.
-- Delta CDF read fails
-  - Verify `readChangeFeed` is enabled on the table and that `path` is correct and accessible.
-- Writer fails to start
-  - Check `checkpoint_location` and path permissions. Ensure the sink path exists or is creatable.
-- Validation errors
-  - Review exception context (field, expected, actual). Many methods are decorated to include operation and node/pipeline names.
-
----
-
-## Notes
-
-- The streaming module does not directly manage cross-dependencies with batch nodes; when using hybrid pipelines, ensure orchestrators (in `tauro.exec`) coordinate sequencing appropriately.
-- Use a centralized `format_policy` via `Context` to keep batch/streaming compatibility consistent throughout your project.
 
 ---

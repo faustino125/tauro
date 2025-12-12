@@ -1,7 +1,7 @@
 import atexit
 import threading
 import weakref
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -26,6 +26,7 @@ from core.mlops.exceptions import (
     RunNotActiveError,
     InvalidMetricError,
     ArtifactNotFoundError,
+    ResourceLimitError,
 )
 
 
@@ -34,6 +35,8 @@ DEFAULT_METRIC_BUFFER_SIZE = 100
 DEFAULT_STALE_RUN_AGE_SECONDS = 3600.0  # 1 hour
 METRICS_CLEANUP_THRESHOLD = 10000  # Max metrics per run before cleanup warning
 DEFAULT_MAX_METRICS_PER_KEY = 10000  # Max metrics per key in memory (rolling window)
+# C4: New constant to limit total metrics across all keys in a run
+DEFAULT_MAX_METRICS_PER_RUN = 100000  # Absolute limit per run
 
 
 class RunStatus(str, Enum):
@@ -138,9 +141,11 @@ class ExperimentTracker:
         auto_cleanup_stale: bool = True,
         stale_run_age_seconds: float = DEFAULT_STALE_RUN_AGE_SECONDS,
         max_metrics_per_key: int = DEFAULT_MAX_METRICS_PER_KEY,
+        max_metrics_per_run: int = DEFAULT_MAX_METRICS_PER_RUN,
     ):
         """
         Initialize Experiment Tracker.
+        C3, C4: Metric buffering with persistence and limits.
         """
         self.storage = storage
         self.tracking_path = tracking_path
@@ -150,10 +155,14 @@ class ExperimentTracker:
         self.auto_cleanup_stale = auto_cleanup_stale
         self.stale_run_age_seconds = stale_run_age_seconds
         self.max_metrics_per_key = max_metrics_per_key
+        self.max_metrics_per_run = max_metrics_per_run
 
         # Thread-safe active runs with LRU behavior
         self._active_runs: OrderedDict[str, Run] = OrderedDict()
+        # C3: Track metric counts for validation
         self._metric_counts: Dict[str, int] = {}
+        # C3: Store pending metrics for each run (to flush periodically)
+        self._pending_metrics: Dict[str, deque] = {}
         self._runs_lock = threading.RLock()
 
         # Statistics
@@ -396,7 +405,8 @@ class ExperimentTracker:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Log metric for run with memory protection.
+        Log metric for run with memory protection and limits.
+        C4: Validate total metrics per run to prevent OOM.
         """
         import math
 
@@ -415,6 +425,20 @@ class ExperimentTracker:
 
         with self._runs_lock:
             run = self._get_active_run(run_id)
+
+            # C4: Count total metrics across all keys
+            current_total = sum(len(metrics) for metrics in run.metrics.values())
+
+            # Reject if adding this metric would exceed limit
+            if current_total >= self.max_metrics_per_run:
+                logger.error(
+                    f"Run {run_id}: Cannot log metric - total metrics limit "
+                    f"({self.max_metrics_per_run}) reached"
+                )
+                raise ResourceLimitError(
+                    f"run_{run_id}_metrics", current_total, self.max_metrics_per_run
+                )
+
             now = datetime.now(timezone.utc).isoformat()
 
             metric = Metric(

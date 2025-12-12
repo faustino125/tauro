@@ -7,10 +7,14 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from threading import Event, Lock, Thread
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
-from pyspark.sql.streaming import StreamingQuery  # type: ignore
+
+try:
+    from pyspark.sql.streaming import StreamingQuery  # type: ignore
+except ImportError:
+    StreamingQuery = Any  # type: ignore
 
 from core.streaming.exceptions import (
     StreamingError,
@@ -20,6 +24,147 @@ from core.streaming.exceptions import (
 )
 from core.streaming.query_manager import StreamingQueryManager
 from core.streaming.validators import StreamingValidator
+
+
+class QueryHealthMonitor:
+    """
+    Monitor health of streaming queries.
+    """
+
+    def __init__(self, query: StreamingQuery, query_name: str, timeout_seconds: float = 300):
+        """
+        Initialize query health monitor.
+
+        Args:
+            query: StreamingQuery object to monitor
+            query_name: Human-readable query name
+            timeout_seconds: Timeout for detecting stalls (no progress)
+        """
+        self.query = query
+        self.query_name = query_name
+        self.timeout_seconds = timeout_seconds
+        self.last_progress_time = time.time()
+        self.last_batch_id = None
+        self.error_message = None
+
+    def check_health(self) -> Tuple[bool, Optional[str]]:
+        """
+        Check if query is healthy.
+
+        Returns:
+            (is_healthy, error_message) where error_message is None if healthy
+        """
+        try:
+            # Check if query is still active
+            is_active = self._is_query_active()
+            if not is_active:
+                # Query stopped - check if it failed
+                exception = self._get_query_exception()
+                if exception:
+                    self.error_message = f"Query failed with exception: {str(exception)}"
+                    return False, self.error_message
+                else:
+                    # Gracefully stopped, not an error for health purposes
+                    self.error_message = None
+                    return False, None
+
+            # Check for stalls (no progress in timeout)
+            if not self._check_progress():
+                elapsed = time.time() - self.last_progress_time
+                self.error_message = (
+                    f"Query stalled: no progress for {elapsed:.1f}s "
+                    f"(timeout: {self.timeout_seconds}s)"
+                )
+                return False, self.error_message
+
+            # Query is healthy
+            self.error_message = None
+            return True, None
+
+        except Exception as e:
+            self.error_message = f"Error checking query health: {str(e)}"
+            logger.error(f"Health check failed for '{self.query_name}': {self.error_message}")
+            return False, self.error_message
+
+    def _is_query_active(self) -> bool:
+        """Check if query is currently active."""
+        try:
+            is_active_attr = getattr(self.query, "isActive", None)
+            if is_active_attr is None:
+                return False
+
+            # Handle both attribute and method
+            if callable(is_active_attr):
+                return bool(is_active_attr())
+            else:
+                return bool(is_active_attr)
+
+        except Exception:
+            return False
+
+    def _get_query_exception(self) -> Optional[Exception]:
+        """Get query exception if available."""
+        try:
+            exc_attr = getattr(self.query, "exception", None)
+            if exc_attr is None:
+                return None
+
+            if callable(exc_attr):
+                return exc_attr()
+            else:
+                return exc_attr
+
+        except Exception:
+            return None
+
+    def _check_progress(self) -> bool:
+        """
+        Check if query has made progress recently.
+
+        Returns True if progress detected or timeout not exceeded.
+        """
+        try:
+            last_progress = getattr(self.query, "lastProgress", None)
+            if not last_progress:
+                # No progress info available - assume healthy
+                return True
+
+            current_batch_id = last_progress.get("batchId")
+            current_time = time.time()
+
+            # If batch ID changed, update progress time
+            if current_batch_id is not None and current_batch_id != self.last_batch_id:
+                self.last_batch_id = current_batch_id
+                self.last_progress_time = current_time
+                return True
+
+            # No progress since last check - verify timeout
+            elapsed = current_time - self.last_progress_time
+            if elapsed > self.timeout_seconds:
+                return False
+
+            return True
+
+        except Exception:
+            # If we can't check progress, assume healthy
+            return True
+
+    def get_status_dict(self) -> Dict[str, Any]:
+        """Get status as dictionary."""
+        try:
+            last_progress = getattr(self.query, "lastProgress", None)
+            return {
+                "query_name": self.query_name,
+                "is_active": self._is_query_active(),
+                "error": self.error_message,
+                "last_batch_id": self.last_batch_id,
+                "last_progress": last_progress,
+            }
+        except Exception:
+            return {
+                "query_name": self.query_name,
+                "error": "Failed to get status",
+            }
 
 
 class StreamingPipelineManager:
@@ -557,30 +702,242 @@ class StreamingPipelineManager:
     def _process_pipeline_nodes(
         self, execution_id: str, pipeline_name: str, nodes: List[Any]
     ) -> List[str]:
-        """Process each node configuration for the pipeline."""
-        processed_nodes = []
+        """
+        Process pipeline nodes respecting dependencies.
+        """
+        try:
+            # Build dependency graph
+            node_graph = self._build_node_dependency_graph(nodes)
+
+            # Validate graph for cycles
+            self._validate_no_cycles(node_graph)
+
+            # Execute nodes in dependency order
+            processed_nodes = self._execute_nodes_respecting_dependencies(
+                execution_id, pipeline_name, nodes, node_graph
+            )
+
+            return processed_nodes
+
+        except Exception as e:
+            logger.error(f"Error processing pipeline nodes for '{execution_id}': {str(e)}")
+            with self._lock:
+                self._running_pipelines[execution_id]["status"] = "error"
+                self._running_pipelines[execution_id]["error"] = str(e)
+            raise
+
+    def _build_node_dependency_graph(self, nodes: List[Any]) -> Dict[str, List[str]]:
+        """
+        Build directed acyclic graph of node dependencies.
+        """
+        graph = {}
+        node_names = set()
+
+        # Build graph and collect node names
         for i, node_config in enumerate(nodes):
+            node_name, dependencies = self._extract_node_and_dependencies(node_config, i)
+            node_names.add(node_name)
+            graph[node_name] = dependencies
+
+        # Validate dependencies reference existing nodes
+        self._validate_node_dependencies(graph, node_names)
+
+        return graph
+
+    def _extract_node_and_dependencies(self, node_config: Any, idx: int) -> Tuple[str, List[str]]:
+        """Extract node name and its dependencies from configuration."""
+        try:
+            node_name = self._get_node_name(node_config, idx)
+
+            if isinstance(node_config, dict):
+                depends_on = node_config.get("depends_on", [])
+                if depends_on and not isinstance(depends_on, list):
+                    depends_on = [depends_on]
+            else:
+                depends_on = []
+
+            return node_name, depends_on
+
+        except Exception as e:
+            raise StreamingPipelineError(
+                f"Error building dependency graph at node {idx}: {str(e)}",
+                pipeline_name=None,
+                execution_id=None,
+            ) from e
+
+    def _validate_node_dependencies(self, graph: Dict[str, List[str]], node_names: set) -> None:
+        """Validate that all dependencies reference existing nodes."""
+        for node_name, dependencies in graph.items():
+            for dep in dependencies:
+                if dep not in node_names:
+                    raise StreamingPipelineError(
+                        f"Node '{node_name}' depends on '{dep}' which is not defined",
+                        pipeline_name=None,
+                        execution_id=None,
+                    )
+
+    def _get_node_name(self, node_config: Any, idx: int) -> str:
+        """Extract node name from configuration."""
+        if isinstance(node_config, str):
+            return node_config
+        elif isinstance(node_config, dict):
+            return node_config.get("name", f"node_{idx}")
+        else:
+            raise ValueError(f"Invalid node configuration type: {type(node_config)}")
+
+    def _validate_no_cycles(self, graph: Dict[str, List[str]]) -> None:
+        """
+        Validate that dependency graph has no cycles using DFS.
+        """
+        visited = set()
+        visiting = set()
+
+        def has_cycle(node: str) -> bool:
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+
+            visiting.add(node)
+            for dependency in graph.get(node, []):
+                if has_cycle(dependency):
+                    return True
+            visiting.remove(node)
+            visited.add(node)
+            return False
+
+        for node in graph:
+            if node not in visited and has_cycle(node):
+                raise StreamingPipelineError(
+                    "Circular dependency detected in pipeline graph",
+                    pipeline_name=None,
+                    execution_id=None,
+                    context={"graph": graph},
+                )
+
+    def _execute_nodes_respecting_dependencies(
+        self,
+        execution_id: str,
+        pipeline_name: str,
+        nodes: List[Any],
+        graph: Dict[str, List[str]],
+    ) -> List[str]:
+        """
+        Execute nodes in dependency order.
+        """
+        processed_nodes = []
+        completed_nodes = dict.fromkeys(graph.keys(), False)
+        remaining_nodes = set(graph.keys())
+        max_iterations = len(nodes) + 1
+        iterations = 0
+
+        while remaining_nodes and iterations < max_iterations:
+            iterations += 1
+
             if self._shutdown_event.is_set():
                 logger.info(f"Shutdown requested, stopping pipeline '{execution_id}'")
                 break
-            try:
-                node_config = self._get_node_config(node_config, i)
-                query = self.query_manager.create_and_start_query(
-                    node_config, execution_id, pipeline_name
-                )
-                node_name = node_config.get("name", f"node_{i}")
-                with self._lock:
-                    self._running_pipelines[execution_id]["queries"][node_name] = query
-                    self._running_pipelines[execution_id]["completed_nodes"] += 1
-                processed_nodes.append(node_name)
-                logger.info(f"Started streaming query '{node_name}' in pipeline '{execution_id}'")
-            except Exception as e:
-                logger.error(f"Error processing node {i} in pipeline '{execution_id}': {str(e)}")
-                with self._lock:
-                    self._running_pipelines[execution_id]["status"] = "partial_failure"
-                    self._running_pipelines[execution_id]["error"] = str(e)
+
+            ready_nodes = self._find_ready_nodes(remaining_nodes, graph, completed_nodes)
+
+            if not ready_nodes:
+                self._log_missing_nodes(remaining_nodes, graph, completed_nodes)
                 break
+
+            for node_name in ready_nodes:
+                self._execute_single_node(
+                    node_name,
+                    execution_id,
+                    pipeline_name,
+                    nodes,
+                    graph,
+                    processed_nodes,
+                    completed_nodes,
+                    remaining_nodes,
+                )
+
+        if remaining_nodes:
+            logger.warning(f"Failed to start all nodes. Remaining: {remaining_nodes}")
+
         return processed_nodes
+
+    def _find_ready_nodes(
+        self, remaining_nodes: set, graph: Dict[str, List[str]], completed_nodes: Dict[str, bool]
+    ) -> List[str]:
+        """Find nodes ready to execute (all dependencies completed)."""
+        ready_nodes = []
+        for node_name in remaining_nodes:
+            dependencies = graph.get(node_name, [])
+            if all(completed_nodes.get(dep, False) for dep in dependencies):
+                ready_nodes.append(node_name)
+        return ready_nodes
+
+    def _log_missing_nodes(
+        self, remaining_nodes: set, graph: Dict[str, List[str]], completed_nodes: Dict[str, bool]
+    ) -> None:
+        """Log nodes that cannot progress."""
+        missing = [
+            n
+            for n in remaining_nodes
+            if not all(completed_nodes.get(d, False) for d in graph.get(n, []))
+        ]
+        logger.error(f"Cannot make progress on nodes: {missing}")
+
+    def _execute_single_node(
+        self,
+        node_name: str,
+        execution_id: str,
+        pipeline_name: str,
+        nodes: List[Any],
+        graph: Dict[str, List[str]],
+        processed_nodes: List[str],
+        completed_nodes: Dict[str, bool],
+        remaining_nodes: set,
+    ) -> None:
+        """Execute a single node and update tracking structures."""
+        try:
+            node_config = self._find_node_config(node_name, nodes)
+            if not node_config:
+                raise ValueError(f"Node configuration not found for '{node_name}'")
+
+            logger.info(
+                f"Starting node '{node_name}' in pipeline '{execution_id}' "
+                f"(dependencies completed: {graph.get(node_name, [])})"
+            )
+
+            query = self.query_manager.create_and_start_query(
+                node_config, execution_id, pipeline_name
+            )
+
+            with self._lock:
+                self._running_pipelines[execution_id]["queries"][node_name] = query
+                self._running_pipelines[execution_id]["completed_nodes"] += 1
+
+            processed_nodes.append(node_name)
+            completed_nodes[node_name] = True
+            remaining_nodes.discard(node_name)
+            logger.info(f"Successfully started query '{node_name}'")
+
+        except Exception as e:
+            self._handle_node_execution_error(execution_id, node_name, str(e))
+            completed_nodes[node_name] = True
+            remaining_nodes.discard(node_name)
+
+    def _find_node_config(self, node_name: str, nodes: List[Any]) -> Optional[Dict[str, Any]]:
+        """Find configuration for a specific node."""
+        for idx, node_cfg in enumerate(nodes):
+            cfg_name = self._get_node_name(node_cfg, idx)
+            if cfg_name == node_name:
+                return self._get_node_config(node_cfg, idx)
+        return None
+
+    def _handle_node_execution_error(self, execution_id: str, node_name: str, error: str) -> None:
+        """Handle errors during node execution."""
+        logger.error(f"Error starting node '{node_name}' in pipeline '{execution_id}': {error}")
+        with self._lock:
+            if execution_id in self._running_pipelines:
+                self._running_pipelines[execution_id]["status"] = "partial_failure"
+                self._running_pipelines[execution_id]["error"] = error
 
     def _get_node_config(self, node_config: Any, idx: int) -> Dict[str, Any]:
         """Ensure node has proper configuration."""
@@ -669,27 +1026,44 @@ class StreamingPipelineManager:
                     self._running_pipelines[execution_id]["status"] = "error"
                     self._running_pipelines[execution_id]["error"] = str(e)
 
-    def _collect_query_states(self, pipeline_info):
+    def _collect_query_states(
+        self, pipeline_info: Dict[str, Any]
+    ) -> Tuple[int, List[Tuple[str, str]], List[str]]:
+        """
+        Collect states of all queries in a pipeline using QueryHealthMonitor.
+        """
         active_queries = 0
         failed_queries = []
         completed_queries = []
 
         for query_name, query in pipeline_info["queries"].items():
-            state, info = self._get_query_state(query_name, query)
-            if state == "active":
-                active_queries += 1
-            elif state == "failed":
-                failed_queries.append((query_name, info))
-            elif state == "completed":
-                completed_queries.append(query_name)
+            if query is None:
+                failed_queries.append((query_name, "Query object is None"))
+                continue
+
+            try:
+                # Use health monitor for comprehensive check
+                monitor = QueryHealthMonitor(query, query_name, timeout_seconds=300)
+                is_healthy, error_message = monitor.check_health()
+
+                if is_healthy:
+                    # Query is running and healthy
+                    active_queries += 1
+                elif error_message is None:
+                    # Query stopped cleanly (not an error)
+                    completed_queries.append(query_name)
+                else:
+                    # Query failed or stalled
+                    failed_queries.append((query_name, error_message))
+
+            except Exception as e:
+                logger.error(f"Error monitoring query '{query_name}': {str(e)}")
+                failed_queries.append((query_name, f"Monitoring error: {str(e)}"))
 
         return active_queries, failed_queries, completed_queries
 
     def _get_query_state(self, query_name, query):
-        """Return state for a query using duck-typing to support Py4J proxies.
-
-        Possible return values: ("active", None), ("failed", error), ("completed", None), or (None, None)
-        """
+        """Return state for a query using duck-typing to support Py4J proxies."""
         if query is None:
             return None, None
 

@@ -1,0 +1,72 @@
+# Custom CSS for Tauro documentation
+
+/* Color scheme */
+:root {
+    --tauro-primary: #1976D2;
+    --tauro-secondary: #FF6F00;
+    --tauro-success: #43A047;
+    --tauro-warning: #FBC02D;
+    --tauro-danger: #E53935;
+}
+
+/* Logo and branding */
+.wy-side-nav-search {
+    background-color: var(--tauro-primary);
+}
+
+.wy-side-nav-search > div.version {
+    color: #fff;
+}
+
+/* Code blocks */
+.highlight {
+    background: #f8f8f8;
+    border-left: 3px solid var(--tauro-primary);
+    padding-left: 10px;
+}
+
+/* Admonitions */
+.admonition.note {
+    border-left-color: var(--tauro-primary);
+}
+
+.admonition.tip {
+    border-left-color: var(--tauro-success);
+}
+
+.admonition.warning {
+    border-left-color: var(--tauro-warning);
+}
+
+.admonition.danger {
+    border-left-color: var(--tauro-danger);
+}
+
+/* Links */
+a {
+    color: var(--tauro-primary);
+}
+
+a:hover {
+    color: var(--tauro-secondary);
+}
+
+/* Tables */
+table.docutils {
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+table.docutils thead {
+    background-color: var(--tauro-primary);
+    color: white;
+}
+
+/* Navigation */
+.wy-menu-vertical li.current {
+    background-color: #e3f2fd;
+}
+
+.wy-menu-vertical li.current a {
+    border-right: 3px solid var(--tauro-primary);
+}

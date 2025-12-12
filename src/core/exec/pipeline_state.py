@@ -102,6 +102,10 @@ class CircuitBreaker:
     def can_execute(self) -> bool:
         """Check if execution is allowed.
 
+        ER2 FIX: Thread-safe state machine with all state changes inside lock.
+        Prevents race condition where multiple threads could obtain True in HALF_OPEN state.
+        CLOSED -> OPEN -> HALF_OPEN -> CLOSED
+
         Returns:
             True if operation can proceed
         """
@@ -121,12 +125,15 @@ class CircuitBreaker:
                         "- transitioning to HALF_OPEN"
                     )
                     self._transition_to_half_open()
+                    # CRITICAL: Increment happens inside lock to prevent race condition
+                    self.half_open_calls = 1
                     return True
 
                 return False
 
             elif self.state == CircuitBreakerState.HALF_OPEN:
                 # Allow limited calls in half-open state
+                # CRITICAL: All operations inside lock to prevent race condition
                 if self.half_open_calls < self.half_open_max_calls:
                     self.half_open_calls += 1
                     return True

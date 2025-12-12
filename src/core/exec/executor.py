@@ -37,6 +37,11 @@ from core.streaming.pipeline_manager import StreamingPipelineManager
 class BaseExecutor:
     """Base class for pipeline executors."""
 
+    # Default execution timeout (1 hour)
+    DEFAULT_TIMEOUT_SECONDS = 3600
+    # Maximum reasonable timeout (24 hours)
+    MAX_TIMEOUT_SECONDS = 86400
+
     def __init__(self, context: Context):
         self.context = context
         self.input_loader = InputLoader(self.context)
@@ -44,6 +49,15 @@ class BaseExecutor:
         self.is_ml_layer = getattr(self.context, "is_ml_layer", False)
         gs = getattr(self.context, "global_settings", {}) or {}
         self.max_workers = gs.get("max_parallel_nodes", 4)
+
+        # Configure timeout
+        configured_timeout = gs.get("execution_timeout_seconds", self.DEFAULT_TIMEOUT_SECONDS)
+        self.timeout_seconds = min(configured_timeout, self.MAX_TIMEOUT_SECONDS)
+        if self.timeout_seconds != configured_timeout:
+            logger.warning(
+                f"Configured timeout {configured_timeout}s exceeds maximum, "
+                f"using {self.timeout_seconds}s instead"
+            )
         # Check if MLflow is enabled
         self._mlflow_enabled = self._should_enable_mlflow()
         self._mlflow_tracker = None
@@ -318,24 +332,38 @@ class BatchExecutor(BaseExecutor):
 
             self._execute_batch_flow(pipeline, node_name, start_date, end_date, ml_info)
             self.unified_state.set_pipeline_status("completed")
-
-            # Close MLOps run on success
-            if mlops_integration and mlops_run_id:
-                mlops_integration.end_pipeline_run(mlops_run_id)
+            self._end_mlops_run_success(mlops_integration, mlops_run_id)
 
         except Exception:
             self.unified_state.set_pipeline_status("failed")
-
-            # Close MLOps run as failed
-            if mlops_integration and mlops_run_id:
-                from core.mlops.experiment_tracking import RunStatus
-
-                mlops_integration.end_pipeline_run(mlops_run_id, status=RunStatus.FAILED)
-
+            self._end_mlops_run_failed(mlops_integration, mlops_run_id)
             raise
         finally:
             if self.unified_state:
                 self.unified_state.cleanup()
+
+    def _end_mlops_run_success(
+        self, mlops_integration: Optional[MLOpsExecutorIntegration], mlops_run_id: Optional[str]
+    ) -> None:
+        """Close MLOps run on success with explicit exception handling."""
+        if mlops_integration and mlops_run_id:
+            try:
+                mlops_integration.end_pipeline_run(mlops_run_id)
+            except Exception as e:
+                logger.error(f"Failed to end MLOps run {mlops_run_id}: {e}")
+                raise RuntimeError(f"Pipeline completed but failed to record in MLOps: {e}") from e
+
+    def _end_mlops_run_failed(
+        self, mlops_integration: Optional[MLOpsExecutorIntegration], mlops_run_id: Optional[str]
+    ) -> None:
+        """Close MLOps run as failed with explicit exception handling."""
+        if mlops_integration and mlops_run_id:
+            try:
+                from core.mlops.experiment_tracking import RunStatus
+
+                mlops_integration.end_pipeline_run(mlops_run_id, status=RunStatus.FAILED)
+            except Exception as mlops_error:
+                logger.error(f"Failed to record pipeline failure in MLOps: {mlops_error}")
 
     def _build_ml_info(
         self,
@@ -403,8 +431,13 @@ class BatchExecutor(BaseExecutor):
                     },
                 )
 
-        except Exception:
-            # Do not fail the whole execution if MLOps integration fails to initialize.
+        except Exception as e:
+            # Log MLOps initialization failure but do not fail the whole execution
+            # ER4 FIX: Explicit logging instead of silent failure
+            logger.warning(
+                f"MLOps integration initialization failed: {e}. "
+                f"Pipeline will execute without experiment tracking."
+            )
             mlops_integration = None
             mlops_run_id = None
             experiment_id = None

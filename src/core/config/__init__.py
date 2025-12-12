@@ -37,7 +37,7 @@ from core.config.validators import (
 )
 
 # Session Management
-from core.config.session import SparkSessionFactory
+from core.config.session import SparkSessionFactory, SparkSessionManager
 
 # Context and Context Management
 from core.config.contexts import (
@@ -86,6 +86,7 @@ __all__ = [
     "HybridValidator",
     # Session Management
     "SparkSessionFactory",
+    "SparkSessionManager",
     # Context and Context Management
     "Context",
     "PipelineManager",

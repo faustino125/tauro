@@ -6,8 +6,14 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict
 
 from loguru import logger  # type: ignore
-from pyspark.sql import DataFrame  # type: ignore
-from pyspark.sql.functions import col, from_json  # type: ignore
+
+try:
+    from pyspark.sql import DataFrame  # type: ignore
+    from pyspark.sql.functions import col, from_json  # type: ignore
+except ImportError:
+    DataFrame = Any  # type: ignore
+    col = None  # type: ignore
+    from_json = None  # type: ignore
 
 from core.streaming.constants import STREAMING_FORMAT_CONFIGS, StreamingFormat
 from core.streaming.exceptions import (

@@ -119,12 +119,38 @@ class StorageBackendFactory:
 
         elif mode in ("databricks", "distributed"):
             databricks_config = gs.get("databricks", {})
-            catalog = kwargs.get("catalog") or databricks_config.get("catalog", "main")
-            schema = kwargs.get("schema") or databricks_config.get("schema", "ml_tracking")
-            workspace_url = kwargs.get("workspace_url") or databricks_config.get("host")
-            token = kwargs.get("token") or databricks_config.get("token")
+            catalog = (
+                kwargs.get("catalog")
+                or databricks_config.get("catalog")
+                or os.getenv("DATABRICKS_CATALOG", "main")
+            )
+            schema = (
+                kwargs.get("schema")
+                or databricks_config.get("schema")
+                or os.getenv("DATABRICKS_SCHEMA", "ml_tracking")
+            )
 
-            logger.info(f"Creating DatabricksStorageBackend with catalog: {catalog}")
+            # C7: Get workspace_url and token from environment first (more secure)
+            workspace_url = (
+                os.getenv("DATABRICKS_HOST")
+                or kwargs.get("workspace_url")
+                or databricks_config.get("host")
+            )
+            token = (
+                os.getenv("DATABRICKS_TOKEN")
+                or kwargs.get("token")
+                or databricks_config.get("token")
+            )
+
+            # Log without exposing credentials
+            if token and len(token) > 10:
+                token_masked = token[:5] + "***" + token[-5:]
+                logger.info(
+                    f"Creating DatabricksStorageBackend with catalog: {catalog} (token: {token_masked})"
+                )
+            else:
+                logger.info(f"Creating DatabricksStorageBackend with catalog: {catalog}")
+
             return DatabricksStorageBackend(
                 catalog=catalog,
                 schema=schema,

@@ -21,6 +21,12 @@ from core.mlops.resilience import (
 from core.mlops.exceptions import StorageBackendError
 
 
+class DiskSpaceError(StorageBackendError):
+    """Raised when disk space is insufficient."""
+
+    pass
+
+
 @dataclass
 class StorageMetadata:
     """Metadata for stored objects."""
@@ -198,11 +204,39 @@ class LocalStorageBackend(StorageBackend):
             checksum=checksum,
         )
 
+    def _validate_disk_space(self, bytes_needed: int) -> None:
+        """
+        Validate that sufficient disk space is available.
+        Raises DiskSpaceError if not enough space.
+        """
+        try:
+            stat = shutil.disk_usage(self.base_path)
+            available = stat.free
+
+            # Safety margin: require 10% more than needed
+            required = int(bytes_needed * 1.1)
+
+            if available < required:
+                logger.error(
+                    f"Insufficient disk space: need {required:,} bytes, "
+                    f"available {available:,} bytes"
+                )
+                raise DiskSpaceError(
+                    "write_dataframe",
+                    str(self.base_path),
+                    ValueError(f"Disk space insufficient: {available:,} < {required:,} bytes"),
+                )
+        except DiskSpaceError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not validate disk space: {e}")
+            # Don't fail if we can't check disk space
+
     @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="write_dataframe")
     def write_dataframe(
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
-        """Write DataFrame to Parquet file."""
+        """Write DataFrame to Parquet file with disk space validation."""
         self._check_circuit_breaker()
 
         try:
@@ -216,12 +250,16 @@ class LocalStorageBackend(StorageBackend):
             if full_path.exists() and mode != "overwrite":
                 raise FileExistsError(f"File {full_path} already exists")
 
+            # C2: Validate disk space BEFORE writing
+            estimated_bytes = int(df.memory_usage(deep=True).sum())
+            self._validate_disk_space(estimated_bytes)
+
             # Write to temp file first for atomic operation
             temp_path = full_path.with_suffix(PARQUET_EXT + TEMP_SUFFIX)
             try:
                 df.to_parquet(str(temp_path), engine="pyarrow", index=False)
 
-                # Atomic rename
+                # Atomic rename (more atomic than sequential operations)
                 if full_path.exists():
                     full_path.unlink()
                 temp_path.rename(full_path)
@@ -238,6 +276,9 @@ class LocalStorageBackend(StorageBackend):
             logger.debug(f"DataFrame written to {full_path}")
             return metadata
 
+        except DiskSpaceError:
+            self._record_failure(Exception("Disk space insufficient"))
+            raise
         except Exception as e:
             self._record_failure(e)
             raise StorageBackendError("write_dataframe", path, e) from e
@@ -269,7 +310,7 @@ class LocalStorageBackend(StorageBackend):
     def write_json(
         self, data: Dict[str, Any], path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
-        """Write JSON object to file."""
+        """Write JSON object to file with disk space validation."""
         self._check_circuit_breaker()
 
         try:
@@ -283,11 +324,16 @@ class LocalStorageBackend(StorageBackend):
             if full_path.exists() and mode != "overwrite":
                 raise FileExistsError(f"File {full_path} already exists")
 
+            # C2: Estimate and validate disk space
+            json_str = json.dumps(data, default=str, ensure_ascii=False)
+            estimated_bytes = len(json_str.encode("utf-8"))
+            self._validate_disk_space(estimated_bytes)
+
             # Write to temp file first
             temp_path = full_path.with_suffix(JSON_EXT + TEMP_SUFFIX)
             try:
                 with open(temp_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, default=str, ensure_ascii=False)
+                    f.write(json_str)
 
                 # Atomic rename
                 if full_path.exists():

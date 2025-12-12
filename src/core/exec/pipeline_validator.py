@@ -64,7 +64,10 @@ class PipelineValidator:
         node_configs: Dict[str, Dict[str, Any]],
         format_policy: Optional[FormatPolicy] = None,
     ) -> Dict[str, Any]:
-        """Validate hybrid pipeline and return detailed analysis."""
+        """Validate hybrid pipeline and return detailed analysis.
+
+        ER3 FIX: Now validates format compatibility bidirectionally.
+        """
         policy = format_policy or FormatPolicy()
 
         validation_result = {
@@ -104,6 +107,12 @@ class PipelineValidator:
             validation_result["warnings"].extend(
                 [issue for issue in format_issues if issue["severity"] == "warning"]
             )
+
+            # ER3 FIX: Add bidirectional format validation for hybrid pipelines
+            bidirectional_errors = PipelineValidator._validate_hybrid_format_compatibility(
+                batch_nodes, streaming_nodes, node_configs, policy
+            )
+            validation_result["errors"].extend(bidirectional_errors)
 
             resource_conflicts = PipelineValidator._validate_resource_conflicts(
                 batch_nodes, streaming_nodes, node_configs
@@ -514,6 +523,92 @@ class PipelineValidator:
             return normalized_deps
         else:
             return [str(dependencies)]
+
+    @staticmethod
+    def _validate_hybrid_format_compatibility(
+        batch_nodes: List[str],
+        streaming_nodes: List[str],
+        node_configs: Dict[str, Dict[str, Any]],
+        policy: FormatPolicy,
+    ) -> List[str]:
+        """Validate format compatibility in hybrid pipelines bidirectionally.
+
+        ER3 FIX: Validates that when streaming nodes depend on batch nodes,
+        the output format of batch nodes is compatible with input format of streaming nodes.
+        """
+        errors = []
+
+        # Check streaming nodes that depend on batch nodes
+        for streaming_node in streaming_nodes:
+            streaming_config = node_configs.get(streaming_node, {})
+            streaming_input = streaming_config.get("input", {})
+            streaming_format = streaming_input.get("format", "").lower()
+
+            dependencies = PipelineValidator._get_node_dependencies(streaming_config)
+            batch_deps = [dep for dep in dependencies if dep in batch_nodes]
+
+            for batch_dep in batch_deps:
+                batch_config = node_configs.get(batch_dep, {})
+                batch_output = batch_config.get("output", {})
+                batch_format = batch_output.get("format", "").lower()
+
+                errors.extend(
+                    PipelineValidator._check_hybrid_format_pair(
+                        batch_dep, batch_format, streaming_node, streaming_format, policy
+                    )
+                )
+
+        return errors
+
+    @staticmethod
+    def _check_hybrid_format_pair(
+        batch_node: str,
+        batch_format: str,
+        streaming_node: str,
+        streaming_format: str,
+        policy: FormatPolicy,
+    ) -> List[str]:
+        """Check format compatibility between a batch and streaming node pair."""
+        errors = []
+
+        if batch_format and streaming_format:
+            if not policy.are_compatible(batch_format, streaming_format):
+                errors.append(
+                    f"Incompatible format in hybrid pipeline: batch node '{batch_node}' "
+                    f"outputs format '{batch_format}' but streaming node '{streaming_node}' "
+                    f"expects format '{streaming_format}'. "
+                    f"Please ensure output format from batch matches expected input format for streaming."
+                )
+            else:
+                logger.debug(
+                    f"Format compatibility OK: {batch_node} ({batch_format}) -> "
+                    f"{streaming_node} ({streaming_format})"
+                )
+        else:
+            PipelineValidator._log_missing_formats(
+                batch_node, batch_format, streaming_node, streaming_format
+            )
+
+        return errors
+
+    @staticmethod
+    def _log_missing_formats(
+        batch_node: str,
+        batch_format: str,
+        streaming_node: str,
+        streaming_format: str,
+    ) -> None:
+        """Log warnings for missing format specifications."""
+        if not batch_format:
+            logger.warning(
+                f"Batch node '{batch_node}' output format not specified. "
+                f"Cannot validate compatibility with streaming node '{streaming_node}'."
+            )
+        if not streaming_format:
+            logger.warning(
+                f"Streaming node '{streaming_node}' input format not specified. "
+                f"Cannot validate compatibility with batch node '{batch_node}'."
+            )
 
     @staticmethod
     def validate_dataframe_schema(result_df: Any) -> None:

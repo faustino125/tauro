@@ -25,6 +25,7 @@ from core.cli.core import (
 )
 from core.cli.execution import ContextInitializer, PipelineExecutor
 from core.cli.template import handle_template_command
+from core.cli.formatters import PipelineStatusFormatter
 
 
 # Constants for help text to avoid duplication
@@ -36,6 +37,132 @@ HELP_PIPELINE_NAME = "Pipeline name"
 HELP_PIPELINE_NAME_TO_EXECUTE = "Pipeline name to execute"
 HELP_TIMEOUT_SECONDS = "Timeout in seconds"
 HELP_CONFIG_FILE = "Path to configuration file"
+
+
+# ===== Argument Validation Functions =====
+def validate_stream_run_arguments(args: argparse.Namespace) -> None:
+    """
+    Validate stream run subcommand arguments for consistency.
+    """
+    # Both config and pipeline are required (enforced by argparse)
+
+    # Validate mode compatibility
+    if args.mode not in ["sync", "async"]:
+        raise ValidationError(f"Invalid mode '{args.mode}'. Use 'sync' or 'async'")
+
+    # Validate hyperparams if provided
+    if args.hyperparams:
+        try:
+            json.loads(args.hyperparams)
+        except json.JSONDecodeError as e:
+            raise ValidationError(f"Invalid hyperparams JSON: {e}")
+
+    # Log-level validation (optional)
+    if hasattr(args, "log_level") and args.log_level not in [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    ]:
+        raise ValidationError(f"Invalid log-level '{args.log_level}'")
+
+
+def validate_stream_status_arguments(args: argparse.Namespace) -> None:
+    """
+    Validate stream status subcommand arguments.
+    """
+    # Config is required (enforced by argparse)
+
+    # Validate format if provided
+    if hasattr(args, "format") and args.format not in ["table", "json"]:
+        raise ValidationError(f"Invalid format '{args.format}'. Use 'table' or 'json'")
+
+
+def validate_stream_stop_arguments(args: argparse.Namespace) -> None:
+    """
+    Validate stream stop subcommand arguments.
+    """
+    # Both config and execution-id are required (enforced by argparse)
+
+    # Validate timeout
+    if hasattr(args, "timeout"):
+        if args.timeout <= 0:
+            raise ValidationError(f"Timeout must be positive, got {args.timeout}")
+        if args.timeout > 3600:  # Max 1 hour
+            logger.warning(f"Timeout {args.timeout}s is very long, consider reducing")
+
+
+def validate_run_arguments(args: argparse.Namespace) -> None:
+    """
+    Validate run subcommand arguments.
+    """
+    # Environment and pipeline are required
+    if not getattr(args, "env", None):
+        raise ValidationError("--env is required for pipeline execution")
+
+    if not getattr(args, "pipeline", None):
+        raise ValidationError("--pipeline is required for pipeline execution")
+
+    # Validate dates if provided
+    if getattr(args, "start_date", None) or getattr(args, "end_date", None):
+        try:
+            start = parse_iso_date(args.start_date) if args.start_date else None
+            end = parse_iso_date(args.end_date) if args.end_date else None
+            validate_date_range(start, end)
+        except ValidationError:
+            raise
+        except Exception as e:
+            raise ValidationError(f"Date validation error: {e}")
+
+    # Warn about conflicting options
+    if getattr(args, "validate_only", False) and getattr(args, "dry_run", False):
+        logger.warning("Both --validate-only and --dry-run specified. Will validate only.")
+
+
+def validate_template_arguments(args: argparse.Namespace) -> None:
+    """
+    Validate template subcommand arguments.
+    """
+    # Check if listing templates
+    if getattr(args, "list_templates", False):
+        return
+
+    # For template generation, template and project-name are required
+    if not getattr(args, "template", None):
+        raise ValidationError("--template is required for template generation")
+
+    if not getattr(args, "project_name", None):
+        raise ValidationError("--project-name is required for template generation")
+
+    # Validate project name (alphanumeric, underscores, hyphens)
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9_-]+$", args.project_name):
+        raise ValidationError(
+            "Project name must contain only alphanumeric characters, underscores, or hyphens"
+        )
+
+    # Validate format
+    if hasattr(args, "format") and args.format not in ["yaml", "json", "dsl"]:
+        raise ValidationError(f"Invalid format '{args.format}'. Use 'yaml', 'json', or 'dsl'")
+
+    # Check output path doesn't exist if provided
+    if getattr(args, "output_path", None):
+        output = Path(args.output_path)
+        if output.exists() and any(output.iterdir()):
+            raise ValidationError(f"Output path '{output}' already exists and is not empty")
+
+
+def validate_config_arguments(args: argparse.Namespace) -> None:
+    """
+    Validate config subcommand arguments.
+    """
+    # Ensure a config subcommand was specified
+    if not getattr(args, "config_command", None):
+        raise ValidationError(
+            "A config subcommand is required (e.g., list-configs, list-pipelines)"
+        )
 
 
 # Streaming CLI functions
@@ -131,14 +258,14 @@ def _status_streaming_impl(config: str, execution_id: Optional[str], format: str
             if format == "json":
                 print(json.dumps(status_info, indent=2, default=str))
             else:
-                _display_pipeline_status_table(status_info)
+                PipelineStatusFormatter.format_single_pipeline(status_info)
         else:
             status_list = _list_all_pipelines_status(executor)
 
             if format == "json":
                 print(json.dumps(status_list, indent=2, default=str))
             else:
-                _display_multiple_pipelines_status_table(status_list)
+                PipelineStatusFormatter.format_multiple_pipelines(status_list)
 
         return ExitCode.SUCCESS.value
 
@@ -187,156 +314,6 @@ def _list_all_pipelines_status(executor: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _fmt_ts(ts: Optional[Union[str, int, float]]) -> str:
-    """Format timestamp-like value into an ISO string, if possible."""
-    if ts is None or ts == "":
-        return "-"
-    if isinstance(ts, (int, float)):
-        try:
-            return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
-        except Exception:
-            return str(ts)
-    if isinstance(ts, str):
-        return ts
-    return str(ts)
-
-
-def _fmt_seconds(total_seconds: Optional[Union[int, float]]) -> str:
-    """Format seconds into a human-readable duration."""
-    if total_seconds is None:
-        return "-"
-    try:
-        s = int(total_seconds)
-    except Exception:
-        return str(total_seconds)
-
-    days, rem = divmod(s, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, seconds = divmod(rem, 60)
-
-    parts: List[str] = []
-    if days:
-        parts.append(f"{days}d")
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes:
-        parts.append(f"{minutes}m")
-    parts.append(f"{seconds}s")
-    return " ".join(parts)
-
-
-def _display_pipeline_status_table(status: Dict[str, Any]) -> None:
-    """Render a single pipeline status as a small table."""
-    execution_id = status.get("execution_id") or status.get("id") or "-"
-    name = status.get("pipeline_name") or status.get("name") or "-"
-    state = status.get("state") or status.get("status") or "-"
-    start_time = _fmt_ts(status.get("start_time") or status.get("started_at"))
-    last_update = _fmt_ts(status.get("last_update") or status.get("updated_at"))
-    uptime = _fmt_seconds(status.get("uptime_seconds") or status.get("uptime"))
-
-    print("")
-    print(f"Execution ID : {execution_id}")
-    print(f"Pipeline     : {name}")
-    print(f"State        : {state}")
-    print(f"Start Time   : {start_time}")
-    print(f"Last Update  : {last_update}")
-    print(f"Uptime       : {uptime}")
-    print("")
-
-    _display_nodes_table_if_present(status)
-
-
-def _display_nodes_table_if_present(status: Dict[str, Any]) -> None:
-    """Helper to display nodes table if nodes info is present in status."""
-    nodes: Optional[Sequence[Dict[str, Any]]] = None
-    for key in ("nodes", "node_status", "nodes_status"):
-        if isinstance(status.get(key), (list, tuple)):
-            nodes = status[key]
-            break
-
-    if not nodes:
-        return
-
-    headers = ["Node", "State", "Last Update", "Message"]
-    rows: List[List[str]] = []
-    for node in nodes:
-        node_name = node.get("name") or node.get("node") or "-"
-        node_state = node.get("state") or node.get("status") or "-"
-        node_updated = _fmt_ts(node.get("last_update") or node.get("updated_at"))
-        message = node.get("message") or node.get("error") or ""
-        rows.append([str(node_name), str(node_state), str(node_updated), str(message)])
-
-    _print_table(headers, rows)
-
-
-def _display_multiple_pipelines_status_table(
-    status_list: Union[List[Dict[str, Any]], Dict[str, Any]]
-) -> None:
-    """Render multiple pipeline statuses in a compact table."""
-    pipelines = _normalize_pipelines_list(status_list)
-
-    if not pipelines:
-        print("No streaming pipelines found.")
-        return
-
-    headers = [
-        "Execution ID",
-        "Pipeline",
-        "State",
-        "Start Time",
-        "Last Update",
-        "Uptime",
-    ]
-    rows = [_build_pipeline_row(p) for p in pipelines]
-
-    _print_table(headers, rows)
-
-
-def _normalize_pipelines_list(
-    status_list: Union[List[Dict[str, Any]], Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    """Extract a list of pipeline dicts from various possible input formats."""
-    if isinstance(status_list, dict):
-        for key in ("pipelines", "items", "data"):
-            value = status_list.get(key)
-            if isinstance(value, list):
-                return [r for r in value if isinstance(r, dict)]
-        if status_list and all(isinstance(v, dict) for v in status_list.values()):
-            return list(status_list.values())
-    elif isinstance(status_list, list):
-        return [r for r in status_list if isinstance(r, dict)]
-    return []
-
-
-def _build_pipeline_row(p: Dict[str, Any]) -> List[str]:
-    """Build a table row for a pipeline status dict."""
-    execution_id = p.get("execution_id") or p.get("id") or "-"
-    name = p.get("pipeline_name") or p.get("name") or "-"
-    state = p.get("state") or p.get("status") or "-"
-    start_time = _fmt_ts(p.get("start_time") or p.get("started_at"))
-    last_update = _fmt_ts(p.get("last_update") or p.get("updated_at"))
-    uptime = _fmt_seconds(p.get("uptime_seconds") or p.get("uptime"))
-    return [str(execution_id), str(name), str(state), start_time, last_update, uptime]
-
-
-def _print_table(headers: List[str], rows: List[List[str]]) -> None:
-    """Print a simple table with dynamic column widths using plain text."""
-    widths = [len(h) for h in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            widths[i] = max(widths[i], len(str(cell)))
-
-    fmt_parts = [f"{{:{w}}}" for w in widths]
-    fmt = "  ".join(fmt_parts)
-
-    sep = "  ".join("-" * w for w in widths)
-
-    print(fmt.format(*headers))
-    print(sep)
-    for row in rows:
-        print(fmt.format(*[str(c) for c in row]))
-
-
 class UnifiedArgumentParser:
     """Unified argument parser for all Tauro CLI commands."""
 
@@ -371,11 +348,12 @@ class UnifiedArgumentParser:
         )
 
         # Global options
-        parser.add_argument("--version", action="version", version="Tauro CLI 2.0.0")
+        # Use a custom version flag to render an elegant signature
+        parser.add_argument("--version", action="store_true", help="Show Tauro signature & version")
 
         # Create subparsers
         subparsers = parser.add_subparsers(
-            dest="subcommand", help="Available subcommands", required=True
+            dest="subcommand", help="Available subcommands", required=False
         )
 
         # Add subcommands
@@ -681,6 +659,10 @@ class UnifiedCLI:
         parser = UnifiedArgumentParser.create()
         parsed_args = parser.parse_args(args)
 
+        # If only --version is requested, skip logger setup to keep output clean
+        if getattr(parsed_args, "version", False) and not getattr(parsed_args, "subcommand", None):
+            return parsed_args
+
         # Setup logging based on subcommand
         log_level = getattr(parsed_args, "log_level", "INFO")
         log_file = getattr(parsed_args, "log_file", None)
@@ -696,20 +678,32 @@ class UnifiedCLI:
         return parsed_args
 
     def _dispatch_subcommand(self, parsed_args: argparse.Namespace) -> int:
-        """Dispatch to the appropriate subcommand handler."""
+        """Dispatch to the appropriate subcommand handler with argument validation."""
+        # Handle global --version before subcommands
+        if getattr(parsed_args, "version", False) and not getattr(parsed_args, "subcommand", None):
+            self._print_signature()
+            return ExitCode.SUCCESS.value
+
         subcommand = parsed_args.subcommand
 
-        if subcommand == "run":
-            return self._handle_run_command(parsed_args)
-        elif subcommand == "stream":
-            return self._handle_stream_command(parsed_args)
-        elif subcommand == "template":
-            return self._handle_template_command(parsed_args)
-        elif subcommand == "config":
-            return self._handle_config_command(parsed_args)
-        else:
-            logger.error(f"Unknown subcommand: {subcommand}")
-            return ExitCode.GENERAL_ERROR.value
+        try:
+            if subcommand == "run":
+                validate_run_arguments(parsed_args)
+                return self._handle_run_command(parsed_args)
+            elif subcommand == "stream":
+                return self._handle_stream_command(parsed_args)
+            elif subcommand == "template":
+                validate_template_arguments(parsed_args)
+                return self._handle_template_command(parsed_args)
+            elif subcommand == "config":
+                validate_config_arguments(parsed_args)
+                return self._handle_config_command(parsed_args)
+            else:
+                logger.error(f"Unknown subcommand: {subcommand}")
+                return ExitCode.GENERAL_ERROR.value
+        except ValidationError as e:
+            logger.error(f"Invalid arguments: {e}")
+            return ExitCode.VALIDATION_ERROR.value
 
     def _handle_run_command(self, parsed_args: argparse.Namespace) -> int:
         """Handle direct pipeline execution (legacy run command)."""
@@ -745,35 +739,51 @@ class UnifiedCLI:
         return self._execute_pipeline(context_init)
 
     def _handle_stream_command(self, parsed_args: argparse.Namespace) -> int:
-        """Handle streaming pipeline commands."""
+        """Handle streaming pipeline commands with argument validation."""
         stream_cmd = parsed_args.stream_command
 
-        handlers = {
-            "run": lambda: run_cli_impl(
-                config=getattr(parsed_args, "config", None),
-                pipeline=parsed_args.pipeline,
-                mode=getattr(parsed_args, "mode", "async"),
-                model_version=getattr(parsed_args, "model_version", None),
-                hyperparams=getattr(parsed_args, "hyperparams", None),
-            ),
-            "status": lambda: status_cli_impl(
-                config=getattr(parsed_args, "config", None),
-                execution_id=getattr(parsed_args, "execution_id", None),
-                format=getattr(parsed_args, "format", "table"),
-            ),
-            "stop": lambda: stop_cli_impl(
-                config=getattr(parsed_args, "config", None),
-                execution_id=parsed_args.execution_id,
-                timeout=getattr(parsed_args, "timeout", 60),
-            ),
-        }
+        try:
+            # Validate stream subcommand arguments
+            if stream_cmd == "run":
+                validate_stream_run_arguments(parsed_args)
+            elif stream_cmd == "status":
+                validate_stream_status_arguments(parsed_args)
+            elif stream_cmd == "stop":
+                validate_stream_stop_arguments(parsed_args)
+            else:
+                logger.error(f"Unknown stream command: {stream_cmd}")
+                return ExitCode.GENERAL_ERROR.value
 
-        handler = handlers.get(stream_cmd)
-        if not handler:
-            logger.error(f"Unknown stream command: {stream_cmd}")
-            return ExitCode.GENERAL_ERROR.value
+            handlers = {
+                "run": lambda: run_cli_impl(
+                    config=getattr(parsed_args, "config", None),
+                    pipeline=parsed_args.pipeline,
+                    mode=getattr(parsed_args, "mode", "async"),
+                    model_version=getattr(parsed_args, "model_version", None),
+                    hyperparams=getattr(parsed_args, "hyperparams", None),
+                ),
+                "status": lambda: status_cli_impl(
+                    config=getattr(parsed_args, "config", None),
+                    execution_id=getattr(parsed_args, "execution_id", None),
+                    format=getattr(parsed_args, "format", "table"),
+                ),
+                "stop": lambda: stop_cli_impl(
+                    config=getattr(parsed_args, "config", None),
+                    execution_id=parsed_args.execution_id,
+                    timeout=getattr(parsed_args, "timeout", 60),
+                ),
+            }
 
-        return handler()
+            handler = handlers.get(stream_cmd)
+            if not handler:
+                logger.error(f"Unknown stream command: {stream_cmd}")
+                return ExitCode.GENERAL_ERROR.value
+
+            return handler()
+
+        except ValidationError as e:
+            logger.error(f"Stream command validation failed: {e}")
+            return ExitCode.VALIDATION_ERROR.value
 
     def _handle_template_command(self, parsed_args: argparse.Namespace) -> int:
         """Handle template generation commands."""
@@ -920,6 +930,60 @@ def main() -> int:
     """Main entry point for unified Tauro CLI application."""
     cli = UnifiedCLI()
     return cli.run()
+
+
+def _get_version() -> str:
+    """Return the Tauro version string."""
+    return "0.1.3"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _center(text: str, width: int = 64) -> str:
+    return text.center(width)
+
+
+def _ansi(color: str) -> str:
+    colors = {
+        "cyan": "\033[96m",
+        "magenta": "\033[95m",
+        "yellow": "\033[93m",
+        "green": "\033[92m",
+        "reset": "\033[0m",
+    }
+    return colors.get(color, colors["reset"])
+
+
+def _signature_lines() -> List[str]:
+    subtitle = "Data Pipeline Framework"
+    version = f"v{_get_version()}"
+    art = [
+        "╔════════════════════════════════╗",
+        "║  ══════════ TAURO ══════════   ║",
+        "╚════════════════════════════════╝",
+    ]
+
+    lines = []
+    lines.append(_center(_ansi("cyan") + art[0] + _ansi("reset"), 64))
+    for line in art[1:]:
+        lines.append(_center(_ansi("cyan") + line + _ansi("reset"), 64))
+    lines.append("")
+    lines.append(_center(_ansi("yellow") + subtitle + _ansi("reset"), 64))
+    lines.append(_center(_ansi("green") + version + _ansi("reset"), 64))
+    lines.append("")
+    lines.append("")
+    return lines
+
+
+def print_signature() -> None:
+    for line in _signature_lines():
+        print(line)
+
+
+# Attach to UnifiedCLI for convenience
+setattr(UnifiedCLI, "_print_signature", staticmethod(print_signature))
 
 
 if __name__ == "__main__":

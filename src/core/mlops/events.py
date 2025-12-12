@@ -3,7 +3,8 @@ from __future__ import annotations
 import threading
 import time
 import weakref
-from collections import defaultdict
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -110,14 +111,20 @@ class EventEmitter:
     Thread-safe event emitter for MLOps components.
     """
 
-    def __init__(self, name: str = "default"):
+    def __init__(self, name: str = "default", max_history: int = 1000, max_workers: int = 4):
         self.name = name
         self._listeners: Dict[EventType, Set[EventCallback]] = defaultdict(set)
+        self._async_listeners: Dict[EventType, Set[EventCallback]] = defaultdict(set)
         self._wildcard_listeners: Set[EventCallback] = set()
+        self._async_wildcard_listeners: Set[EventCallback] = set()
         self._lock = threading.RLock()
-        self._event_history: List[Event] = []
-        self._max_history = 1000
+        # Use deque with maxlen to auto-remove old events (prevents memory leak)
+        self._event_history: deque = deque(maxlen=max_history)
+        self._max_history = max_history
         self._enabled = True
+        # Thread pool for async callbacks
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="event-")
+        logger.debug(f"EventEmitter '{name}' initialized with max_history={max_history}")
 
     def on(
         self,
@@ -160,6 +167,7 @@ class EventEmitter:
     ) -> Event:
         """
         Emit an event to all registered listeners.
+        Sync callbacks run inline, async callbacks run in thread pool.
         """
         if not self._enabled:
             return Event(event_type=event_type, timestamp="", data=data)
@@ -173,22 +181,25 @@ class EventEmitter:
         )
 
         with self._lock:
-            # Store in history
+            # Store in history (deque auto-removes old entries)
             self._event_history.append(event)
-            if len(self._event_history) > self._max_history:
-                self._event_history = self._event_history[-self._max_history :]
 
             # Get listeners (copy to avoid modification during iteration)
-            listeners = list(self._listeners.get(event_type, set()))
-            wildcard = list(self._wildcard_listeners)
+            sync_listeners = list(self._listeners.get(event_type, set()))
+            async_listeners = list(self._async_listeners.get(event_type, set()))
+            sync_wildcard = list(self._wildcard_listeners)
+            async_wildcard = list(self._async_wildcard_listeners)
 
-        # Call listeners outside lock
-        all_listeners = listeners + wildcard
-        for callback in all_listeners:
+        # Call sync listeners outside lock (blocking)
+        for callback in sync_listeners + sync_wildcard:
             try:
                 callback(event)
             except Exception as e:
-                logger.warning(f"Event listener error for {event_type.value}: {e}")
+                logger.warning(f"Sync event listener error for {event_type.value}: {e}")
+
+        # Submit async listeners to thread pool (non-blocking)
+        for callback in async_listeners + async_wildcard:
+            self._executor.submit(self._run_async_callback, callback, event)
 
         return event
 
@@ -200,20 +211,59 @@ class EventEmitter:
         """Disable event emission (for performance)."""
         self._enabled = False
 
+    def _run_async_callback(self, callback: EventCallback, event: Event) -> None:
+        """
+        Run callback in thread pool. Errors are logged but don't propagate.
+        """
+        try:
+            callback(event)
+        except Exception as e:
+            logger.warning(f"Async event listener error for {event.event_type.value}: {e}")
+
+    def subscribe_async(
+        self,
+        event_type: Union[EventType, str],
+        callback: EventCallback,
+    ) -> None:
+        """
+        Register an async event listener (runs in thread pool).
+        """
+        with self._lock:
+            if event_type == "*":
+                self._async_wildcard_listeners.add(callback)
+            else:
+                if isinstance(event_type, str):
+                    event_type = EventType(event_type)
+                self._async_listeners[event_type].add(callback)
+
+    def unsubscribe_async(
+        self,
+        event_type: Union[EventType, str],
+        callback: EventCallback,
+    ) -> None:
+        """
+        Remove an async event listener.
+        """
+        with self._lock:
+            if event_type == "*":
+                self._async_wildcard_listeners.discard(callback)
+            else:
+                if isinstance(event_type, str):
+                    event_type = EventType(event_type)
+                self._async_listeners[event_type].discard(callback)
+
     def get_history(
         self,
         event_type: Optional[EventType] = None,
         limit: int = 100,
     ) -> List[Event]:
         """
-        Get recent event history.
+        Get recent event history (deque-backed, auto-limited).
         """
         with self._lock:
             if event_type is None:
-                return list(self._event_history[-limit:])
-            return [e for e in self._event_history[-limit * 2 :] if e.event_type == event_type][
-                -limit:
-            ]
+                return list(self._event_history)[-limit:]
+            return [e for e in self._event_history if e.event_type == event_type][-limit:]
 
     def clear_history(self) -> None:
         """Clear event history."""

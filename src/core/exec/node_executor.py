@@ -2,23 +2,23 @@
 Copyright (c) 2025 Faustino Lopez Ramos. 
 For licensing information, see the LICENSE file in the project root
 """
-import importlib
 import inspect
-import re
 import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from concurrent.futures import as_completed as thread_as_completed
-from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional, Set
+from pathlib import Path
 
 from loguru import logger  # type: ignore
 
 from core.exec.commands import Command, MLNodeCommand, NodeCommand
 from core.exec.dependency_resolver import DependencyResolver
+from core.exec.import_security import SecureModuleImporter, ModuleImportError
 from core.exec.pipeline_validator import PipelineValidator
 from core.exec.resource_pool import get_default_resource_pool
+from core.exec.resource_manager import get_resource_manager, ResourceType
 
 
 class ThreadSafeExecutionState:
@@ -89,22 +89,104 @@ class ThreadSafeExecutionState:
             return bool(self.ready_queue or self.running) and not self.failed
 
 
-@lru_cache(maxsize=64)
-def _import_module_cached(module_path: str):
-    logger.debug(f"Importing module: {module_path}")
-    return importlib.import_module(module_path)
-
-
 class NodeExecutor:
-    """Enhanced node executor with ML support and optimized loading."""
+    """Enhanced node executor with ML support and secure module loading."""
 
-    def __init__(self, context, input_loader, output_manager, max_workers: int = 4):
+    # Default timeout for single node execution (30 minutes)
+    DEFAULT_NODE_TIMEOUT = 1800
+
+    def __init__(
+        self,
+        context,
+        input_loader,
+        output_manager,
+        max_workers: int = 4,
+        timeout: Optional[int] = None,
+    ):
         self.context = context
         self.input_loader = input_loader
         self.output_manager = output_manager
         self.max_workers = max_workers
         self.is_ml_layer = getattr(context, "is_ml_layer", False)
         self.resource_pool = get_default_resource_pool()
+
+        # Configure timeout for node execution
+        gs = getattr(context, "global_settings", {}) or {}
+        self.node_timeout = timeout or gs.get("node_timeout_seconds", self.DEFAULT_NODE_TIMEOUT)
+        logger.debug(f"NodeExecutor initialized with timeout: {self.node_timeout}s")
+
+        # Initialize secure module importer
+        self._init_secure_importer()
+
+    def _init_secure_importer(self) -> None:
+        """Initialize secure module importer with context-specific configuration."""
+        # Get allowed prefixes from context or use defaults
+        allowed_prefixes = getattr(self.context, "allowed_module_prefixes", None)
+
+        # Get additional search paths from context
+        additional_paths = self._gather_search_paths()
+
+        # Allow custom strict_mode from context, default to False (permissive)
+        strict_mode = getattr(self.context, "strict_module_import", False)
+
+        # Initialize secure importer
+        self.secure_importer = SecureModuleImporter(
+            allowed_prefixes=allowed_prefixes,
+            additional_search_paths=additional_paths,
+            strict_mode=strict_mode,
+        )
+
+        logger.debug(
+            f"Secure module importer initialized (strict={strict_mode}) "
+            f"with {len(additional_paths)} search paths"
+        )
+
+    def _gather_search_paths(self) -> List[Path]:
+        """Gather additional module search paths from context and environment.
+
+        Thread-safe: captures cwd once at the start to avoid race conditions.
+        """
+        paths = []
+
+        # Current working directory - capture once to avoid race conditions
+        try:
+            cwd = Path.cwd()
+            paths.append(cwd)
+            paths.append(cwd / "src")
+            paths.append(cwd / "lib")
+        except Exception as e:
+            logger.debug(f"Could not access current working directory: {e}")
+
+        # Config directory from context
+        try:
+            config_paths = getattr(self.context, "config_paths", None)
+            if isinstance(config_paths, dict) and config_paths:
+                first_path = next(iter(config_paths.values()))
+                parent = Path(first_path).parent
+                paths.append(parent)
+                paths.append(parent / "src")
+        except Exception:
+            pass
+
+        # Config file path if available
+        if hasattr(self.context, "_config_file_path"):
+            try:
+                config_file = Path(self.context._config_file_path)
+                paths.append(config_file.parent)
+                paths.append(config_file.parent / "src")
+            except Exception:
+                pass
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_paths = []
+        for path in paths:
+            path_str = str(path)
+            if path_str not in seen:
+                seen.add(path_str)
+                unique_paths.append(path)
+
+        return unique_paths
 
     def execute_single_node(
         self,
@@ -115,9 +197,10 @@ class NodeExecutor:
     ) -> None:
         """Execute a single node with enhanced ML support and error handling."""
         start_time = time.perf_counter()
+        resource_manager = get_resource_manager()
 
         # Use context manager for automatic resource cleanup
-        with self.resource_pool.node_context(node_name):
+        with resource_manager.resource_context(f"node_{node_name}"):
             try:
                 node_config = self._get_node_config(node_name)
                 function = self._load_node_function(node_config)
@@ -127,10 +210,11 @@ class NodeExecutor:
                 for idx, df in enumerate(input_dfs):
                     if df is not None:
                         resource_type = self._detect_resource_type(df)
-                        self.resource_pool.register_resource(
-                            node_id=node_name,
+                        resource_manager.register(
                             resource=df,
                             resource_type=resource_type,
+                            context_id=f"node_{node_name}",
+                            metadata={"index": idx, "stage": "input"},
                         )
 
                 command = self._create_enhanced_command(
@@ -148,10 +232,11 @@ class NodeExecutor:
                 # Register result resource for cleanup
                 if result_df is not None:
                     resource_type = self._detect_resource_type(result_df)
-                    self.resource_pool.register_resource(
-                        node_id=node_name,
+                    resource_manager.register(
                         resource=result_df,
                         resource_type=resource_type,
+                        context_id=f"node_{node_name}",
+                        metadata={"stage": "output"},
                     )
 
                 self._validate_and_save_enhanced_output(
@@ -170,31 +255,6 @@ class NodeExecutor:
                 duration = time.perf_counter() - start_time
                 logger.debug(f"Node '{node_name}' executed in {duration:.2f}s")
 
-    def _release_resources(self, node_name: str, *dataframes: Any) -> None:
-        """Register and mark resources for cleanup via resource pool.
-
-        Args:
-            node_name: Node identifier for resource grouping
-            *dataframes: DataFrames and other resources to track
-        """
-        for idx, df in enumerate(dataframes):
-            if df is None:
-                continue
-
-            # Detect resource type
-            resource_type = self._detect_resource_type(df)
-
-            # Register with pool for cleanup
-            try:
-                self.resource_pool.register_resource(
-                    node_id=node_name,
-                    resource=df,
-                    resource_type=resource_type,
-                )
-                logger.debug(f"Registered {resource_type} resource #{idx} for node '{node_name}'")
-            except Exception as e:
-                logger.warning(f"Failed to register resource for node '{node_name}': {str(e)}")
-
     def _detect_resource_type(self, resource: Any) -> str:
         """Detect the type of resource for proper cleanup.
 
@@ -202,33 +262,37 @@ class NodeExecutor:
             resource: The resource object to analyze
 
         Returns:
-            Resource type string (spark, pandas, gpu, connection, temp_file, generic)
+            Resource type string (from ResourceType constants)
         """
         # Check for Spark DataFrame/RDD
         if hasattr(resource, "unpersist") and hasattr(resource, "rdd"):
-            return "spark"
+            return ResourceType.SPARK_DF
 
         # Check for Pandas DataFrame
         if hasattr(resource, "columns") and hasattr(resource, "empty"):
-            return "pandas"
+            return ResourceType.PANDAS_DF
 
         # Check for GPU resources
         if hasattr(resource, "device") and hasattr(resource, "reset"):
-            return "gpu"
+            return ResourceType.GPU_RESOURCE
 
         # Check for database connections
         if hasattr(resource, "cursor") or hasattr(resource, "execute"):
-            return "connection"
+            return ResourceType.CONNECTION
+
+        # Check for file handles
+        if hasattr(resource, "read") and hasattr(resource, "close"):
+            return ResourceType.FILE_HANDLE
 
         # Check for file paths
-        if isinstance(resource, str):
+        if isinstance(resource, (str, Path)):
             import os
 
-            if os.path.exists(resource):
-                return "temp_file"
+            if os.path.exists(str(resource)):
+                return ResourceType.TEMP_FILE
 
         # Generic resource
-        return "generic"
+        return ResourceType.GENERIC
 
     def execute_nodes_parallel(
         self,
@@ -464,31 +528,43 @@ class NodeExecutor:
         dag: Dict[str, Set[str]],
         node_configs: Dict[str, Dict[str, Any]],
     ) -> None:
-        """Process completed nodes and update ready queue with enhanced tracking."""
+        """Process completed nodes with timeout protection to prevent deadlock.
+
+        ER1 FIX: Implements timeout-based deadlock prevention.
+        - Uses processing_timeout to prevent infinite waits
+        - Handles TimeoutError explicitly
+        - Removes futures as they complete
+        """
         if execution_state.get_running_count() == 0:
             return
 
         future_list = list(execution_state.running.keys())
         completed_futures = []
 
+        # Use context timeout with safety margin for node processing
+        max_timeout = getattr(self.context, "execution_timeout_seconds", 3600)
+        processing_timeout = min(30, max_timeout / 2)  # 30s or half of max
+
         try:
-            for future in thread_as_completed(future_list, timeout=10):
+            for future in thread_as_completed(future_list, timeout=processing_timeout):
                 completed_futures.append(future)
-                node_info = execution_state.running.get(future)
+                node_info = execution_state.remove_running_future(future)
                 if not node_info:
                     continue
+
                 node_name = node_info["node_name"]
 
                 try:
-                    future.result()
+                    # Get result with safety timeout to prevent hanging
+                    future.result(timeout=5)
 
-                    result = {
+                    result_dict = {
                         "status": "success",
                         "start_time": node_info["start_time"],
                         "end_time": time.time(),
                         "config": node_info["config"],
                     }
-                    execution_state.mark_completed(node_name, result)
+                    execution_state.mark_completed(node_name, result_dict)
 
                     logger.info(f"Node '{node_name}' completed successfully")
 
@@ -497,26 +573,50 @@ class NodeExecutor:
                     )
                     execution_state.add_to_ready_queue(newly_ready)
 
+                except TimeoutError as te:
+                    # Node execution exceeded timeout - mark as failed
+                    error_info = {
+                        "status": "failed",
+                        "error": "Node execution timeout exceeded",
+                        "error_type": "TimeoutError",
+                        "start_time": node_info["start_time"],
+                        "end_time": time.time(),
+                        "config": node_info["config"],
+                    }
+                    execution_state.mark_failed(node_name, error_info)
+                    logger.error(f"Node '{node_name}' exceeded timeout: {te}")
+                    execution_state.failed = True
+                    break
+
                 except Exception as e:
+                    # Node execution failed - mark as failed
                     error_info = {
                         "status": "failed",
                         "error": str(e),
+                        "error_type": type(e).__name__,
                         "start_time": node_info["start_time"],
                         "end_time": time.time(),
                         "config": node_info["config"],
                     }
                     execution_state.mark_failed(node_name, error_info)
                     logger.error(f"Node '{node_name}' failed: {str(e)}")
+                    execution_state.failed = True
                     break
 
         except TimeoutError:
-            logger.debug("Timeout waiting for node completion, will retry...")
+            # Timeout waiting for ANY node completion
+            logger.warning(
+                f"Timeout ({processing_timeout}s) waiting for node completion. "
+                f"{execution_state.get_running_count()} nodes still running."
+            )
         except Exception as e:
             logger.error(f"Unexpected error in _process_completed_nodes: {str(e)}")
             execution_state.failed = True
 
+        # Ensure all completed futures are properly cleaned up
         for future in completed_futures:
-            execution_state.remove_running_future(future)
+            if execution_state.running.get(future):
+                execution_state.remove_running_future(future)
 
         if execution_state.failed:
             self._cancel_all_futures(execution_state.running)
@@ -693,139 +793,30 @@ class NodeExecutor:
         return node
 
     def _load_node_function(self, node: Dict[str, Any]) -> Callable:
-        """Load a node's function with comprehensive validation."""
+        """Load a node's function with comprehensive validation and security."""
         module_path = node.get("module")
         function_name = node.get("function")
 
         if not module_path or not function_name:
             raise ValueError("Node configuration must include 'module' and 'function'")
 
-        module = self._import_module_with_fallback(module_path)
-        func = self._get_function_from_module(module, function_name, module_path)
-        self._validate_function_signature(func, function_name)
-        return func
-
-    def _import_module_with_fallback(self, module_path: str):
-        """Import module with security validation and fallback."""
-        # Security validation: check for safe module path
-        if not self._is_safe_module_path(module_path):
-            raise ValueError(
-                f"Invalid or potentially unsafe module path: '{module_path}'. "
-                "Module paths must contain only alphanumeric characters, underscores, and dots."
-            )
-
-        # Check whitelist of allowed prefixes (configurable)
-        allowed_prefixes = getattr(
-            self.context,
-            "allowed_module_prefixes",
-            ["core.", "nodes.", "custom_nodes.", "src.", "lib."],
-        )
-
-        if not any(module_path.startswith(prefix) for prefix in allowed_prefixes):
-            logger.warning(
-                f"Importing non-standard module '{module_path}' - not in whitelist: {allowed_prefixes}"
-            )
-
         try:
-            return _import_module_cached(module_path)
-        except ImportError as e:
-            logger.debug(
-                f"Initial import failed for '{module_path}', trying fallback import paths: {e}"
+            # Use secure importer to load function
+            func = self.secure_importer.get_function_from_module(module_path, function_name)
+
+            # Validate function signature
+            self._validate_function_signature(func, function_name)
+
+            return func
+
+        except ModuleImportError as e:
+            logger.error(f"Security validation failed for module '{module_path}': {e}")
+            raise ValueError(f"Cannot load node function: {e}") from e
+        except Exception as e:
+            logger.error(
+                f"Unexpected error loading function '{function_name}' from '{module_path}': {e}"
             )
-            import importlib
-            import sys
-            from pathlib import Path
-
-            candidates = self._gather_import_candidates()
-            uniq_candidates = self._deduplicate_candidates(candidates)
-            added = self._add_candidates_to_syspath(uniq_candidates)
-
-            try:
-                module = importlib.import_module(module_path)
-            except Exception as e2:
-                logger.error(
-                    f"Failed to import module '{module_path}' after adding candidates: {e2}"
-                )
-                self._remove_candidates_from_syspath(added, sys)
-                raise ImportError(f"Cannot import module '{module_path}': {str(e)}")
-            finally:
-                self._remove_candidates_from_syspath(added, sys)
-            return module
-
-    def _is_safe_module_path(self, module_path: str) -> bool:
-        """Validate that module path is safe (no injection attempts)."""
-        # Only allow alphanumeric, underscores, and dots
-        safe_pattern = re.compile(r"^[a-zA-Z0-9_\.]+$")
-        return bool(safe_pattern.match(module_path))
-
-    def _gather_import_candidates(self):
-        from pathlib import Path
-
-        candidates = []
-        try:
-            cwd = Path.cwd()
-            candidates.extend([str(cwd), str(cwd / "src"), str(cwd / "lib")])
-        except Exception:
-            pass
-
-        try:
-            cp = getattr(self.context, "config_paths", None)
-            if isinstance(cp, dict) and cp:
-                first = next(iter(cp.values()))
-                p = Path(first)
-                candidates.append(str(p.parent))
-                candidates.append(str(p.parent / "src"))
-        except Exception:
-            pass
-        return candidates
-
-    def _deduplicate_candidates(self, candidates):
-        seen = set()
-        return [c for c in candidates if c and not (c in seen or seen.add(c))]
-
-    def _add_candidates_to_syspath(self, uniq_candidates):
-        import sys
-        from pathlib import Path
-
-        added = []
-        for c in uniq_candidates:
-            try:
-                pc = Path(c)
-                if pc.exists() and pc.is_dir() and c not in sys.path:
-                    sys.path.insert(0, c)
-                    added.append(c)
-                    logger.debug(f"Temporarily added to sys.path: {c}")
-            except Exception:
-                continue
-        return added
-
-    def _remove_candidates_from_syspath(self, added, sys):
-        for c in added:
-            try:
-                while c in sys.path:
-                    sys.path.remove(c)
-            except Exception:
-                pass
-
-    def _get_function_from_module(self, module, function_name, module_path):
-        if not hasattr(module, function_name):
-            available_funcs = [
-                attr
-                for attr in dir(module)
-                if callable(getattr(module, attr)) and not attr.startswith("_")
-            ]
-            available_str = ", ".join(available_funcs[:5])
-            if len(available_funcs) > 5:
-                available_str += f", ... (total: {len(available_funcs)})"
-
-            raise AttributeError(
-                f"Function '{function_name}' not found in module '{module_path}'. "
-                f"Available functions: {available_str}"
-            )
-        func = getattr(module, function_name)
-        if not callable(func):
-            raise TypeError(f"Object '{function_name}' in module '{module_path}' is not callable")
-        return func
+            raise
 
     def _validate_function_signature(self, func, function_name):
         try:

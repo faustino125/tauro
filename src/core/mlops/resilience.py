@@ -517,13 +517,14 @@ class CleanupManager:
                 logger.debug(f"Unregistered cleanup task: {name}")
             return removed
 
-    def execute(self, timeout_per_task: float = 5.0) -> Dict[str, bool]:
+    def execute(self, timeout_per_task: float = 5.0, silent: bool = False) -> Dict[str, bool]:
         """
         Execute all cleanup tasks.
         """
         with self._lock:
             if self._executed:
-                logger.warning("Cleanup already executed")
+                if not silent:
+                    logger.warning("Cleanup already executed")
                 return {}
 
             self._executed = True
@@ -538,22 +539,29 @@ class CleanupManager:
                     task.callback()
                     elapsed = time.time() - start
 
-                    if elapsed > timeout_per_task:
+                    if not silent and elapsed > timeout_per_task:
                         logger.warning(
                             f"Cleanup task '{task.name}' took {elapsed:.2f}s "
                             f"(expected < {timeout_per_task}s)"
                         )
 
                     results[task.name] = True
-                    logger.debug(f"Cleanup task '{task.name}' completed")
+                    if not silent:
+                        logger.debug(f"Cleanup task '{task.name}' completed")
 
                 except Exception as e:
                     results[task.name] = False
-                    logger.error(f"Cleanup task '{task.name}' failed: {e}")
+                    if not silent:
+                        logger.error(f"Cleanup task '{task.name}' failed: {e}")
 
-            logger.info(
-                f"Cleanup completed: {sum(results.values())}/{len(results)} tasks successful"
-            )
+            if not silent:
+                if results:
+                    logger.info(
+                        f"Cleanup completed: {sum(results.values())}/{len(results)} tasks successful"
+                    )
+                else:
+                    # No tasks: avoid noisy logs on simple invocations like --version
+                    pass
             return results
 
     def reset(self) -> None:
@@ -590,9 +598,9 @@ import atexit
 def _atexit_cleanup():
     """Run cleanup on process exit."""
     try:
-        _cleanup_manager.execute()
+        _cleanup_manager.execute(silent=True)
     except Exception as e:
-        logger.error(f"Error during atexit cleanup: {e}")
+        pass
 
 
 atexit.register(_atexit_cleanup)

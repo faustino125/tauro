@@ -29,7 +29,8 @@ class PathValidator:
     @staticmethod
     def validate_path(path: str, base_path: Optional[Path] = None) -> Path:
         """
-        Validate and sanitize a path.
+        Validate and sanitize a path with improved security.
+        C5: Better path validation prevents traversal attacks.
         """
         if not path or not isinstance(path, str):
             raise ValidationError("Path must be non-empty string")
@@ -39,19 +40,34 @@ class PathValidator:
         if path_obj.is_absolute():
             raise ValidationError(f"Absolute paths not allowed: {path}")
 
-        # 2. Check for parent directory traversal
+        # 2. Check for obvious parent directory traversal
         if ".." in path or "~" in path:
             raise ValidationError(f"Directory traversal not allowed: {path}")
 
-        # 3. Resolve path
+        # 3. Resolve and validate path is within base directory
         if base_path:
-            full_path = (base_path / path).resolve()
             base_resolved = base_path.resolve()
+            # Resolve path relative to base, then check it's still within base
+            full_path = (base_resolved / path).resolve()
 
+            # Verify resolved path is within base directory
             try:
                 full_path.relative_to(base_resolved)
             except ValueError:
-                raise ValidationError(f"Path '{path}' is outside base directory '{base_path}'")
+                raise ValidationError(
+                    f"Path '{path}' resolves to '{full_path}' which is outside "
+                    f"base directory '{base_resolved}'"
+                )
+
+            # Additional check: ensure no symlinks escape the sandbox
+            # (Note: This is optional for extra security)
+            # current = base_resolved
+            # for part in Path(path).parts:
+            #     current = current / part
+            #     if current.is_symlink():
+            #         logger.warning(f"Symlink found in path: {current}")
+            #         # Uncomment below to disallow symlinks
+            #         # raise ValidationError(f"Symlinks not allowed: {current}")
 
             return full_path
 

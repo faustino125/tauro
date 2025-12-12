@@ -2,11 +2,20 @@
 Copyright (c) 2025 Faustino Lopez Ramos. 
 For licensing information, see the LICENSE file in the project root
 """
-from typing import ClassVar, Set, List
+from typing import ClassVar, Set, List, Any
 import re
 from loguru import logger  # type: ignore
 
 from core.io.exceptions import ConfigurationError
+
+# Try to import sqlglot for AST-based parsing (preferred)
+try:
+    import sqlglot  # type: ignore
+
+    SQLGLOT_AVAILABLE = True
+except ImportError:
+    SQLGLOT_AVAILABLE = False
+    sqlglot = None
 
 
 class SQLSanitizer:
@@ -51,7 +60,7 @@ class SQLSanitizer:
 
     @classmethod
     def sanitize_query(cls, query: str) -> str:
-        """Robust SQL query sanitization."""
+        """Robust SQL query sanitization using AST parsing when available."""
         if not query or not isinstance(query, str):
             raise ConfigurationError("Query must be a non-empty string") from None
 
@@ -61,23 +70,14 @@ class SQLSanitizer:
         if not query:
             raise ConfigurationError("Query cannot be empty after stripping whitespace") from None
 
-        normalized_query = re.sub(r"\s+", " ", query)
-
-        if not cls._is_select_query(normalized_query):
-            raise ConfigurationError(
-                "Only SELECT queries are allowed. Query must start with SELECT."
-            ) from None
-
-        masked_for_checks = cls._mask_string_literals(normalized_query)
-
-        cls._check_comment_safety(normalized_query)
-
-        cls._check_dangerous_keywords(masked_for_checks)
-        cls._check_suspicious_patterns(masked_for_checks)
-        cls._check_multiple_statements(normalized_query)
-
-        logger.debug("SQL query passed security validation")
-        return original_query
+        # Use AST-based parsing if sqlglot is available (more secure)
+        if SQLGLOT_AVAILABLE:
+            logger.debug("Using sqlglot AST parser for SQL validation")
+            return cls._sanitize_with_sqlglot(original_query)
+        else:
+            # Fallback to regex-based validation
+            logger.debug("sqlglot not available, using regex-based validation (less secure)")
+            return cls._sanitize_with_regex(original_query)
 
     @classmethod
     def _is_select_query(cls, query: str) -> bool:
@@ -85,6 +85,90 @@ class SQLSanitizer:
         clean_query = cls._remove_comments(query)
         clean_query = clean_query.strip().lower()
         return clean_query.startswith("select ") or clean_query.startswith("with ")
+
+    @classmethod
+    def _sanitize_with_sqlglot(cls, query: str) -> str:
+        """Sanitize query using AST-based parsing with sqlglot (more secure)."""
+        try:
+            parsed = sqlglot.parse_one(query, read="spark")  # Use Spark dialect
+
+            if parsed is None:
+                raise ConfigurationError("Failed to parse SQL query")
+
+            # Validate query type using AST
+            query_type = type(parsed).__name__
+            allowed_types = ("Select", "CTE", "With")
+
+            if query_type not in allowed_types:
+                raise ConfigurationError(
+                    f"Only SELECT and WITH queries are allowed. Got: {query_type}"
+                )
+
+            # Check for dangerous operations in AST
+            cls._check_ast_for_dangerous_operations(parsed)
+
+            logger.debug("Query validated successfully using sqlglot AST parser")
+            return query
+
+        except sqlglot.ParseError as e:
+            raise ConfigurationError(f"Invalid SQL syntax: {str(e)}") from e
+        except ConfigurationError:
+            raise
+        except Exception as e:
+            logger.warning(f"sqlglot validation failed, falling back to regex: {e}")
+            # Fall back to regex validation
+            return cls._sanitize_with_regex(query)
+
+    @classmethod
+    def _check_ast_for_dangerous_operations(cls, parsed: Any) -> None:
+        """Check AST for dangerous SQL operations."""
+        try:
+            # Check for DROP, DELETE, INSERT, UPDATE, CREATE, ALTER, TRUNCATE, etc.
+            dangerous_ops = (
+                "Drop",
+                "Delete",
+                "Insert",
+                "Update",
+                "Create",
+                "Alter",
+                "Truncate",
+                "Merge",
+                "Execute",
+                "Call",
+            )
+
+            for op_type in dangerous_ops:
+                # Look for these operation types in the AST
+                if hasattr(sqlglot, op_type):
+                    op_class = getattr(sqlglot, op_type)
+                    if parsed.find(op_class):
+                        raise ConfigurationError(f"Query contains forbidden operation: {op_type}")
+        except ConfigurationError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not fully validate AST structure: {e}")
+            # If we can't validate completely, still accept if it parsed as SELECT/WITH
+
+    @classmethod
+    def _sanitize_with_regex(cls, original_query: str) -> str:
+        """Sanitize query using regex-based validation (fallback, less secure)."""
+        query = original_query.strip()
+        normalized_query = re.sub(r"\s+", " ", query)
+
+        if not cls._is_select_query(normalized_query):
+            raise ConfigurationError(
+                "Only SELECT and WITH queries are allowed. Query must start with SELECT or WITH."
+            ) from None
+
+        masked_for_checks = cls._mask_string_literals(normalized_query)
+
+        cls._check_comment_safety(normalized_query)
+        cls._check_dangerous_keywords(masked_for_checks)
+        cls._check_suspicious_patterns(masked_for_checks)
+        cls._check_multiple_statements(normalized_query)
+
+        logger.debug("SQL query passed regex-based security validation (sqlglot not available)")
+        return original_query
 
     @classmethod
     def _remove_comments(cls, query: str) -> str:

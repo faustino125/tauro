@@ -27,13 +27,27 @@ class SparkReaderBase(BaseIO):
         logger.info(f"Reading {fmt.upper()} data from: {filepath}")
         try:
             reader = spark.read.options(**config.get("options", {})).format(fmt)
+
+            # Load data first
+            df = reader.load(filepath)
+            logger.debug(f"Successfully loaded {fmt.upper()} from {filepath}")
+
+            # Apply partition filter if specified
             partition_filter = config.get("partition_filter")
             if partition_filter:
-                df = reader.load(filepath)
                 logger.info(f"Applying partition_filter: {partition_filter}")
-                return df.where(partition_filter)
-            else:
-                return reader.load(filepath)
+                try:
+                    # Use filter() for better optimization and clarity
+                    df = df.filter(partition_filter)
+                    logger.debug("Partition filter applied successfully")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not apply partition_filter (may not be optimizable): {e}. "
+                        f"Attempting with where() as fallback."
+                    )
+                    df = df.where(partition_filter)
+
+            return df
         except Exception as e:
             raise ReadOperationError(
                 f"Spark failed to read {fmt.upper()} from {filepath}: {e}"
@@ -93,18 +107,31 @@ class DeltaReader(SparkReaderBase):
             version = config.get("versionAsOf") or config.get("version")
             timestamp = config.get("timestampAsOf") or config.get("timestamp")
 
-            partition_filter = config.get("partition_filter")
-
+            # Load data with time-travel if specified
             if version is not None:
+                logger.info(f"Loading Delta with versionAsOf={version}")
                 df = reader.option("versionAsOf", version).load(source)
             elif timestamp is not None:
+                logger.info(f"Loading Delta with timestampAsOf={timestamp}")
                 df = reader.option("timestampAsOf", timestamp).load(source)
-            else:
-                df = reader.load(source)
-
+            # Apply partition filter if specified
+            partition_filter = config.get("partition_filter")
             if partition_filter:
                 logger.info(f"Applying partition_filter: {partition_filter}")
-                return df.where(partition_filter)
+            partition_filter = config.get("partition_filter")
+            if partition_filter:
+                logger.info(f"Applying partition_filter: {partition_filter}")
+                try:
+                    # Use filter() for better optimization
+                    df = df.filter(partition_filter)
+                    logger.debug("Partition filter applied successfully")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not apply partition_filter: {e}. "
+                        f"Attempting with where() as fallback."
+                    )
+                    df = df.where(partition_filter)
+
             return df
         except ReadOperationError:
             raise
@@ -113,7 +140,10 @@ class DeltaReader(SparkReaderBase):
 
 
 class PickleReader(SparkReaderBase):
-    """Reader for Pickle format."""
+    """Reader for Pickle format with built-in memory safety."""
+
+    DEFAULT_MAX_RECORDS = 10000
+    ABSOLUTE_MAX_RECORDS = 1_000_000
 
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         """Read Pickle data from source."""
@@ -161,47 +191,21 @@ class PickleReader(SparkReaderBase):
         return data
 
     def _read_distributed_pickle(self, source: str, config: Dict[str, Any]) -> Any:
-        """Read pickle files using Spark distributed processing."""
+        """Read pickle files using Spark distributed processing with memory safety."""
         spark = self._ctx_spark()
         to_dataframe = config.get("to_dataframe", True)
 
-        # Default safer behavior: apply limit if not specified
-        try:
-            raw_max = int(config.get("max_records", -1))
-        except Exception:
-            raw_max = -1
+        max_records = self._get_safe_max_records(config)
 
-        ABSOLUTE_MAX_RECORDS = 1_000_000  # Hard limit to prevent extreme OOM
-
-        if raw_max < 0:
-            max_records = 10000  # safe default limit
-            logger.warning(
-                "No 'max_records' specified for distributed pickle read. "
-                "Applying default limit of 10000 records to avoid driver OOM. "
-                "Set config.max_records=0 to read all, or a positive integer to customize."
-            )
-        elif raw_max == 0:
-            logger.critical(
-                "Reading ALL pickle records without limit (max_records=0). "
-                "This may cause driver Out-Of-Memory errors with large datasets. "
-                "Consider setting a reasonable limit or increasing driver memory."
-            )
-            max_records = 0  # no limit
-        elif raw_max > ABSOLUTE_MAX_RECORDS:
-            logger.error(
-                f"Requested max_records={raw_max} exceeds absolute limit of {ABSOLUTE_MAX_RECORDS}. "
-                f"Using limit of {ABSOLUTE_MAX_RECORDS} to prevent OOM."
-            )
-            max_records = ABSOLUTE_MAX_RECORDS
-        else:
-            max_records = raw_max
+        logger.info(f"Reading distributed pickle with max_records={max_records}")
 
         try:
             bf_df = spark.read.format("binaryFile").load(source)
+
             if max_records and max_records > 0:
-                logger.warning(
-                    f"Limiting distributed pickle read to {max_records} records to avoid driver OOM. "
-                    "Override with config.max_records=0 to read all."
+                logger.info(
+                    f"Limiting distributed pickle read to {max_records} records to prevent driver OOM. "
+                    f"(Override with config['max_records']=0 to read all)"
                 )
                 bf_df = bf_df.limit(max_records)
         except Exception as e:
@@ -209,7 +213,6 @@ class PickleReader(SparkReaderBase):
                 f"binaryFile datasource is unavailable; cannot read pickle(s): {e}"
             ) from e
 
-        # Use RDD map to deserialize in executors instead of driver
         try:
             rdd = bf_df.select("content").rdd.map(lambda row: pickle.loads(bytes(row[0])))
         except Exception as e:
@@ -217,20 +220,47 @@ class PickleReader(SparkReaderBase):
 
         if not to_dataframe:
             try:
-                # If max_records was set, bf_df is already limited, so collect() is safe-ish
-                # If max_records=0 (unlimited), this might still OOM driver if data is huge
                 return rdd.collect()
             except Exception as e:
                 raise ReadOperationError(f"Failed to collect unpickled objects: {e}") from e
 
         try:
-            # Attempt to create DataFrame from RDD of objects (expects dicts/Rows)
             return spark.createDataFrame(rdd)
         except Exception as e:
             raise ReadOperationError(
                 f"Failed to create DataFrame from pickled objects. "
                 f"Ensure pickled objects are dicts/Rows or set to_dataframe=False. Error: {e}"
             ) from e
+
+    def _get_safe_max_records(self, config: Dict[str, Any]) -> int:
+        """Calculate safe max_records value with validation and warnings."""
+        try:
+            raw_max = int(config.get("max_records", -1))
+        except (ValueError, TypeError):
+            raw_max = -1
+
+        if raw_max < 0:
+            logger.warning(
+                f"No 'max_records' specified for distributed pickle read. "
+                f"Applying default limit of {self.DEFAULT_MAX_RECORDS} records to avoid driver OOM. "
+                f"Set config['max_records']=0 to read all, or a positive integer to customize."
+            )
+            return self.DEFAULT_MAX_RECORDS
+        elif raw_max == 0:
+            logger.critical(
+                "Reading ALL pickle records without limit (max_records=0). "
+                "This may cause driver Out-Of-Memory errors with large datasets. "
+                "Consider setting a reasonable limit or increasing driver memory."
+            )
+            return 0  # no limit
+        elif raw_max > self.ABSOLUTE_MAX_RECORDS:
+            logger.error(
+                f"Requested max_records={raw_max} exceeds absolute limit of {self.ABSOLUTE_MAX_RECORDS}. "
+                f"Using limit of {self.ABSOLUTE_MAX_RECORDS} to prevent OOM."
+            )
+            return self.ABSOLUTE_MAX_RECORDS
+        else:
+            return raw_max
 
 
 class AvroReader(SparkReaderBase):

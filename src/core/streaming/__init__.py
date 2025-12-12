@@ -56,8 +56,8 @@ from core.streaming.writers import (
 )
 
 # Managers
-from core.streaming.query_manager import StreamingQueryManager
-from core.streaming.pipeline_manager import StreamingPipelineManager
+from core.streaming.query_manager import StreamingQueryManager, TransformationRegistry
+from core.streaming.pipeline_manager import StreamingPipelineManager, QueryHealthMonitor
 
 __all__ = [
     # Constants and Enums
@@ -105,4 +105,7 @@ __all__ = [
     # Managers
     "StreamingQueryManager",
     "StreamingPipelineManager",
+    # Security and Monitoring
+    "TransformationRegistry",
+    "QueryHealthMonitor",
 ]

@@ -1,69 +1,194 @@
 # tauro.config
 
-A cohesive, production-ready configuration layer for Tauro that loads, validates, and orchestrates pipeline configuration and Spark session lifecycle in a consistent, extensible manner. It is designed to work seamlessly with:
+> A production-ready configuration layer for data pipelines with support for ML, streaming, and batch workloads.
 
-- **File-based configs:** YAML, JSON, Python modules for environment-specific configurations
-- **In-memory dict configs:** Ideal for testing, prototyping, and quick setups
-- **Unified loading interface:** Consistent API regardless of source type
+**tauro.config** provides a comprehensive, extensible configuration management solution that handles:
+- 🔄 **Multi-source loading**: YAML, JSON, Python, DSL files + in-memory dicts
+- ✅ **Comprehensive validation**: Structure, pipeline integrity, format compatibility
+- 🔗 **Variable interpolation**: Environment-first precedence with smart defaults
+- ⚡ **Spark lifecycle management**: Thread-safe singleton for local/Databricks modes
+- 🎯 **ML-aware configuration**: Hyperparameters, model versions, experiment tracking
+- 🌊 **Streaming support**: Format policies, checkpoint management, compatibility rules
+
+## Quick Start
+
+```python
+from tauro.config import Context
+
+# Create context from files (or dicts)
+context = Context(
+    global_settings="config/global.yml",
+    pipelines_config="config/pipelines.yml",
+    nodes_config="config/nodes.yml",
+    input_config="config/input.yml",
+    output_config="config/output.yml",
+)
+
+# Access Spark and configuration
+spark = context.spark
+pipeline = context.get_pipeline("daily_etl")
+
+# Iterate over nodes
+for node in pipeline["nodes"]:
+    print(f"Execute: {node['name']} -> {node['function']}")
+```
+
+---
 
 ## Overview
 
-The `tauro.config` module provides a comprehensive configuration management solution that centralizes:
+The `tauro.config` module centralizes:
 
-- **Configuration Loading & Merging:** Unified loading from multiple sources with factory pattern
-- **Variable Interpolation:** Dynamic path and configuration value replacement with environment-first precedence
-- **Validation Framework:** Comprehensive configuration and pipeline structure validation
-- **Format Policy Management:** Streaming-aware format compatibility and validation rules
-- **Spark Session Lifecycle:** Robust singleton Spark session creation for local, Databricks, and distributed modes
-- **IO/Execution Integration:** Convenience attributes bridging configuration to downstream layers
+| Feature | Benefit |
+|---------|---------|
+| **Configuration Loading** | Unified API for YAML, JSON, Python, DSL, and dict sources |
+| **Variable Interpolation** | Dynamic path/value replacement with environment variable precedence |
+| **Validation Framework** | Multi-layer validation: structure → pipeline → format → ML-specific |
+| **Format Policy** | Streaming-aware compatibility rules for batch/streaming pipelines |
+| **Spark Lifecycle** | Thread-safe singleton with caching, validation, and cleanup |
+| **Context Specialization** | Auto-detection of ML/Streaming/Hybrid pipeline types |
 
 ## Key Components
 
-- **Context:** Central orchestrator for the entire configuration lifecycle. Manages all configuration sources, Spark session, and exposes convenience attributes for IO and execution layers.
-- **PipelineManager:** Validates pipeline definitions and expands node references into full, validated node configurations with dependency resolution.
-- **ConfigLoaderFactory:** Unified factory for loading configurations from YAML, JSON, Python modules, or in-memory dicts with automatic source detection.
-- **VariableInterpolator:** Advanced variable replacement in strings and file paths with environment variable precedence and fallback to variables dict.
-- **Validators:** Specialized validators for configuration structure, pipeline integrity, and format policy compliance.
-- **SparkSessionFactory:** Robust, singleton Spark session creation and management for local, Databricks, and distributed execution modes.
-- **Exceptions:** Clear, hierarchical exception types for configuration and validation failures with detailed error context.
+| Component | Purpose |
+|-----------|---------|
+| **Context** | Central orchestrator; loads configs, manages Spark, exposes convenience attributes |
+| **PipelineManager** | Validates pipelines and expands node references into full configurations |
+| **ConfigLoaderFactory** | Auto-detects and loads YAML, JSON, Python, DSL, or dict configs |
+| **VariableInterpolator** | Resolves `${ENV_VAR}` and `${var_name}` placeholders with proper precedence |
+| **Validators** | ConfigValidator, PipelineValidator, FormatPolicy, MLValidator, StreamingValidator |
+| **SparkSessionManager** | Thread-safe session caching with validation, timeout, and cleanup |
+| **ContextFactory** | Auto-selects MLContext, StreamingContext, or HybridContext based on pipelines |
+| **Exceptions** | Hierarchical exception types: ConfigLoadError, ConfigValidationError, PipelineValidationError |
 
 ---
 
-## Installation and Requirements
+## Installation & Requirements
 
-- **Python:** 3.8 or higher
-- **Dependencies:** pyyaml (for YAML loading)
-- **Optional:** pyspark for Spark session creation
-- **Optional:** Databricks Connect (when using Databricks or distributed mode)
+### Dependencies
+- **Python**: 3.8+
+- **Required**: `pyyaml` (for YAML loading)
+- **Optional**: `pyspark` (for local mode)
+- **Optional**: `databricks-connect` (for Databricks/distributed mode)
+
+### Install
+
+```bash
+# Core dependencies
+pip install pyyaml
+
+# For Spark support
+pip install pyspark
+
+# For Databricks support
+pip install databricks-connect
+```
 
 ---
 
-## Global Settings (Required & Optional)
+## Configuration Structure
 
-Context requires the following keys in `global_settings`:
+Every Context requires **5 configuration sources**. Each can be a file path (string) or dict.
 
-**Required Keys:**
-- `input_path` (str): Base directory path for input data sources
-- `output_path` (str): Base directory path for output data destinations
-- `mode` (str): Execution mode - must be one of: "local", "databricks", or "distributed" (alias for "databricks")
+### Global Settings (Required)
 
-**Optional Keys:**
-- `layer` (str): Free-form string to categorize contexts (e.g., "ml", "streaming", "batch", "etl")
-- `format_policy` (dict): Override default supported formats and compatibility rules
-- `spark_config` or `ml_config` (dict): Custom Spark configurations passed via builder.config(k, v)
-- Environment-specific overrides via variable interpolation (${ENV_VAR})
+```yaml
+# config/global.yml
+input_path: /data/in                    # ✅ Required
+output_path: /data/out                  # ✅ Required
+mode: local                             # ✅ Required: "local", "databricks", "distributed"
+
+# Optional
+layer: batch                            # "batch", "ml", "streaming", "hybrid"
+project_name: my_project                # For MLOps tracking
+default_model_version: v1.0             # Default ML model version
+
+# Custom Spark configs
+spark_config:
+  spark.sql.shuffle.partitions: "200"
+  spark.executor.memory: "4g"
+
+# Custom format policy
+format_policy:
+  supported_inputs: [kafka, kinesis]
+  supported_outputs: [delta, parquet]
+```
+
+### Pipelines Config
+
+```yaml
+# config/pipelines.yml
+daily_etl:
+  type: batch                           # batch, ml, streaming, hybrid
+  nodes: [extract, transform, load]     # References to nodes_config
+  spark_config:
+    spark.sql.shuffle.partitions: "300"
+
+ml_pipeline:
+  type: ml
+  nodes: [preprocess, train, evaluate]
+  model_version: v2.0                   # Override global default
+```
+
+### Nodes Config
+
+```yaml
+# config/nodes.yml
+extract:
+  input: [raw_source]
+  function: etl.extract
+
+transform:
+  dependencies: [extract]               # Execution order
+  function: etl.transform
+
+load:
+  dependencies: [transform]
+  output: [target_table]
+  function: etl.load
+  
+train:
+  input: [training_data]
+  function: ml.train
+  model:
+    type: spark_ml
+  hyperparams:                          # ML-specific
+    max_iter: 100
+    learning_rate: 0.01
+```
+
+### Input Config
+
+```yaml
+# config/input.yml
+raw_source:
+  format: parquet
+  filepath: /data/in/raw.parquet
+
+training_data:
+  format: csv
+  filepath: s3://bucket/${ENV_STAGE}/train.csv  # Variables supported
+```
+
+### Output Config
+
+```yaml
+# config/output.yml
+target_table:
+  format: delta
+  schema: curated
+  table_name: sales
+
+model_artifact:
+  format: pickle
+  filepath: /models/model-${model_version}.pkl
+```
+
+---
 
 ## Creating a Context
 
-The Context constructor accepts five configuration sources. Each source can be either a file path (str) or an in-memory dict. All five sources are required.
-
-- `global_settings`: str (file path) | dict (configuration object)
-- `pipelines_config`: str (file path) | dict (configuration object)
-- `nodes_config`: str (file path) | dict (configuration object)
-- `input_config`: str (file path) | dict (configuration object)
-- `output_config`: str (file path) | dict (configuration object)
-
-### Creating from File Paths
+### Option 1: From Files
 
 ```python
 from tauro.config import Context
@@ -75,37 +200,97 @@ context = Context(
     input_config="config/input.yml",
     output_config="config/output.yml",
 )
+
+print(context.input_path)           # "/data/in"
+print(context.execution_mode)       # "local"
+print(context.spark)                # SparkSession (lazy-initialized)
 ```
 
-### Creating from In-Memory Dictionaries
+### Option 2: From Dicts (Testing/Prototyping)
 
 ```python
-from tauro.config import Context
-
 context = Context(
     global_settings={
         "input_path": "/data/in",
         "output_path": "/data/out",
         "mode": "local",
-        "layer": "batch",
     },
     pipelines_config={
-        "daily_etl": {
+        "simple_etl": {
             "type": "batch",
-            "nodes": ["extract", "transform", "load"],
+            "nodes": ["process"]
         }
     },
     nodes_config={
-        "extract": {"input": ["src_parquet"], "function": "myapp.pipeline.extract"},
-        "transform": {"dependencies": ["extract"], "function": "myapp.pipeline.transform"},
-        "load": {"dependencies": ["transform"], "output": ["out_delta:curated/sales"], "function": "myapp.pipeline.load"},
+        "process": {
+            "input": ["source"],
+            "function": "pipeline.process"
+        }
     },
     input_config={
-        "src_parquet": {"format": "parquet", "filepath": "/data/in/source.parquet"}
+        "source": {"format": "csv", "filepath": "/data/in/data.csv"}
     },
     output_config={
-        "out_delta:curated/sales": {"format": "delta", "schema": "curated", "table_name": "sales"}
-    },
+        "result": {"format": "parquet", "filepath": "/data/out/result.parquet"}
+    }
+)
+```
+
+### Option 3: Mixed (Files + Dicts)
+
+```python
+context = Context(
+    global_settings="config/global.yml",           # File
+    pipelines_config={...},                        # Dict
+    nodes_config="config/nodes.yml",               # File
+    input_config="config/input.yml",               # File
+    output_config="config/output.yml"              # File
+)
+```
+
+### Option 4: With ML Info
+
+```python
+context = Context(
+    global_settings="config/global.yml",
+    pipelines_config="config/pipelines.yml",
+    nodes_config="config/nodes.yml",
+    input_config="config/input.yml",
+    output_config="config/output.yml",
+    ml_info={
+        "model_name": "sales_predictor",
+        "model_version": "v2.1",
+        "hyperparams": {
+            "max_depth": 10,
+            "n_estimators": 100,
+        },
+        "metrics": ["accuracy", "precision", "recall"]
+    }
+)
+
+# Access consolidated ML info
+ml_info = context.get_pipeline_ml_info("ml_pipeline")
+print(ml_info["model_name"])       # "sales_predictor"
+print(ml_info["hyperparams"])      # {...}
+```
+
+### Option 5: With Custom Spark Session
+
+```python
+from pyspark.sql import SparkSession
+
+# Create custom session
+spark = SparkSession.builder \
+    .master("local[4]") \
+    .appName("custom") \
+    .config("spark.sql.shuffle.partitions", "100") \
+    .getOrCreate()
+
+# Reuse in Context
+context = Context(
+    global_settings="config/global.yml",
+    ...,
+    spark_session=spark  # Reuse instead of creating new one
 )
 ```
 
@@ -113,282 +298,543 @@ context = Context(
 
 ## What Context Exposes
 
-The Context object provides the following attributes and methods for use by downstream layers:
+### Key Attributes
 
-**Configuration Sources:**
-- `global_settings`: Dictionary containing global settings (input_path, output_path, mode, etc.)
-- `pipelines_config`: Dictionary with pipeline definitions
-- `nodes_config`: Dictionary with node configurations
-- `input_config`: Dictionary with input source definitions
-- `output_config`: Dictionary with output destination definitions
+| Attribute | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `input_path` | str | Base directory for inputs | `/data/in` |
+| `output_path` | str | Base directory for outputs | `/data/out` |
+| `execution_mode` | str | Execution context | `local` \| `databricks` |
+| `spark` | SparkSession | Lazy-initialized Spark session | `context.spark.sql(...)` |
+| `pipelines` | dict | Validated & expanded pipelines | `context.pipelines["daily_etl"]` |
+| `layers` | list | Loaded context layers | `["batch", "ml"]` |
+| `global_vars` | dict | Merged global variables | `context.global_vars["key"]` |
 
-**Computed Attributes:**
-- `spark`: Active SparkSession (singleton, lazily initialized)
-- `execution_mode`: String value from global_settings["mode"]
-- `input_path`: Convenience attribute from global_settings["input_path"]
-- `output_path`: Convenience attribute from global_settings["output_path"]
-- `format_policy`: FormatPolicy instance with stream/batch compatibility rules
-- `_pipeline_manager`: Internal PipelineManager for pipeline expansion (cached)
+### Getting Spark Session
 
-These top-level attributes ensure seamless integration with the IO layer and custom executors that expect context-like objects.
+```python
+# Lazy initialization - only created when first accessed
+spark = context.spark
+df = spark.read.parquet("/data/in/file.parquet")
+df.show()
+
+# Check session validity without creating
+from tauro.config.session import SparkSessionManager
+manager = SparkSessionManager()
+if manager.get_session_info():
+    print("Session is valid")
+```
+
+### Accessing Pipelines
+
+```python
+# Get all pipelines (with validation & expansion)
+all_pipelines = context.pipelines
+print(list(all_pipelines.keys()))  # ["daily_etl", "ml_pipeline"]
+
+# Get single pipeline
+pipeline = context.get_pipeline("daily_etl")
+print(pipeline["nodes"])           # [{"name": "extract", "function": "...", ...}, ...]
+
+# Get ML info for pipeline
+ml_info = context.get_pipeline_ml_info("ml_pipeline")
+print(ml_info["model_version"])    # "v2.1"
+print(ml_info["hyperparams"])      # {"max_depth": 10, ...}
+```
+
+### Accessing Node Info
+
+```python
+# Get all nodes from context
+nodes = context.pipelines  # Contains all expanded nodes
+
+# Useful for iteration
+for pipeline_name, pipeline in context.pipelines.items():
+    for node in pipeline["nodes"]:
+        print(f"{pipeline_name} -> {node['name']}: {node['function']}")
+```
 
 ---
 
 ## PipelineManager
 
-PipelineManager validates pipeline definitions and expands node references into complete, executable configurations:
+### Automatic Pipeline Expansion
 
-- **Validation:** Ensures all nodes referenced by a pipeline exist in nodes_config
-- **Expansion:** Transforms node names into full node configurations including all dependencies
-- **Dependency Resolution:** Maintains dependency order for execution
-- **Convenience Helpers:** Methods to list, fetch, and expand pipelines
+PipelineManager validates and expands pipeline definitions by:
+1. ✅ **Validating** all referenced nodes exist in nodes_config
+2. ✅ **Resolving** dependencies to determine execution order
+3. ✅ **Expanding** node definitions with full configuration
+4. ✅ **Merging** inputs/outputs from nodes into pipeline
 
-### Usage Example
+### Usage
 
 ```python
-# Access the pipeline manager through the context
-pm = context._pipeline_manager
+# Access PipelineManager
+manager = context.pipeline_manager
+print(f"Total pipelines: {len(context.pipelines)}")
 
-# List all available pipelines
-pipeline_names = pm.list_pipeline_names()  # ['daily_etl']
+# Get expanded pipeline with all node details
+pipeline = context.get_pipeline("daily_etl")
 
-# Get expanded pipeline configuration
-pipeline = pm.get_pipeline('daily_etl')
-# Returns:
-# {
-#   "type": "batch",
-#   "nodes": [
-#     {"name": "extract", "input": ["src_parquet"], "function": "..."},
-#     {"name": "transform", "dependencies": ["extract"], "function": "..."},
-#     {"name": "load", "dependencies": ["transform"], "output": [...], "function": "..."}
-#   ],
-#   "inputs": [],
-#   "outputs": [],
-#   "spark_config": {}
-# }
-
-# Access all expanded pipelines
-all_pipelines = pm.pipelines  # Returns dict of all expanded pipelines
+for node in pipeline["nodes"]:
+    print(f"Node: {node['name']}")
+    print(f"  Function: {node['function']}")
+    print(f"  Dependencies: {node.get('dependencies', [])}")
+    print(f"  Inputs: {node.get('input', [])}")
+    print(f"  Outputs: {node.get('output', [])}")
 ```
 
-**Note:** Context caches validated pipelines via a cached_property decorator for efficiency.
+### Example Expanded Pipeline
+
+```python
+# Original config
+pipelines_config = {
+    "daily_etl": {
+        "type": "batch",
+        "nodes": ["extract", "transform", "load"]
+    }
+}
+
+nodes_config = {
+    "extract": {
+        "input": ["raw_data"],
+        "function": "etl.extract"
+    },
+    "transform": {
+        "dependencies": ["extract"],
+        "function": "etl.transform"
+    },
+    "load": {
+        "dependencies": ["transform"],
+        "output": ["target"],
+        "function": "etl.load"
+    }
+}
+
+# After expansion via PipelineManager
+context.get_pipeline("daily_etl") 
+# Returns:
+# {
+#     "name": "daily_etl",
+#     "type": "batch",
+#     "nodes": [
+#         {
+#             "name": "extract",
+#             "input": ["raw_data"],
+#             "function": "etl.extract",
+#             "order": 0  # Execution order determined by dependencies
+#         },
+#         {
+#             "name": "transform",
+#             "dependencies": ["extract"],
+#             "function": "etl.transform",
+#             "order": 1
+#         },
+#         {
+#             "name": "load",
+#             "dependencies": ["transform"],
+#             "output": ["target"],
+#             "function": "etl.load",
+#             "order": 2
+#         }
+#     ]
+# }
+```
 
 ---
 
 ## Loading and Validation Flow
 
-The configuration loading and validation process follows these steps:
+### Automatic Multi-Step Validation
 
-1. **Detection:** ConfigLoaderFactory detects source type (file path vs. dict)
-2. **Loading:** 
-   - YAML/JSON: Files are parsed using safe_load (YAML) or json.load (JSON), returns empty dict if empty
-   - Python: Module is executed and top-level variable named `config` is extracted
-   - Dict: Direct pass-through, no parsing needed
-3. **Validation:**
-   - ConfigValidator checks basic structure (must be dict) and required keys
-   - PipelineValidator verifies all pipeline node references exist
-   - FormatPolicy validates format compatibility
+When creating a Context, the following happens in order:
 
-### Example: Using ConfigLoaderFactory
+```
+1. Format Detection
+   ├─ Detect file type (YAML/JSON/DSL) or use dict as-is
+   └─ Load/parse all 5 configuration sources
+
+2. Basic Structure Validation
+   ├─ Check required keys (input_path, output_path, mode)
+   ├─ Validate value types
+   └─ Check for syntax errors
+
+3. Variable Interpolation
+   ├─ Replace ${ENV_VAR} from environment
+   ├─ Replace ${var} from context variables
+   ├─ Protect against circular references
+   └─ Interpolate file paths
+
+4. Pipeline Validation
+   ├─ Verify all referenced nodes exist
+   ├─ Resolve node dependencies
+   ├─ Check for circular node dependencies
+   └─ Expand pipeline definitions
+
+5. Format Policy Validation
+   ├─ Check input format compatibility
+   ├─ Check output format compatibility
+   ├─ Validate against configured supported formats
+   └─ Check streaming vs batch compatibility
+
+6. ML-Specific Validation (if needed)
+   ├─ Validate model_type field
+   ├─ Validate hyperparameters structure
+   └─ Validate metrics list
+
+7. Spark Session Initialization (lazy)
+   ├─ Create session on first access
+   ├─ Apply spark_config settings
+   └─ Cache and reuse session
+```
+
+### Example: Validation Error Scenarios
+
+```python
+# ❌ Error: Missing required key
+try:
+    context = Context(
+        global_settings={"input_path": "/data/in"},  # Missing output_path, mode
+        ...
+    )
+except ConfigValidationError as e:
+    print(f"Validation error: {e}")
+
+# ❌ Error: Node not found
+try:
+    context = Context(
+        ...,
+        pipelines_config={"etl": {"nodes": ["extract", "transform"]}},
+        nodes_config={"extract": {...}}  # Missing "transform" node
+    )
+except PipelineValidationError as e:
+    print(f"Pipeline error: {e}")
+
+# ❌ Error: Circular dependencies
+try:
+    context = Context(
+        ...,
+        nodes_config={
+            "node_a": {"dependencies": ["node_b"], ...},
+            "node_b": {"dependencies": ["node_a"], ...}
+        }
+    )
+except PipelineValidationError as e:
+    print(f"Circular dependency detected: {e}")
+
+# ❌ Error: Unsupported input format
+try:
+    context = Context(
+        global_settings={..., "format_policy": {"supported_inputs": ["parquet"]}},
+        ...,
+        input_config={"data": {"format": "avro", ...}}
+    )
+except ConfigValidationError as e:
+    print(f"Format not supported: {e}")
+```
+
+### Using ConfigLoaderFactory
 
 ```python
 from tauro.config.loaders import ConfigLoaderFactory
 
 loader = ConfigLoaderFactory()
 
-# Load from YAML file
-cfg = loader.load_config("config/global.yml")  # Returns dict
-
-# Load from JSON file
-cfg = loader.load_config("config/pipelines.json")  # Returns dict
-
-# Load from Python module
-cfg = loader.load_config("config.settings")  # Module must have top-level 'config' variable
+# Auto-detect and load from file
+cfg_yaml = loader.load_config("config/global.yml")      # Detects YAML
+cfg_json = loader.load_config("config/pipelines.json")  # Detects JSON
+cfg_python = loader.load_config("config.settings")      # Loads Python module
 
 # Direct dict passthrough
-cfg = loader.load_config({"key": "value"})  # Returns dict as-is
+cfg_dict = loader.load_config({"key": "value"})         # Returns as-is
 ```
 
 ---
 
 ## Variable Interpolation
 
-VariableInterpolator provides sophisticated placeholder resolution in configuration values:
+Context automatically replaces `${VARIABLE}` placeholders in all configuration values. Variables are resolved with this precedence:
 
-**Supported Placeholder Formats:**
-- `${ENV_STAGE}` - Replaces with environment variable (highest precedence)
-- `${date}` - Replaces with value from variables dict
-- `${default_value}` - Replaces with fallback value from variables dict
+### 1. Environment Variables (Highest Priority)
 
-**Precedence (highest to lowest):**
-1. Environment variables (os.environ)
-2. Variables dict provided to interpolate method
-3. Default values in configuration
+```yaml
+# config/global.yml
+input_path: /data/${ENV_STAGE}/in        # Uses $ENV_STAGE from environment
+output_path: ${DATA_ROOT}/out
 
-### Usage Example
+spark_config:
+  spark.executor.memory: "${EXECUTOR_MEM:4g}"  # Default value: 4g if not set
+```
 
 ```python
-from tauro.config.interpolator import VariableInterpolator
+import os
+os.environ["ENV_STAGE"] = "production"
+os.environ["DATA_ROOT"] = "/mnt/data"
 
-# Raw configuration with placeholders
-raw_path = "s3://bucket/${ENV_STAGE}/data/table=${date}"
-
-# Interpolation with environment variables and variables dict
-interpolated = VariableInterpolator.interpolate(
-    raw_path,
-    variables={"date": "2025-01-15"}
+context = Context(
+    global_settings="config/global.yml",
+    ...
 )
 
-# If ENV_STAGE=prod in environment:
-# Result: "s3://bucket/prod/data/table=2025-01-15"
-
-# Context automatically applies interpolation to all filepaths
-# using global_settings as the variables source
+print(context.input_path)    # "/data/production/in"
+print(context.output_path)   # "/mnt/data/out"
 ```
 
-**Automatic Interpolation in Context:**
+### 2. Context Variables (Fallback)
 
 ```python
-# When Context is created, it automatically interpolates:
-# - All filepaths in input_config
-# - All relevant paths in output_config
-# - Using global_settings as the variables source and environment variables as overrides
-```
-
----
-
-## Format Policy (Streaming-Aware Compatibility)
-
-FormatPolicy provides comprehensive format compatibility management for batch and streaming pipelines:
-
-**Supported Streaming Input Formats:**
-- kafka, kinesis, delta_stream, file_stream, socket, rate, memory
-
-**Supported Batch Output Formats:**
-- kafka, memory, console, delta, parquet, json, csv, avro, orc, xml
-
-**Compatibility Features:**
-- Maps batch outputs to compatible streaming inputs
-- Specifies which streaming inputs require checkpoints
-- Validates format compatibility between pipeline stages
-- Customizable via global_settings.format_policy
-
-### Usage Example
-
-```python
-from tauro.config import Context
-
-context = Context(...)
-policy = context.format_policy
-
-# Query format support
-is_kafka_input_supported = policy.is_supported_input("kafka")      # True
-is_delta_output_supported = policy.is_supported_output("delta")    # True
-is_format_compatible = policy.can_output_to_streaming("parquet")   # True/False
-```
-
-**Configuration Override:**
-
-```python
-context_with_custom_policy = Context(
+context = Context(
     global_settings={
-        ...,
-        "format_policy": {
-            "supported_streaming_inputs": ["kafka", "kinesis"],
-            "supported_batch_outputs": ["delta", "parquet", "csv"],
-            # ... additional overrides
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "variables": {
+            "env_stage": "test",
+            "model_version": "v2.0"
+        }
+    },
+    pipelines_config={
+        "pipeline_a": {
+            "model_version": "${model_version}"  # Resolves from context variables
+        }
+    },
+    ...
+)
+
+# Access resolved values
+pipeline = context.get_pipeline("pipeline_a")
+print(pipeline["model_version"])  # "v2.0"
+```
+
+### 3. File Path Interpolation
+
+```yaml
+# config/input.yml
+training_data:
+  format: csv
+  filepath: s3://bucket/${ENV_STAGE}/train-${model_version}.csv
+  # Results in: s3://bucket/test/train-v2.0.csv (if ENV_STAGE=test, model_version=v2.0)
+
+model_artifact:
+  format: pickle
+  filepath: /models/model-${model_version}.pkl
+  # Results in: /models/model-v2.0.pkl
+```
+
+### Protection Against Infinite Loops
+
+```python
+# ✅ Safe - circular references are detected
+context = Context(
+    global_settings={
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "variables": {
+            "a": "${b}",
+            "b": "${a}"      # Circular! Will raise ConfigurationError
         }
     },
     ...
 )
 ```
 
-**Notes:**
-- Unity Catalog is handled by IO/UC managers, not part of format policy
-- ORC is supported in IO writers but not typically used in streaming format policy
-- Format policy is streaming-focused and independent of ML configurations
+---
+
+## Format Policy
+
+### Supported Formats
+
+FormatPolicy manages format compatibility for batch and streaming pipelines:
+
+#### Batch/General Formats
+- **Inputs**: parquet, csv, json, xml, orc, avro, delta
+- **Outputs**: parquet, csv, json, xml, orc, avro, delta, kafka, memory, console
+
+#### Streaming Formats
+- **Inputs**: kafka, kinesis, delta_stream, file_stream, socket, rate, memory
+- **Outputs**: kafka, memory, console, delta
+
+### Usage
+
+```python
+# Access format policy from context
+policy = context.format_policy
+
+# Query support
+is_kafka_input = policy.is_supported_input("kafka")         # True
+is_delta_output = policy.is_supported_output("delta")       # True
+can_stream = policy.can_output_to_streaming("parquet")      # True/False
+
+# Check format compatibility
+is_compatible = policy.is_format_compatible("parquet", "delta")  # True
+```
+
+### Custom Format Policy
+
+```python
+context = Context(
+    global_settings={
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "format_policy": {
+            "supported_inputs": ["kafka", "kinesis", "parquet"],
+            "supported_outputs": ["delta", "parquet", "kafka"],
+            # Optionally disable Unity Catalog support
+            "use_unity_catalog": False
+        }
+    },
+    ...
+)
+
+# Use custom policy
+pipeline = context.get_pipeline("my_pipeline")
+```
+
+### Streaming-Specific Rules
+
+```python
+# Streaming pipelines have format constraints
+streaming_config = {
+    "type": "streaming",
+    "nodes": ["source", "process", "sink"],
+    "input_format": "kafka",          # Must be streaming-compatible
+    "output_format": "delta",         # Must be streaming-compatible
+    "checkpoint_dir": "/checkpoints"  # Required for stateful operations
+}
+```
 
 ---
 
 ## Spark Session Lifecycle
 
-SparkSessionFactory provides robust, singleton-based Spark session management:
+### Two Approaches to Session Management
 
-**Supported Execution Modes:**
-- `local`: Single-node local Spark cluster (requires pyspark)
-- `databricks`: Databricks Connect mode with cluster execution (requires databricks-connect package)
-- `distributed`: Alias for "databricks" mode
+#### 1. SparkSessionManager (Recommended) ⭐
 
-**Session Management:**
-- Creates session lazily on first request (get_session)
-- Maintains singleton pattern to prevent multiple sessions
-- Provides reset_session() for testing and cleanup
-- Accepts custom Spark configurations via ml_config parameter
-
-### Usage Example
+Thread-safe, production-ready session management with validation and caching:
 
 ```python
-from tauro.config import SparkSessionFactory, Context
+from tauro.config.session import SparkSessionManager
 
-# Automatic session creation via Context
-context = Context(...)
-spark = context.spark  # Lazily creates and caches session
+manager = SparkSessionManager()
 
-# Direct factory usage
+# Get or create session
+spark = manager.get_or_create_session(mode="local")
+
+# Check if session is valid
+info = manager.get_session_info()
+if info:
+    print(f"Session age: {info['age_seconds']}s")
+    print(f"Is valid: {info['is_valid']}")
+
+# Cleanup on app shutdown
+manager.cleanup_all()  # Called automatically via atexit
+```
+
+#### 2. SparkSessionFactory (Deprecated)
+
+Simple singleton pattern without validation:
+
+```python
+from tauro.config.session import SparkSessionFactory
+
+# Not recommended for new code
 spark = SparkSessionFactory.get_session(mode="local")
-
-# With custom Spark configurations
-spark = SparkSessionFactory.get_session(
-    mode="databricks",
-    ml_config={
-        "spark.sql.shuffle.partitions": "200",
-        "spark.executor.memory": "8g"
-    }
-)
-
-# Reset session (useful between tests)
 SparkSessionFactory.reset_session()
 ```
 
-**Databricks/Distributed Mode Requirements:**
+### Via Context (Recommended)
 
-When using "databricks" or "distributed" mode, ensure:
-1. Databricks Connect package is installed: `pip install databricks-connect`
-2. Environment variables are configured:
-   - `DATABRICKS_HOST`: Databricks workspace URL
-   - `DATABRICKS_TOKEN`: Personal access token
-   - `DATABRICKS_CLUSTER_ID`: Target cluster ID
-3. ML and tuning configurations can be passed via ml_config parameter
+```python
+# Spark session created lazily on first access
+context = Context(
+    global_settings={
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "spark_config": {
+            "spark.sql.shuffle.partitions": "200",
+            "spark.executor.memory": "4g"
+        }
+    },
+    ...
+)
+
+spark = context.spark  # Lazy initialization
+df = spark.read.parquet("/data/in/file.parquet")
+```
+
+### Execution Modes
+
+| Mode | Description | Requirements |
+|------|-------------|--------------|
+| `local` | Single-node Spark | `pip install pyspark` |
+| `databricks` | Databricks cluster via Connect | `pip install databricks-connect` + env vars |
+| `distributed` | Alias for "databricks" | Same as databricks |
+
+### Databricks Configuration
+
+```bash
+# Set environment variables
+export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+export DATABRICKS_TOKEN=dapi1234567890abcdef
+export DATABRICKS_CLUSTER_ID=0123-456789-abcdefgh
+```
+
+```python
+context = Context(
+    global_settings={
+        "input_path": "/mnt/data/in",
+        "output_path": "/mnt/data/out",
+        "mode": "databricks",
+        "spark_config": {
+            "spark.databricks.cluster.profile": "singleNode",
+            "spark.sql.shuffle.partitions": "1"
+        }
+    },
+    ...
+)
+
+spark = context.spark
+```
 
 ---
 
 ## Exception Handling
 
-The module provides clear, hierarchical exception types for error handling:
+### Exception Hierarchy
 
-**Exception Hierarchy:**
+All configuration errors inherit from `ConfigurationError`:
 
-- `ConfigError`: Base exception for all configuration-related errors
-  - `ConfigLoadError`: Raised when loading or parsing configuration fails
-    - File not found, invalid YAML/JSON, Python module execution errors
-  - `ConfigValidationError`: Raised when configuration validation fails
-    - Missing required keys, incorrect types, invalid structure
-  - `PipelineValidationError`: Raised when pipeline definition is invalid
-    - Missing node references, circular dependencies, invalid configurations
+```
+ConfigurationError (base)
+├── ConfigLoadError
+│   ├── File not found
+│   ├── Invalid YAML/JSON syntax
+│   └── Python module execution error
+├── ConfigValidationError
+│   ├── Missing required keys
+│   ├── Invalid types
+│   └── Invalid format
+└── PipelineValidationError
+    ├── Missing node references
+    ├── Circular dependencies
+    └── Invalid node configuration
+```
 
-**Error Context:**
-
-All exceptions are logged with contextual details before being raised:
-- Source path or type
-- Specific validation failures
-- Suggestions for remediation
-
-### Error Handling Example
+### Error Handling Patterns
 
 ```python
 from tauro.config import Context
-from tauro.config.exceptions import ConfigValidationError, PipelineValidationError
+from tauro.config.exceptions import (
+    ConfigLoadError,
+    ConfigValidationError,
+    PipelineValidationError
+)
 
+# Pattern 1: Catch specific errors
 try:
     context = Context(
         global_settings="config/global.yml",
@@ -397,164 +843,746 @@ try:
         input_config="config/input.yml",
         output_config="config/output.yml",
     )
+except ConfigLoadError as e:
+    print(f"❌ Failed to load configuration: {e}")
 except ConfigValidationError as e:
-    print(f"Configuration validation failed: {e}")
+    print(f"❌ Configuration validation failed: {e}")
 except PipelineValidationError as e:
-    print(f"Pipeline validation failed: {e}")
+    print(f"❌ Pipeline validation failed: {e}")
+
+# Pattern 2: Catch all config errors
+from tauro.config.exceptions import ConfigurationError
+
+try:
+    context = Context(...)
+except ConfigurationError as e:
+    print(f"❌ Configuration error: {type(e).__name__}")
+    print(f"   Message: {e}")
+    # Log for debugging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.error(f"Configuration failed", exc_info=True)
+```
+
+### Common Error Scenarios
+
+```python
+# ❌ Missing required keys
+try:
+    Context(
+        global_settings={"input_path": "/data/in"},  # Missing output_path, mode
+        pipelines_config={...},
+        nodes_config={...},
+        input_config={...},
+        output_config={...}
+    )
+except ConfigValidationError as e:
+    # Message: "Missing required key: output_path"
+    pass
+
+# ❌ Node not found in nodes_config
+try:
+    Context(
+        global_settings={...},
+        pipelines_config={"etl": {"nodes": ["extract", "transform"]}},
+        nodes_config={"extract": {...}},  # Missing "transform"
+        input_config={...},
+        output_config={...}
+    )
+except PipelineValidationError as e:
+    # Message: "Node 'transform' referenced but not defined in nodes_config"
+    pass
+
+# ❌ File not found
+try:
+    Context(
+        global_settings="config/nonexistent.yml",  # File doesn't exist
+        pipelines_config={...},
+        nodes_config={...},
+        input_config={...},
+        output_config={...}
+    )
+except ConfigLoadError as e:
+    # Message: "Failed to load config/nonexistent.yml: No such file or directory"
+    pass
 ```
 
 ---
 
-## Minimal End-to-End Example
+## Complete End-to-End Example
+
+Here's a minimal but complete example from configuration to execution:
+
+### Step 1: Create Configuration Files
+
+```yaml
+# config/global.yml
+input_path: /data/${ENV_STAGE}/in
+output_path: /data/${ENV_STAGE}/out
+mode: local
+
+spark_config:
+  spark.sql.shuffle.partitions: "200"
+```
+
+```yaml
+# config/pipelines.yml
+daily_etl:
+  type: batch
+  nodes: [extract, transform, load]
+```
+
+```yaml
+# config/nodes.yml
+extract:
+  input: [raw_source]
+  function: pipeline.extract
+
+transform:
+  dependencies: [extract]
+  function: pipeline.transform
+
+load:
+  dependencies: [transform]
+  output: [target]
+  function: pipeline.load
+```
+
+```yaml
+# config/input.yml
+raw_source:
+  format: parquet
+  filepath: /raw/data.parquet
+```
+
+```yaml
+# config/output.yml
+target:
+  format: delta
+  schema: curated
+  table_name: daily_metrics
+```
+
+### Step 2: Create Application
 
 ```python
+# app.py
 from tauro.config import Context
+from tauro.config.exceptions import ConfigurationError
 
-# 1) Create the context from YAML files
-context = Context(
-    global_settings="config/global.yml",
-    pipelines_config="config/pipelines.yml",
-    nodes_config="config/nodes.yml",
-    input_config="config/input.yml",
-    output_config="config/output.yml",
-)
+def main():
+    try:
+        # 1. Create context from configurations
+        context = Context(
+            global_settings="config/global.yml",
+            pipelines_config="config/pipelines.yml",
+            nodes_config="config/nodes.yml",
+            input_config="config/input.yml",
+            output_config="config/output.yml",
+        )
+        
+        # 2. Access Spark for data operations
+        spark = context.spark
+        
+        # 3. Get expanded pipeline
+        pipeline = context.get_pipeline("daily_etl")
+        
+        # 4. Execute each node in order
+        for node in pipeline["nodes"]:
+            print(f"⏳ Executing: {node['name']}")
+            print(f"   Function: {node['function']}")
+            print(f"   Dependencies: {node.get('dependencies', [])}")
+        
+        print(f"\n✅ Pipeline complete!")
+        print(f"   Input from: {context.input_path}")
+        print(f"   Output to: {context.output_path}")
+        print(f"   Mode: {context.execution_mode}")
+        
+    except ConfigurationError as e:
+        print(f"❌ Configuration error: {e}")
+        raise
 
-# 2) Access Spark for distributed operations
-spark = context.spark
-df = spark.read.parquet(context.input_path)
+if __name__ == "__main__":
+    main()
+```
 
-# 3) Use pipelines for orchestration
-pm = context._pipeline_manager
-pipeline = pm.get_pipeline("daily_etl")
+### Step 3: Run Application
 
-for node in pipeline["nodes"]:
-    print(f"Executing node: {node['name']}")
-    print(f"  Function: {node.get('function')}")
-    print(f"  Dependencies: {node.get('dependencies', [])}")
+```bash
+# Set environment for stage
+export ENV_STAGE=production
 
-# 4) Use convenience attributes for IO and execution
-print(f"Execution Mode: {context.execution_mode}")
-print(f"Input Path: {context.input_path}")
-print(f"Output Path: {context.output_path}")
+# Run the app
+python app.py
 
-# 5) Access configuration sources
-print(f"Available inputs: {list(context.input_config.keys())}")
-print(f"Available outputs: {list(context.output_config.keys())}")
+# Output:
+# ⏳ Executing: extract
+#    Function: pipeline.extract
+#    Dependencies: []
+# ⏳ Executing: transform
+#    Function: pipeline.transform
+#    Dependencies: ['extract']
+# ⏳ Executing: load
+#    Function: pipeline.load
+#    Dependencies: ['transform']
+#
+# ✅ Pipeline complete!
+#    Input from: /data/production/in
+#    Output to: /data/production/out
+#    Mode: local
 ```
 
 ---
 
 ## Best Practices & Tips
 
-1. **Global Settings:** Keep global_settings minimal but explicit. Only include input_path, output_path, and mode as required; use environment variables for sensitive data via interpolation.
+### 1. Configuration Organization
 
-2. **Environment-Specific Configs:** Leverage ${ENV_VAR} placeholders in paths to make configurations portable across environments without duplicating files.
+```
+config/
+├── global.yml          # Always use this for global settings
+├── pipelines.yml       # Pipeline definitions
+├── nodes.yml           # Node configurations
+├── input.yml           # Input source definitions
+└── output.yml          # Output destination definitions
+```
 
-3. **Format Policy:** Centralize streaming format policies in global_settings.format_policy instead of sprinkling custom format checks throughout your code.
+### 2. Environment-Specific Configuration
 
-4. **Spark Session Lifecycle:**
-   - For Databricks/Distributed mode, ensure Databricks Connect is installed and environment variables are configured
-   - Use SparkSessionFactory.reset_session() between tests to avoid session leakage
+✅ **Good: Use environment variables for environment-specific values**
 
-5. **Testing:** Use dict-based configurations for unit tests and leverage SparkSessionFactory.reset_session() for cleanup between test cases.
+```yaml
+# config/global.yml
+input_path: /data/${ENV_STAGE}/in
+output_path: /data/${ENV_STAGE}/out
+mode: ${EXECUTION_MODE:local}
 
-6. **Validation:** All validation errors are logged with context. Check logs when configuration fails to understand what went wrong.
+spark_config:
+  spark.executor.memory: ${EXECUTOR_MEMORY:4g}
+  spark.sql.shuffle.partitions: ${SHUFFLE_PARTITIONS:200}
+```
 
-7. **Variable Interpolation:** Remember that environment variables have precedence over the variables dict, making them suitable for secrets and environment-specific overrides.
+```bash
+# Set before running
+export ENV_STAGE=production
+export EXECUTION_MODE=databricks
+export EXECUTOR_MEMORY=8g
+python app.py
+```
+
+❌ **Avoid: Duplicating config files for each environment**
+
+### 3. Secure Credential Handling
+
+✅ **Good: Use environment variables for secrets**
+
+```python
+context = Context(
+    global_settings={
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "database": {
+            "host": "${DB_HOST}",
+            "user": "${DB_USER}",
+            "password": "${DB_PASSWORD}"  # From environment
+        }
+    },
+    ...
+)
+```
+
+```bash
+export DB_HOST=db.example.com
+export DB_USER=etl_user
+export DB_PASSWORD=secret_password
+python app.py
+```
+
+❌ **Avoid: Hardcoding credentials in YAML files**
+
+### 4. Pipeline Definition Best Practices
+
+✅ **Good: Clear node dependencies**
+
+```yaml
+# nodes.yml
+extract:
+  input: [raw_source]
+  function: etl.extract
+
+transform:
+  dependencies: [extract]    # Explicit dependency
+  function: etl.transform
+
+load:
+  dependencies: [transform]  # Clear execution order
+  output: [target_table]
+  function: etl.load
+```
+
+### 5. Testing Configuration
+
+✅ **Good: Use dicts for testing, no file dependencies**
+
+```python
+def test_pipeline():
+    context = Context(
+        global_settings={
+            "input_path": "/tmp/test_in",
+            "output_path": "/tmp/test_out",
+            "mode": "local"
+        },
+        pipelines_config={"test_pipeline": {"nodes": ["process"]}},
+        nodes_config={"process": {"function": "test.process"}},
+        input_config={"test_data": {"format": "parquet", "filepath": "/tmp/test.parquet"}},
+        output_config={"result": {"format": "parquet", "filepath": "/tmp/result.parquet"}}
+    )
+    
+    assert context.input_path == "/tmp/test_in"
+    # More assertions...
+```
+
+### 6. Session Management
+
+✅ **Good: Use SparkSessionManager for thread-safe operations**
+
+```python
+from tauro.config.session import SparkSessionManager
+
+manager = SparkSessionManager()
+spark = manager.get_or_create_session(mode="local")
+
+# Use spark...
+
+# Cleanup on shutdown (automatic via atexit)
+manager.cleanup_all()
+```
+
+### 7. Variable Interpolation Safety
+
+Remember the precedence order:
+
+1. 🔴 **Environment variables** (highest - overrides all)
+2. 🟡 **Context variables dict**
+3. 🟢 **Defaults in config** (lowest)
+
+This means environment variables always win, making them suitable for:
+- Secrets (passwords, tokens)
+- Environment-specific settings
+- Runtime overrides
 
 ---
 
 ## Troubleshooting
 
-**Missing Required Keys (input_path, output_path, mode)**
-- **Symptom:** ConfigValidationError on Context creation
-- **Solution:** Ensure your global_settings dict/YAML contains all three required keys
+### Configuration Loading Issues
 
-**Invalid YAML/JSON Files**
-- **Symptom:** ConfigLoadError with parse error details
-- **Solution:** Validate files with `python -m yaml` or online JSON validators; ensure root element is a dict/object
+**Problem: "No such file or directory" when creating Context**
 
-**Python Loader Module Not Found**
-- **Symptom:** ConfigLoadError when loading Python modules
-- **Solution:** Ensure the module path is in PYTHONPATH and module defines a top-level `config` variable
+```python
+# ❌ Error
+context = Context(
+    global_settings="config/global.yml",  # File not found
+    ...
+)
+```
 
-**Spark Session Errors**
-- **Local mode:** Verify pyspark is installed - `pip install pyspark`
-- **Databricks mode:** Install Databricks Connect and set DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_CLUSTER_ID
+**Solution:**
+- Verify file paths are relative to current working directory or use absolute paths
+- Use `pathlib` for portable paths:
 
-**Variable Interpolation Not Working**
-- **Symptom:** Placeholders remain unreplaced in loaded configuration
-- **Solution:** Confirm placeholders use format ${VAR}; remember environment variables take precedence
+```python
+from pathlib import Path
 
-**Pipeline Validation Errors**
-- **Symptom:** PipelineValidationError with missing node references
-- **Solution:** Ensure all nodes referenced in pipelines_config exist in nodes_config; check spelling
+config_dir = Path(__file__).parent / "config"
+context = Context(
+    global_settings=str(config_dir / "global.yml"),
+    pipelines_config=str(config_dir / "pipelines.yml"),
+    nodes_config=str(config_dir / "nodes.yml"),
+    input_config=str(config_dir / "input.yml"),
+    output_config=str(config_dir / "output.yml")
+)
+```
+
+### Validation Issues
+
+**Problem: "Missing required key: output_path"**
+
+**Solution:** Ensure all 3 required keys are in global_settings:
+
+```yaml
+# ✅ Correct
+input_path: /data/in
+output_path: /data/out
+mode: local
+
+# ❌ Incorrect - missing output_path
+input_path: /data/in
+mode: local
+```
+
+**Problem: "Node 'transform' referenced but not defined"**
+
+**Solution:** Verify all nodes referenced in pipelines exist in nodes_config:
+
+```python
+# ✅ Correct
+pipelines_config = {
+    "my_pipeline": {
+        "nodes": ["extract", "transform", "load"]  # All 3 exist below
+    }
+}
+
+nodes_config = {
+    "extract": {...},
+    "transform": {...},
+    "load": {...}
+}
+
+# ❌ Incorrect - "load" missing from nodes_config
+nodes_config = {
+    "extract": {...},
+    "transform": {...}
+}
+```
+
+### Variable Interpolation Issues
+
+**Problem: Variable not being replaced, placeholder remains in output**
+
+**Solution:** Check variable format and precedence:
+
+```python
+import os
+
+# ✅ Correct - environment variable
+os.environ["ENV_STAGE"] = "prod"
+path = "/data/${ENV_STAGE}/in"  # Becomes "/data/prod/in"
+
+# ❌ Incorrect - variable name doesn't match
+os.environ["STAGE"] = "prod"
+path = "/data/${ENV_STAGE}/in"  # Still has placeholder (STAGE != ENV_STAGE)
+
+# ✅ Use context variables as fallback
+context = Context(
+    global_settings={
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "variables": {
+            "stage": "test"
+        }
+    },
+    pipelines_config={"pipe": {"stage": "${stage}"}},  # Resolved from variables
+    ...
+)
+```
+
+### Spark Session Issues
+
+**Problem: "No module named 'pyspark'" in local mode**
+
+**Solution:** Install pyspark:
+
+```bash
+pip install pyspark
+```
+
+**Problem: "DATABRICKS_HOST not set" in databricks mode**
+
+**Solution:** Set environment variables:
+
+```bash
+export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+export DATABRICKS_TOKEN=dapi1234567890...
+export DATABRICKS_CLUSTER_ID=0123-456789-abcdefgh
+
+python app.py
+```
+
+**Problem: Spark session already exists**
+
+**Solution:** Reset between tests:
+
+```python
+from tauro.config.session import SparkSessionManager
+
+def test_case_1():
+    context1 = Context(...)
+    # ...
+    SparkSessionManager().cleanup_all()  # Reset for next test
+
+def test_case_2():
+    context2 = Context(...)
+    # ...
+```
+
+### Format Compatibility Issues
+
+**Problem: "Format 'avro' not supported in streaming pipelines"**
+
+**Solution:** Check format policy and use compatible formats:
+
+```python
+context = Context(
+    global_settings={
+        "input_path": "/data/in",
+        "output_path": "/data/out",
+        "mode": "local",
+        "format_policy": {
+            "supported_inputs": ["kafka", "kinesis", "parquet"],
+            "supported_outputs": ["delta", "parquet", "kafka"]
+        }
+    },
+    ...
+)
+
+# Use supported formats
+input_config = {
+    "source": {"format": "kafka", "..."}  # ✅ Supported
+}
+
+output_config = {
+    "sink": {"format": "avro", "..."}  # ❌ Not in supported_outputs
+}
+```
 
 ---
 
 ## Architecture Improvements
 
-Recent enhancements to `tauro.config`:
+---
 
-- **Top-Level Attributes:** Context now exposes execution_mode, input_path, and output_path as direct attributes for better compatibility with IO and execution layers
-- **"distributed" Mode Alias:** SparkSessionFactory now accepts "distributed" as an alias for "databricks"
-- **Unified ConfigLoaderFactory:** Single factory interface for loading dicts, YAML, JSON, and Python modules
-- **Advanced Variable Interpolation:** Environment variables take precedence, enabling secure configuration management
-- **Streaming-Aware Format Policy:** Comprehensive format compatibility validation for batch and streaming pipelines
+## Architecture Overview
+
+### Module Organization
+
+```
+tauro.core.config/
+├── contexts.py           # Main Context class & orchestration
+├── loaders.py           # Configuration file loading & parsing
+├── validators.py        # Multi-layer validation (structure, pipeline, format)
+├── session.py           # Spark session lifecycle management
+├── interpolator.py      # Variable substitution & path handling
+├── providers.py         # Config repository abstraction
+├── context_loader.py    # High-level context creation
+├── exceptions.py        # Hierarchical exception types
+└── __init__.py          # Public API exports
+```
+
+### Key Design Patterns
+
+| Pattern | Implementation | Purpose |
+|---------|----------------|---------|
+| **Factory** | ConfigLoaderFactory, ContextFactory | Auto-detect & create appropriate handler |
+| **Singleton** | SparkSessionManager | Single cached session per mode |
+| **Template Method** | BaseSpecializedContext | Extensible context types |
+| **Strategy** | Multiple Loaders (YAML/JSON/Python) | Pluggable format support |
+| **Visitor** | VariableInterpolator | Recursive structure traversal |
+| **Lazy Init** | @cached_property on pipelines & spark | Deferred computation |
+
+### Configuration Flow
+
+```
+┌─────────────────────┐
+│  Input Sources      │
+│  (File/Dict/Dict)   │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐      ┌──────────────────┐
+│  Format Detection   │─────▶│ ConfigLoader     │
+│  (YAML/JSON/etc)    │      │ implementations  │
+└──────────┬──────────┘      └──────────────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Structure Validate │
+│  (required keys)    │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Interpolate Vars   │
+│  (${ENV_VAR})       │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Pipeline Validate  │
+│  (node refs)        │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Format Policy      │
+│  (stream/batch)     │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Context Ready ✅    │
+└─────────────────────┘
+```
+
+### Key Components
+
+#### **Context** (Main Orchestrator)
+- Loads and validates all 5 configuration sources
+- Manages Spark session lifecycle
+- Exposes pipelines & convenience attributes
+- Thread-safe access to shared resources
+
+#### **PipelineManager** (Validator & Expander)
+- Validates nodes exist
+- Resolves dependencies
+- Expands node definitions
+- Cached for performance
+
+#### **ConfigLoaderFactory** (Format Auto-Detector)
+- Detects file type (YAML/JSON/DSL/dict)
+- Selects appropriate loader
+- Handles parsing & validation
+- Security: Prevents path traversal
+
+#### **VariableInterpolator** (Variable Resolver)
+- Replaces ${VAR} placeholders
+- Environment variables win (highest precedence)
+- Protects against infinite loops
+- Recursive structure traversal
+
+#### **SparkSessionManager** (Session Lifecycle)
+- Thread-safe singleton pattern
+- Validates session health
+- Automatic cleanup on exit
+- Supports local & Databricks modes
+
+#### **FormatPolicy** (Format Compatibility)
+- Validates format support
+- Streaming vs batch rules
+- Customizable via global_settings
+- Checkpoint requirements
 
 ---
 
 ## API Quick Reference
 
-**Context Class**
+### Context
+
 ```python
-Context(
-    global_settings: str | dict,
-    pipelines_config: str | dict,
-    nodes_config: str | dict,
-    input_config: str | dict,
-    output_config: str | dict
+from tauro.config import Context
+
+# Create context
+context = Context(
+    global_settings="config/global.yml" | dict,
+    pipelines_config="config/pipelines.yml" | dict,
+    nodes_config="config/nodes.yml" | dict,
+    input_config="config/input.yml" | dict,
+    output_config="config/output.yml" | dict,
+    ml_info: dict = None,
+    spark_session: SparkSession = None
 ) -> Context
+
+# Attributes
+context.input_path                # str - from global_settings
+context.output_path               # str - from global_settings
+context.execution_mode            # str - "local"|"databricks"
+context.spark                     # SparkSession (lazy)
+context.pipelines                 # dict - all validated pipelines
+context.layers                    # list - loaded layers
+context.format_policy             # FormatPolicy instance
+
+# Methods
+context.get_pipeline(name: str) -> dict
+context.get_pipeline_ml_info(name: str) -> dict
 ```
 
-Attributes: `spark`, `execution_mode`, `input_path`, `output_path`, `format_policy`, `global_settings`, `pipelines_config`, `nodes_config`, `input_config`, `output_config`
+### PipelineManager
 
-**PipelineManager (via context._pipeline_manager)**
 ```python
-list_pipeline_names() -> List[str]
-get_pipeline(name: str) -> Dict[str, Any]
-pipelines -> Dict[str, Dict[str, Any]]  # All expanded pipelines
+# Access via context
+manager = context.pipeline_manager
+
+# Methods
+manager.list_pipeline_names() -> List[str]
+manager.get_pipeline(name: str) -> Dict
+manager.pipelines -> Dict[str, Dict]  # All expanded pipelines
 ```
 
-**ConfigLoaderFactory**
+### ConfigLoaderFactory
+
 ```python
-load_config(source: str | dict) -> Dict[str, Any]
-get_loader(source: str | dict) -> Loader
+from tauro.config.loaders import ConfigLoaderFactory
+
+loader = ConfigLoaderFactory()
+
+# Methods
+loader.load_config(source: str | dict) -> Dict
+loader.get_loader(source: str | dict) -> Loader
 ```
 
-**VariableInterpolator**
+### VariableInterpolator
+
 ```python
-interpolate(string: str, variables: Dict[str, str]) -> str
-interpolate_config_paths(config: Dict, variables: Dict[str, str]) -> Dict
+from tauro.config.interpolator import VariableInterpolator
+
+# Methods
+VariableInterpolator.interpolate(
+    value: str,
+    variables: Dict[str, str]
+) -> str
+
+VariableInterpolator.interpolate_structure(
+    config: Dict,
+    variables: Dict[str, str]
+) -> Dict
 ```
 
-**Validators**
+### SparkSessionManager
+
 ```python
-ConfigValidator.validate(config, required_keys)
-PipelineValidator.validate(pipelines_config, nodes_config)
-FormatPolicy.is_supported_input(format: str) -> bool
-FormatPolicy.is_supported_output(format: str) -> bool
+from tauro.config.session import SparkSessionManager
+
+manager = SparkSessionManager()
+
+# Methods
+manager.get_or_create_session(
+    mode: str = "local",
+    config: Dict = None
+) -> SparkSession
+
+manager.get_session_info() -> Dict
+manager.cleanup_all() -> None
+manager.cleanup_stale_sessions(timeout_seconds: int = 3600) -> None
 ```
 
-**SparkSessionFactory**
+### Exceptions
+
 ```python
-get_session(mode: str, ml_config: Dict = None) -> SparkSession
-reset_session() -> None
-set_protected_configs(configs: List[str]) -> None
+from tauro.config.exceptions import (
+    ConfigurationError,     # Base exception
+    ConfigLoadError,        # File/parse errors
+    ConfigValidationError,  # Structure errors
+    PipelineValidationError # Node/dependency errors
+)
+
+try:
+    context = Context(...)
+except ConfigLoadError as e:
+    pass
+except ConfigValidationError as e:
+    pass
+except PipelineValidationError as e:
+    pass
 ```
 
-**Exceptions**
-```python
-ConfigLoadError(message: str)
-ConfigValidationError(message: str)
-PipelineValidationError(message: str)
+---
+
+## Further Reading
+
+- **For ML Integration**: See `../mlops/config.py` for ML-specific configuration patterns
+- **For Streaming**: Refer to `../streaming/` for streaming-specific pipeline configurations
+- **For Execution**: Check `../exec/executor.py` for how configs are used in node execution
+- **For Analysis**: See `CONFIG_ANALYSIS.md` in project root for detailed technical breakdown
+- **For Recommendations**: See `CONFIG_RECOMMENDATIONS.md` for improvement roadmap
