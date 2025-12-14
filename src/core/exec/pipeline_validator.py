@@ -20,14 +20,21 @@ class PipelineValidator:
         end_date: Optional[str],
         context_start_date: Optional[str],
         context_end_date: Optional[str],
+        requires_dates: bool = True,
     ) -> None:
         """Validate required parameters for pipeline execution."""
         if not pipeline_name:
             raise ValueError("Pipeline name is required")
-        if not (start_date or context_start_date):
-            raise ValueError("Start date is required")
-        if not (end_date or context_end_date):
-            raise ValueError("End date is required")
+
+        logger.debug(
+            f"Validating params for '{pipeline_name}': requires_dates={requires_dates}, start_date={start_date}, end_date={end_date}, context_start_date={context_start_date}, context_end_date={context_end_date}"
+        )
+
+        if requires_dates:
+            if not (start_date or context_start_date):
+                raise ValueError("Start date is required")
+            if not (end_date or context_end_date):
+                raise ValueError("End date is required")
 
     @staticmethod
     def validate_pipeline_config(pipeline: Dict[str, Any]) -> None:

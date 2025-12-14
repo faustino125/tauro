@@ -12,9 +12,6 @@ from typing import Any, Dict, Optional
 class ActiveConfigRecord:
     """
     Data class representing an active configuration version record.
-
-    This is returned by repository implementations when fetching
-    the active configuration for a project/environment.
     """
 
     project_id: str
@@ -31,11 +28,6 @@ class ActiveConfigRecord:
 class IConfigRepository(ABC):
     """
     Abstract interface for configuration repository implementations.
-
-    Implementations should provide methods to:
-    - Retrieve project metadata
-    - Get active configuration versions
-    - Close/cleanup resources
     """
 
     @abstractmethod
@@ -55,17 +47,6 @@ class IConfigRepository(ABC):
     def get_active_version(self, project_id: str, environment: str) -> ActiveConfigRecord:
         """
         Get the active configuration version for a project/environment.
-
-        Args:
-            project_id: Unique project identifier
-            environment: Environment name (dev, prod, etc.)
-
-        Returns:
-            ActiveConfigRecord with configuration data
-
-        Raises:
-            ActiveConfigNotFound: If no active version exists
-            ConfigRepositoryError: If there's an error accessing the repository
         """
         pass
 
@@ -73,7 +54,5 @@ class IConfigRepository(ABC):
     def close(self) -> None:
         """
         Close repository connections and cleanup resources.
-
-        Should be called when the repository is no longer needed.
         """
         pass

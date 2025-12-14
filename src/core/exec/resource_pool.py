@@ -162,11 +162,7 @@ class _NodeResourceContext:
             return resource_id
 
     def release_resource(self, resource_id: str) -> None:
-        """Release a specific resource by ID.
-
-        Args:
-            resource_id: The resource ID returned from register_resource()
-        """
+        """Release a specific resource by ID."""
         with self._lock:
             if resource_id not in self._resources:
                 logger.warning(f"Resource {resource_id} not found in pool")
@@ -176,11 +172,7 @@ class _NodeResourceContext:
             handle.release()
 
     def release_node_resources(self, node_id: str) -> None:
-        """Release all resources owned by a specific node.
-
-        Args:
-            node_id: The node identifier
-        """
+        """Release all resources owned by a specific node."""
         with self._lock:
             resource_ids = self._node_resources.get(node_id, [])
 
@@ -198,10 +190,7 @@ class _NodeResourceContext:
             self._node_resources.pop(node_id, None)
 
     def release_all(self) -> None:
-        """Release all tracked resources.
-
-        This is typically called during shutdown or cleanup operations.
-        """
+        """Release all tracked resources."""
         with self._lock:
             resource_ids = list(self._resources.keys())
 
@@ -218,11 +207,7 @@ class _NodeResourceContext:
             self._node_resources.clear()
 
     def get_resource_stats(self) -> Dict[str, Any]:
-        """Get statistics about tracked resources.
-
-        Returns:
-            Dictionary with resource counts and breakdown by type
-        """
+        """Get statistics about tracked resources."""
         with self._lock:
             total_resources = len(self._resources)
             by_type: Dict[str, int] = {}
@@ -238,11 +223,7 @@ class _NodeResourceContext:
             }
 
     def validate_all_released(self) -> Tuple[bool, List[str]]:
-        """Validate that all resources have been released.
-
-        Returns:
-            Tuple of (all_released: bool, unreleased_ids: List[str])
-        """
+        """Validate that all resources have been released."""
         with self._lock:
             unreleased = [rid for rid, handle in self._resources.items() if not handle.is_released]
 

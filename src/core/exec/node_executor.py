@@ -249,7 +249,16 @@ class NodeExecutor:
                 )
 
             except Exception as e:
-                logger.error(f"Failed to execute node '{node_name}': {str(e)}")
+                # Usar el analizador de errores elegante para desarrolladores
+                try:
+                    from core.cli.error_analyzer import format_error_for_developer
+                    from core.cli.rich_logger import RichLoggerManager
+
+                    console = RichLoggerManager.get_console()
+                    format_error_for_developer(e, node_name, console)
+                except Exception:
+                    # Fallback a log simple si falla el análisis
+                    logger.error(f"Failed to execute node '{node_name}': {str(e)}")
                 raise
             finally:
                 duration = time.perf_counter() - start_time
@@ -404,6 +413,22 @@ class NodeExecutor:
                 ml_info,
             )
 
+        # Print execution summary separator
+        try:
+            from core.cli.rich_logger import RichLoggerManager
+            from rich.rule import Rule
+
+            console = RichLoggerManager.get_console()
+            console.print()
+            from core.cli.rich_logger import print_process_separator
+
+            total_nodes = len(execution_state.completed)
+            print_process_separator("summary", "EXECUTION SUMMARY", f"{total_nodes} nodes", console)
+            console.print()
+        except Exception:
+            # ignore non-critical logging/display errors
+            pass
+
         logger.info(
             f"Pipeline execution completed. Processed {len(execution_state.completed)} nodes."
         )
@@ -489,7 +514,14 @@ class NodeExecutor:
             if not node_name:
                 break
 
-            logger.info(f"Starting execution of node: {node_name}")
+            # Print node execution separator
+            try:
+                from core.cli.rich_logger import log_node_start
+
+                node_display = node_name.split(".")[-1] if "." in node_name else node_name
+                log_node_start(node_display, "")
+            except Exception:
+                logger.info(f"Starting execution of node: {node_name}")
 
             node_ml_info = self._prepare_node_ml_info(node_name, ml_info)
 
@@ -528,13 +560,7 @@ class NodeExecutor:
         dag: Dict[str, Set[str]],
         node_configs: Dict[str, Dict[str, Any]],
     ) -> None:
-        """Process completed nodes with timeout protection to prevent deadlock.
-
-        ER1 FIX: Implements timeout-based deadlock prevention.
-        - Uses processing_timeout to prevent infinite waits
-        - Handles TimeoutError explicitly
-        - Removes futures as they complete
-        """
+        """Process completed nodes with timeout protection to prevent deadlock."""
         if execution_state.get_running_count() == 0:
             return
 
@@ -553,54 +579,10 @@ class NodeExecutor:
                     continue
 
                 node_name = node_info["node_name"]
-
-                try:
-                    # Get result with safety timeout to prevent hanging
-                    future.result(timeout=5)
-
-                    result_dict = {
-                        "status": "success",
-                        "start_time": node_info["start_time"],
-                        "end_time": time.time(),
-                        "config": node_info["config"],
-                    }
-                    execution_state.mark_completed(node_name, result_dict)
-
-                    logger.info(f"Node '{node_name}' completed successfully")
-
-                    newly_ready = self._find_newly_ready_nodes(
-                        node_name, dag, execution_state, node_configs
-                    )
-                    execution_state.add_to_ready_queue(newly_ready)
-
-                except TimeoutError as te:
-                    # Node execution exceeded timeout - mark as failed
-                    error_info = {
-                        "status": "failed",
-                        "error": "Node execution timeout exceeded",
-                        "error_type": "TimeoutError",
-                        "start_time": node_info["start_time"],
-                        "end_time": time.time(),
-                        "config": node_info["config"],
-                    }
-                    execution_state.mark_failed(node_name, error_info)
-                    logger.error(f"Node '{node_name}' exceeded timeout: {te}")
-                    execution_state.failed = True
-                    break
-
-                except Exception as e:
-                    # Node execution failed - mark as failed
-                    error_info = {
-                        "status": "failed",
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                        "start_time": node_info["start_time"],
-                        "end_time": time.time(),
-                        "config": node_info["config"],
-                    }
-                    execution_state.mark_failed(node_name, error_info)
-                    logger.error(f"Node '{node_name}' failed: {str(e)}")
-                    execution_state.failed = True
+                should_break = self._handle_completed_future(
+                    future, node_name, node_info, execution_state, dag, node_configs
+                )
+                if should_break:
                     break
 
         except TimeoutError:
@@ -621,13 +603,120 @@ class NodeExecutor:
         if execution_state.failed:
             self._cancel_all_futures(execution_state.running)
 
+    def _handle_completed_future(
+        self,
+        future,
+        node_name: str,
+        node_info: Dict[str, Any],
+        execution_state: ThreadSafeExecutionState,
+        dag: Dict[str, Set[str]],
+        node_configs: Dict[str, Dict[str, Any]],
+    ) -> bool:
+        """Handle a single completed future. Returns True if execution should break."""
+        try:
+            # Get result with safety timeout to prevent hanging
+            future.result(timeout=5)
+            self._handle_node_success(node_name, node_info, execution_state, dag, node_configs)
+            return False
+
+        except TimeoutError as te:
+            self._handle_node_timeout(node_name, node_info, execution_state, te)
+            return True
+
+        except Exception as e:
+            self._handle_node_failure(node_name, node_info, execution_state, e)
+            return True
+
+    def _handle_node_success(
+        self,
+        node_name: str,
+        node_info: Dict[str, Any],
+        execution_state: ThreadSafeExecutionState,
+        dag: Dict[str, Set[str]],
+        node_configs: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Handle successful node completion."""
+        result_dict = {
+            "status": "success",
+            "start_time": node_info["start_time"],
+            "end_time": time.time(),
+            "config": node_info["config"],
+        }
+        execution_state.mark_completed(node_name, result_dict)
+
+        # Print node completion
+        self._log_node_completion(node_name, node_info)
+
+        newly_ready = self._find_newly_ready_nodes(node_name, dag, execution_state, node_configs)
+        execution_state.add_to_ready_queue(newly_ready)
+
+    def _log_node_completion(self, node_name: str, node_info: Dict[str, Any]) -> None:
+        """Log node completion with graceful fallback."""
+        try:
+            from core.cli.rich_logger import log_node_complete
+
+            duration = time.time() - node_info["start_time"]
+            node_display = node_name.split(".")[-1] if "." in node_name else node_name
+            log_node_complete(node_display, duration)
+        except Exception:
+            logger.info(f"Node '{node_name}' completed successfully")
+
+    def _handle_node_timeout(
+        self,
+        node_name: str,
+        node_info: Dict[str, Any],
+        execution_state: ThreadSafeExecutionState,
+        timeout_error: TimeoutError,
+    ) -> None:
+        """Handle node timeout failure."""
+        error_info = {
+            "status": "failed",
+            "error": "Node execution timeout exceeded",
+            "error_type": "TimeoutError",
+            "start_time": node_info["start_time"],
+            "end_time": time.time(),
+            "config": node_info["config"],
+        }
+        execution_state.mark_failed(node_name, error_info)
+        logger.error(f"Node '{node_name}' exceeded timeout: {timeout_error}")
+        execution_state.failed = True
+
+    def _handle_node_failure(
+        self,
+        node_name: str,
+        node_info: Dict[str, Any],
+        execution_state: ThreadSafeExecutionState,
+        error: Exception,
+    ) -> None:
+        """Handle node execution failure with elegant error reporting."""
+        error_info = {
+            "status": "failed",
+            "error": str(error),
+            "error_type": type(error).__name__,
+            "start_time": node_info["start_time"],
+            "end_time": time.time(),
+            "config": node_info["config"],
+        }
+        execution_state.mark_failed(node_name, error_info)
+
+        # Use elegant error analyzer
+        try:
+            from core.cli.error_analyzer import format_error_for_developer
+            from core.cli.rich_logger import RichLoggerManager
+
+            console = RichLoggerManager.get_console()
+            format_error_for_developer(error, node_name, console)
+        except Exception:
+            # Fallback to simple logging if analysis fails
+            logger.error(f"Node '{node_name}' failed: {str(error)}")
+
+        execution_state.failed = True
+
     def _log_ml_pipeline_summary(
         self, execution_results: Dict[str, Any], ml_info: Dict[str, Any]
     ) -> None:
         """Log comprehensive ML pipeline execution summary."""
-        logger.info("=" * 60)
         logger.info("🎯 ML PIPELINE EXECUTION SUMMARY")
-        logger.info("=" * 60)
 
         successful_nodes = [
             name for name, result in execution_results.items() if result.get("status") == "success"
@@ -645,7 +734,6 @@ class NodeExecutor:
         if failed_nodes:
             logger.error(f"Failed: {', '.join(failed_nodes)}")
 
-        logger.info(f"🏷️  Model Version: {ml_info.get('model_version', 'Unknown')}")
         logger.info(f"📦 Project: {ml_info.get('project_name', 'Unknown')}")
 
         total_time = 0
@@ -654,7 +742,6 @@ class NodeExecutor:
                 total_time += result["end_time"] - result["start_time"]
 
         logger.info(f"⏱️  Total execution time: {total_time:.2f}s")
-        logger.info("=" * 60)
 
     def _handle_unfinished_futures(self, execution_state: ThreadSafeExecutionState) -> None:
         """Handle any unfinished futures at the end of execution."""
@@ -754,11 +841,46 @@ class NodeExecutor:
         """Enhanced validation and output saving with ML metadata."""
         PipelineValidator.validate_dataframe_schema(result_df)
         if hasattr(result_df, "printSchema"):
-            logger.debug(f"Schema for node '{node_name}':")
+            # Capture schema output
+            from io import StringIO
+            import sys
+
+            old_stdout = sys.stdout
+            sys.stdout = StringIO()
+            result_df.printSchema()
+            schema_output = sys.stdout.getvalue()
+            sys.stdout = old_stdout
+
+            # Print schema section separator
             try:
-                result_df.printSchema()
-            except Exception:
-                pass
+                from core.cli.rich_logger import RichLoggerManager
+                from rich.rule import Rule
+
+                console = RichLoggerManager.get_console()
+                console.print()
+                from core.cli.rich_logger import print_process_separator
+
+                node_display_name = node_name.replace(".", " › ")
+                print_process_separator("schema", "DATA SCHEMA", node_display_name, console)
+                console.print()
+            except Exception as e:
+                logger.debug(f"Could not print schema separator: {e}")
+
+            # Display with elegant table formatting
+            try:
+                from core.cli.schema_formatter import print_spark_schema
+
+                node_display_name = node_name.replace(".", " › ")
+                print_spark_schema(schema_output, title=f"{node_display_name}")
+
+            except ImportError as e:
+                # If elegant formatting fails, show plain text
+                logger.warning(f"Could not format schema as table: {e}")
+                print(schema_output)
+            except Exception as e:
+                # If elegant formatting fails, show plain text
+                logger.warning(f"Could not format schema as table: {e}")
+                print(schema_output)
 
         env = getattr(self.context, "env", None)
         if not env:
@@ -776,7 +898,20 @@ class NodeExecutor:
             output_params["model_version"] = ml_info["model_version"]
 
         self.output_manager.save_output(env, **output_params)
-        logger.info(f"Output saved successfully for node '{node_name}'")
+
+        # Print save completion
+        try:
+            from core.cli.rich_logger import RichLoggerManager
+            from rich.text import Text
+
+            console = RichLoggerManager.get_console()
+            line = Text("  ")
+            line.append("✓ ", style="bright_green")
+            line.append(f"Output saved for node '{node_name}'", style="white")
+            console.print(line)
+            console.print()
+        except Exception:
+            logger.info(f"Output saved successfully for node '{node_name}'")
 
     def _get_node_config(self, node_name: str) -> Dict[str, Any]:
         """Get configuration for a specific node with enhanced error handling."""
@@ -835,7 +970,7 @@ class NodeExecutor:
                     p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
                 )
                 if not accepts_kwargs:
-                    logger.info(
+                    logger.debug(
                         f"Function '{function_name}' doesn't accept 'ml_context' parameter nor **kwargs. "
                         "ML-specific features may not be available."
                     )

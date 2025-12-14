@@ -140,11 +140,11 @@ class DataFrameManager(BaseIO):
         spark = self._ctx_spark()
 
         if pd and isinstance(df, pd.DataFrame):
-            logger.info("Converting pandas DataFrame to Spark")
+            logger.debug("Converting pandas DataFrame to Spark")
             return spark.createDataFrame(df, schema=schema) if schema else spark.createDataFrame(df)
 
         if pl and isinstance(df, pl.DataFrame):
-            logger.info("Converting Polars DataFrame to Spark")
+            logger.debug("Converting Polars DataFrame to Spark")
             try:
                 if hasattr(df, "to_arrow"):
                     arrow_table = df.to_arrow()
@@ -637,7 +637,7 @@ class DataOutputManager(BaseIO):
 
         start = time.time()
         writer.write(df, path, config)
-        logger.info(f"Traditional write completed in {time.time() - start:.2f}s")
+        logger.info(f"Write completed in {time.time() - start:.2f}s")
 
     def _save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
         """Save model artifacts to registry."""

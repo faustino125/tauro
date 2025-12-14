@@ -212,6 +212,21 @@ class ParquetWriter(SparkWriterMixin):
         config = normalize_partition_config(config)
         try:
             writer = self._configure_spark_writer(data, config)
+
+            # Print data writing separator
+            try:
+                from core.cli.rich_logger import RichLoggerManager
+                from rich.rule import Rule
+
+                console = RichLoggerManager.get_console()
+                console.print()
+                from core.cli.rich_logger import print_process_separator
+
+                print_process_separator("saving", "SAVING OUTPUT", destination, console)
+                console.print()
+            except Exception as e:
+                logger.debug(f"Rich logger display skipped: {e}")
+
             logger.info(f"Writing Parquet data to: {destination}")
             writer.save(destination)
             logger.success(f"Parquet data written successfully to: {destination}")

@@ -1,6 +1,6 @@
 .. Tauro documentation master file
 
-🐂 Tauro - Data Pipeline Framework
+Tauro - Data Pipeline Framework
 ============================================
 
 **Tauro** is a data pipeline framework designed to simplify the development and orchestration of batch, streaming, and hybrid data workflows. Built for data engineers and ML practitioners, Tauro provides enterprise-grade reliability with developer-friendly simplicity.

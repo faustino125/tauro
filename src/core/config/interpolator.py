@@ -126,20 +126,7 @@ class VariableInterpolator:
     def interpolate_structure(
         value: Any, variables: Dict[str, Any], *, copy: bool = False, _depth: int = 0
     ) -> Any:
-        """Recursively interpolate variables in any nested structure of dicts/lists/strings.
-
-        Args:
-            value: Structure to interpolate (dict, list, string, or primitive)
-            variables: Dictionary of variable values
-            copy: Whether to create a copy or modify in-place
-            _depth: Internal recursion depth counter
-
-        Returns:
-            Interpolated structure
-
-        Raises:
-            ConfigLoadError: If maximum recursion depth exceeded
-        """
+        """Recursively interpolate variables in any nested structure of dicts/lists/strings."""
         # Prevent excessive recursion in structure traversal
         if _depth > VariableInterpolator.MAX_INTERPOLATION_DEPTH:
             raise ConfigLoadError(

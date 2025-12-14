@@ -14,6 +14,15 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from loguru import logger  # type: ignore
 
+# Try to import Rich logger, fallback to basic if not available
+try:
+    from core.cli.rich_logger import RichLoggerManager
+
+    _USE_RICH = True
+except ImportError:
+    _USE_RICH = False
+    logger.debug("Rich not available, using basic logging")
+
 
 # ===== Environment Constants =====
 # Default environments that every Tauro project should support
@@ -457,32 +466,45 @@ class LoggerManager:
         quiet: bool = False,
     ) -> None:
         """Configure application logging."""
-        logger.remove()
-
-        if quiet:
-            console_level = "ERROR"
-        elif verbose:
-            console_level = "DEBUG"
+        # Use Rich logger if available, otherwise fall back to basic
+        if _USE_RICH:
+            RichLoggerManager.setup(
+                level=level,
+                log_file=log_file,
+                verbose=verbose,
+                quiet=quiet,
+                show_time=True,
+                show_path=verbose,  # Show file paths only in verbose mode
+                enable_rich_tracebacks=True,
+            )
         else:
-            console_level = level.upper()
+            # Fallback to original basic logging
+            logger.remove()
 
-        logger.add(
-            sys.stderr,
-            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>tauro</cyan> | <level>{message}</level>",
-            colorize=True,
-            level=console_level,
-        )
+            if quiet:
+                console_level = "ERROR"
+            elif verbose:
+                console_level = "DEBUG"
+            else:
+                console_level = level.upper()
 
-        log_path = Path(log_file) if log_file else Path("logs/log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.add(
+                sys.stderr,
+                format="{time:HH:mm:ss} | {level: <8} | {message}",
+                colorize=True,
+                level=console_level,
+            )
 
-        logger.add(
-            log_path,
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
-            rotation="10 MB",
-            retention="7 days",
-            level="DEBUG",
-        )
+            log_path = Path(log_file) if log_file else Path("logs/log")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+
+            logger.add(
+                log_path,
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+                rotation="10 MB",
+                retention="7 days",
+                level="DEBUG",
+            )
 
 
 class PathManager:

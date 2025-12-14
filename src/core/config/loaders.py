@@ -31,17 +31,7 @@ class ConfigLoader:
 
     @staticmethod
     def _validate_safe_path(source: Union[str, Path]) -> Path:
-        """Validate that the path is safe and accessible.
-
-        Args:
-            source: Path to validate
-
-        Returns:
-            Resolved Path object
-
-        Raises:
-            ConfigLoadError: If path is unsafe or inaccessible
-        """
+        """Validate that the path is safe and accessible."""
         try:
             path = Path(source).resolve(strict=False)
         except (ValueError, OSError) as e:

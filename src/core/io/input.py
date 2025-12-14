@@ -34,7 +34,21 @@ class SequentialLoadingStrategy(InputLoadingStrategy):
         errors: List[str] = []
         fill_none = bool(self._ctx_get("global_settings", {}).get("fill_none_on_error", False))
 
-        logger.info(f"Loading {len(input_keys)} datasets sequentially")
+        # Print data loading separator
+        try:
+            from core.cli.rich_logger import RichLoggerManager
+            from rich.rule import Rule
+
+            console = RichLoggerManager.get_console()
+            console.print()
+            from core.cli.rich_logger import print_process_separator
+
+            print_process_separator(
+                "data_loading", "LOADING DATA", f"{len(input_keys)} datasets", console
+            )
+            console.print()
+        except Exception:
+            logger.info(f"Loading {len(input_keys)} datasets sequentially")
 
         for key in input_keys:
             try:

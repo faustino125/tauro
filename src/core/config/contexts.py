@@ -55,6 +55,7 @@ class PipelineManager:
             "outputs": contents.get("outputs", []),
             "type": contents.get("type", "batch"),
             "spark_config": contents.get("spark_config", {}),
+            "requires_dates": contents.get("requires_dates", True),
         }
 
     def get_pipeline(self, name: str) -> Optional[Dict[str, Any]]:
@@ -121,21 +122,7 @@ class Context:
         input_config: Union[str, Dict, Path],
         output_config: Union[str, Dict, Path],
     ) -> Dict[str, Union[str, Dict, Path]]:
-        """Normalize all configuration sources to Path or dict.
-
-        Converts string file paths to Path objects, preserving inline JSON/YAML dicts.
-        This centralizes the source preparation logic.
-
-        Args:
-            global_settings: File path (str/Path) or inline config dict
-            pipelines_config: File path (str/Path) or inline config dict
-            nodes_config: File path (str/Path) or inline config dict
-            input_config: File path (str/Path) or inline config dict
-            output_config: File path (str/Path) or inline config dict
-
-        Returns:
-            Dictionary with normalized sources ready for loading
-        """
+        """Normalize all configuration sources to Path or dict."""
 
         def _normalize_source(source: Union[str, Dict, Path]) -> Union[str, Dict, Path]:
             """Convert string file path to Path, preserve inline dicts."""
@@ -175,14 +162,7 @@ class Context:
         self.output_config = self._load_and_validate_config(output_config, "output config")
 
     def _load_ml_info(self, ml_info_source: Optional[Union[str, Dict[str, Any], Path]]) -> None:
-        """Load and apply ML info configuration with interpolation and defaults.
-
-        Consolidates the ML info loading pipeline:
-        1. Resolve source (explicit param or from global_settings)
-        2. Load data from file/dict
-        3. Interpolate variables
-        4. Apply defaults and merge configs
-        """
+        """Load and apply ML info configuration with interpolation and defaults."""
         logger.debug("Loading ML info configuration")
 
         # Determine ML info source
@@ -204,18 +184,7 @@ class Context:
     def _load_ml_info_data(
         self, source: Optional[Union[str, Dict[str, Any], Path]]
     ) -> Dict[str, Any]:
-        """Load ML info data from source (file or inline dict).
-
-        Args:
-            source: File path (str/Path), inline dict, or None
-
-        Returns:
-            ML info configuration as dictionary
-
-        Raises:
-            ConfigValidationError: If source is invalid or not a dict
-            ConfigLoadError: If file loading fails
-        """
+        """Load ML info data from source (file or inline dict)."""
         if isinstance(source, dict):
             ml_info_data = source
             logger.debug("Using inline ML info dict")
@@ -237,13 +206,7 @@ class Context:
         return ml_info_data
 
     def _process_ml_info(self, ml_info_data: Dict[str, Any]) -> None:
-        """Interpolate variables and apply defaults to ML info data.
-
-        This consolidates interpolation and default application logic.
-
-        Args:
-            ml_info_data: ML info dict to process in-place
-        """
+        """Interpolate variables and apply defaults to ML info data."""
         # Interpolate variables from global settings
         try:
             logger.debug("Interpolating ML info variables")
@@ -283,11 +246,7 @@ class Context:
             raise ConfigLoadError(f"Unexpected error: {str(e)}") from e
 
     def _process_configurations(self) -> None:
-        """Process and prepare configurations after loading.
-
-        Performs variable interpolation on input/output configurations
-        to resolve placeholders and environment variables.
-        """
+        """Process and prepare configurations after loading."""
         logger.info("Processing configurations: starting interpolation pipeline")
         self.layer = self.global_settings.get("layer", "").lower()
 
@@ -351,18 +310,7 @@ class Context:
         }
 
     def get_pipeline_ml_info(self, pipeline_name: str) -> Dict[str, Any]:
-        """Combine base ml_info with pipeline-specific ML config.
-
-        Normaliza y garantiza la presencia de campos clave usados por MLOps:
-
-        - ``project_name``: viene de ``global_settings['project_name']`` o "".
-        - ``model_name``: prioridad pipeline -> ml_info -> nombre de pipeline.
-        - ``model_version``: prioridad pipeline -> ml_info -> ``default_model_version``.
-        - ``hyperparams``: fusión de hyperparams de ml_info y del pipeline.
-
-        Esto permite que cualquier executor/integación MLOps consuma una estructura
-        homogénea sin depender de que el usuario defina todos los campos a mano.
-        """
+        """Combine base ml_info with pipeline-specific ML config."""
         base = dict(getattr(self, "ml_info", {}) or {})
         pconf = self.get_pipeline_ml_config(pipeline_name)
 

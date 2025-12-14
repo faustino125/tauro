@@ -2,16 +2,14 @@
 Copyright (c) 2025 Faustino Lopez Ramos. 
 For licensing information, see the LICENSE file in the project root
 """
+from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from loguru import logger  # type: ignore
 
-try:
-    from pyspark.sql.streaming import DataStreamWriter, StreamingQuery  # type: ignore
-except ImportError:
-    DataStreamWriter = Any  # type: ignore
-    StreamingQuery = Any  # type: ignore
+from pyspark.sql.streaming import DataStreamWriter, StreamingQuery  # type: ignore
+
 
 from core.streaming.exceptions import StreamingError, StreamingFormatNotSupportedError
 
@@ -29,25 +27,81 @@ class BaseStreamingWriter(ABC):
         """Write streaming data and return the streaming query."""
         pass
 
-    def _validate_config(self, config: Dict[str, Any], required_fields: list = None) -> None:
+    def _validate_config(
+        self, config: Dict[str, Any], required_fields: Optional[list] = None
+    ) -> None:
         """Validate basic configuration requirements."""
         if not isinstance(config, dict):
             raise StreamingError("Configuration must be a dictionary")
 
-        if required_fields:
-            missing_fields = [field for field in required_fields if field not in config]
-            if missing_fields:
-                raise StreamingError(f"Missing required fields: {missing_fields}")
+        req = required_fields or []
+        missing_fields = [field for field in req if field not in config]
+        if missing_fields:
+            raise StreamingError(f"Missing required fields: {missing_fields}")
 
     def _apply_options(self, writer: DataStreamWriter, options: Dict[str, Any]) -> DataStreamWriter:
         """Apply options to writer with error handling."""
         try:
             for key, value in options.items():
-                writer = writer.option(key, str(value))
+                if value is None:
+                    continue
+                # Spark expects string values for writer.option
+                writer = writer.option(str(key), str(value))
             return writer
         except Exception as e:
             logger.error(f"Error applying options {options}: {str(e)}")
             raise StreamingError(f"Failed to apply writer options: {str(e)}")
+
+    def _apply_common(self, writer: DataStreamWriter, config: Dict[str, Any]) -> DataStreamWriter:
+        """
+        Apply common streaming settings:
+        - outputMode: append|complete|update
+        - trigger: {"once": true} | {"processingTime": "10 seconds"} | {"availableNow": true}
+        - checkpointLocation: path string
+        - queryName: name string
+        """
+        try:
+            options = config.get("options", {}) or {}
+            writer = self._apply_options(writer, options)
+
+            output_mode = config.get("outputMode")
+            if output_mode:
+                writer = writer.outputMode(str(output_mode))
+
+            trigger_cfg = config.get("trigger")
+            if trigger_cfg:
+                # Pass through supported trigger configs
+                # Example: {"once": True} | {"availableNow": True} | {"processingTime": "10 seconds"}
+                if isinstance(trigger_cfg, dict):
+                    writer = writer.trigger(**trigger_cfg)
+                else:
+                    # Fallback: if string, assume processing time
+                    writer = writer.trigger(processingTime=str(trigger_cfg))
+
+            checkpoint = config.get("checkpointLocation")
+            if checkpoint:
+                writer = writer.option("checkpointLocation", str(checkpoint))
+
+            query_name = config.get("queryName")
+            if query_name:
+                writer = writer.queryName(str(query_name))
+
+            return writer
+        except Exception as e:
+            logger.error(f"Error applying common streaming settings: {str(e)}")
+            raise StreamingError(f"Failed to apply common streaming settings: {str(e)}")
+
+    def _apply_partitioning(
+        self, writer: DataStreamWriter, config: Dict[str, Any]
+    ) -> DataStreamWriter:
+        """Apply partitionBy when present."""
+        partition_by = config.get("partitionBy")
+        if partition_by:
+            if isinstance(partition_by, list):
+                writer = writer.partitionBy(*partition_by)
+            else:
+                writer = writer.partitionBy(str(partition_by))
+        return writer
 
 
 class ConsoleStreamingWriter(BaseStreamingWriter):
@@ -64,12 +118,12 @@ class ConsoleStreamingWriter(BaseStreamingWriter):
             logger.info("Starting console streaming writer")
 
             writer = write_stream.format("console")
-            writer = self._apply_options(writer, options)
+            writer = self._apply_common(writer, config)
 
             if "numRows" not in options:
-                writer = writer.option("numRows", 20)
+                writer = writer.option("numRows", "20")
             if "truncate" not in options:
-                writer = writer.option("truncate", False)
+                writer = writer.option("truncate", "false")
 
             return writer.start()
 
@@ -94,12 +148,15 @@ class DeltaStreamingWriter(BaseStreamingWriter):
             logger.info(f"Starting Delta streaming writer to path: {path}")
 
             writer = write_stream.format("delta")
-            writer = self._apply_options(writer, options)
+            writer = self._apply_common(writer, config)
 
+            # Delta-specific defaults
             if "mergeSchema" not in options:
                 writer = writer.option("mergeSchema", "true")
 
-            return writer.start(path)
+            writer = self._apply_partitioning(writer, config)
+
+            return writer.start(str(path))
 
         except Exception as e:
             logger.error(f"Error starting Delta streaming writer: {str(e)}")
@@ -117,22 +174,13 @@ class ParquetStreamingWriter(BaseStreamingWriter):
             self._validate_config(config, required_fields=["path"])
 
             path = config.get("path")
-            options = config.get("options", {})
-
             logger.info(f"Starting Parquet streaming writer to path: {path}")
 
             writer = write_stream.format("parquet")
-            writer = self._apply_options(writer, options)
+            writer = self._apply_common(writer, config)
+            writer = self._apply_partitioning(writer, config)
 
-            # Set default partitioning if not specified
-            partition_by = config.get("partitionBy")
-            if partition_by:
-                if isinstance(partition_by, list):
-                    writer = writer.partitionBy(*partition_by)
-                else:
-                    writer = writer.partitionBy(partition_by)
-
-            return writer.start(path)
+            return writer.start(str(path))
 
         except Exception as e:
             logger.error(f"Error starting Parquet streaming writer: {str(e)}")
@@ -148,19 +196,20 @@ class KafkaStreamingWriter(BaseStreamingWriter):
         """Write to Kafka."""
         try:
             self._validate_config(config)
-            options = config.get("options", {})
+            options = config.get("options", {}) or {}
 
-            # Validate required Kafka options
             required_kafka_options = ["kafka.bootstrap.servers", "topic"]
-            missing_options = [opt for opt in required_kafka_options if opt not in options]
+            missing_options = [opt for opt in required_kafka_options if not options.get(opt)]
             if missing_options:
                 raise StreamingError(f"Missing required Kafka options: {missing_options}")
 
-            logger.info(f"Starting Kafka streaming writer to topic: {options.get('topic')}")
+            topic = options.get("topic")
+            logger.info(f"Starting Kafka streaming writer to topic: {topic}")
 
             writer = write_stream.format("kafka")
-            writer = self._apply_options(writer, options)
+            writer = self._apply_common(writer, config)
 
+            # Kafka sink does not use partitionBy. Options already applied in _apply_common.
             return writer.start()
 
         except Exception as e:
@@ -177,12 +226,13 @@ class MemoryStreamingWriter(BaseStreamingWriter):
         """Write to memory sink."""
         try:
             self._validate_config(config)
-            options = config.get("options", {})
-            query_name = options.get("queryName", "memory_query")
+            options = config.get("options", {}) or {}
+            query_name = options.get("queryName") or config.get("queryName") or "memory_query"
 
             logger.info(f"Starting memory streaming writer with query name: {query_name}")
 
-            writer = write_stream.format("memory").queryName(query_name)
+            writer = write_stream.format("memory").queryName(str(query_name))
+            writer = self._apply_common(writer, config)
 
             return writer.start()
 
@@ -202,13 +252,14 @@ class ForeachBatchStreamingWriter(BaseStreamingWriter):
             self._validate_config(config, required_fields=["batch_function"])
 
             batch_function = config.get("batch_function")
-
             logger.info("Starting foreachBatch streaming writer")
 
-            # Load the batch processing function
             func = self._load_batch_function(batch_function)
 
-            return write_stream.foreachBatch(func).start()
+            writer = write_stream.foreachBatch(func)
+            writer = self._apply_common(writer, config)
+
+            return writer.start()
 
         except Exception as e:
             logger.error(f"Error starting foreachBatch streaming writer: {str(e)}")
@@ -261,22 +312,13 @@ class JSONStreamingWriter(BaseStreamingWriter):
             self._validate_config(config, required_fields=["path"])
 
             path = config.get("path")
-            options = config.get("options", {})
-
             logger.info(f"Starting JSON streaming writer to path: {path}")
 
             writer = write_stream.format("json")
-            writer = self._apply_options(writer, options)
+            writer = self._apply_common(writer, config)
+            writer = self._apply_partitioning(writer, config)
 
-            # Set default partitioning if specified
-            partition_by = config.get("partitionBy")
-            if partition_by:
-                if isinstance(partition_by, list):
-                    writer = writer.partitionBy(*partition_by)
-                else:
-                    writer = writer.partitionBy(partition_by)
-
-            return writer.start(path)
+            return writer.start(str(path))
 
         except Exception as e:
             logger.error(f"Error starting JSON streaming writer: {str(e)}")
@@ -294,26 +336,19 @@ class CSVStreamingWriter(BaseStreamingWriter):
             self._validate_config(config, required_fields=["path"])
 
             path = config.get("path")
-            options = config.get("options", {})
+            options = config.get("options", {}) or {}
 
             logger.info(f"Starting CSV streaming writer to path: {path}")
 
             writer = write_stream.format("csv")
-            writer = self._apply_options(writer, options)
+            writer = self._apply_common(writer, config)
 
-            # Set default CSV options
             if "header" not in options:
                 writer = writer.option("header", "true")
 
-            # Set default partitioning if specified
-            partition_by = config.get("partitionBy")
-            if partition_by:
-                if isinstance(partition_by, list):
-                    writer = writer.partitionBy(*partition_by)
-                else:
-                    writer = writer.partitionBy(partition_by)
+            writer = self._apply_partitioning(writer, config)
 
-            return writer.start(path)
+            return writer.start(str(path))
 
         except Exception as e:
             logger.error(f"Error starting CSV streaming writer: {str(e)}")
@@ -325,7 +360,7 @@ class StreamingWriterFactory:
 
     def __init__(self, context):
         self.context = context
-        self._writers = {}
+        self._writers: Dict[str, BaseStreamingWriter] = {}
         self._initialize_writers()
 
     def _initialize_writers(self):
@@ -337,11 +372,13 @@ class StreamingWriterFactory:
                 "parquet": ParquetStreamingWriter(self.context),
                 "kafka": KafkaStreamingWriter(self.context),
                 "memory": MemoryStreamingWriter(self.context),
-                "foreachBatch": ForeachBatchStreamingWriter(self.context),
+                "foreachbatch": ForeachBatchStreamingWriter(self.context),
                 "json": JSONStreamingWriter(self.context),
                 "csv": CSVStreamingWriter(self.context),
             }
-            logger.info(f"Initialized {len(self._writers)} streaming writers")
+            logger.info(
+                f"Initialized {len(self._writers)} streaming writers: {list(self._writers.keys())}"
+            )
         except Exception as e:
             logger.error(f"Error initializing streaming writers: {str(e)}")
             raise StreamingError(f"Failed to initialize streaming writers: {str(e)}")
@@ -349,8 +386,8 @@ class StreamingWriterFactory:
     def get_writer(self, format_name: str) -> BaseStreamingWriter:
         """Get streaming writer for specified format."""
         try:
-            if not format_name:
-                raise StreamingError("Format name cannot be empty")
+            if not format_name or not isinstance(format_name, str):
+                raise StreamingError("Format name must be a non-empty string")
 
             format_key = format_name.lower()
 
@@ -373,7 +410,7 @@ class StreamingWriterFactory:
 
     def validate_format_support(self, format_name: str) -> bool:
         """Check if a format is supported."""
-        return format_name.lower() in self._writers
+        return isinstance(format_name, str) and format_name.lower() in self._writers
 
     def register_custom_writer(self, format_name: str, writer_class, *args, **kwargs):
         """Register a custom streaming writer."""

@@ -582,7 +582,7 @@ class UnifiedPipelineState:
         """Set the overall pipeline status."""
         with self._lock:
             self._pipeline_status = status
-            logger.info(f"Pipeline status changed to: {status}")
+            logger.debug(f"Pipeline status changed to: {status}")
 
     def register_resource(self, node_name: str, resource_type: str, resource: Any):
         """Register a resource for cleanup tracking"""
@@ -637,7 +637,7 @@ class UnifiedPipelineState:
                     self._release_resource(node, res_type, resource)
 
             self._reset_state()
-            logger.info("Pipeline state has been reset")
+            logger.debug("Pipeline state has been reset")
 
     def _reset_state(self):
         """Reset all state containers"""

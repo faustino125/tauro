@@ -23,13 +23,6 @@ class ContextLoader:
     def load_from_paths(self, config_paths: Dict[str, str], env: str) -> Context:
         """
         Initialize context from a dictionary of configuration file paths.
-
-        Args:
-            config_paths: Dictionary containing paths for different config components
-            env: Environment name
-
-        Returns:
-            Initialized Context object
         """
         required = [
             "global_settings_path",

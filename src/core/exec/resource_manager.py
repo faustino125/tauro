@@ -1,9 +1,6 @@
 """
 Copyright (c) 2025 Faustino Lopez Ramos.
 For licensing information, see the LICENSE file in the project root
-
-Comprehensive resource management for pipelines.
-Handles connections, file handles, temporary files, and other resources.
 """
 import atexit
 import os
@@ -47,12 +44,6 @@ class ManagedResource:
     ):
         """
         Initialize managed resource.
-
-        Args:
-            resource: The actual resource object
-            resource_type: Type of resource (from ResourceType)
-            cleanup_callback: Optional custom cleanup function
-            metadata: Optional metadata about the resource
         """
         self.resource = resource
         self.resource_type = resource_type
@@ -64,9 +55,6 @@ class ManagedResource:
     def cleanup(self) -> bool:
         """
         Clean up the resource.
-
-        Returns:
-            True if cleanup succeeded, False otherwise
         """
         with self._lock:
             if self.cleaned_up:
@@ -172,9 +160,6 @@ class ManagedResource:
 class ResourceManager:
     """
     Central resource manager for tracking and cleanup of all resources.
-
-    Thread-safe singleton that manages the lifecycle of various resources
-    including connections, files, DataFrames, and more.
     """
 
     _instance = None
@@ -213,16 +198,6 @@ class ResourceManager:
     def resource_context(self, context_id: str):
         """
         Context manager for resource scoping.
-
-        Args:
-            context_id: Identifier for the resource context
-
-        Example:
-            with resource_manager.resource_context("pipeline_123"):
-                # All resources registered here are tied to this context
-                conn = create_connection()
-                resource_manager.register(conn, ResourceType.CONNECTION, context_id)
-            # Resources automatically cleaned up when context exits
         """
         try:
             yield self
@@ -239,16 +214,6 @@ class ResourceManager:
     ) -> ManagedResource:
         """
         Register a resource for managed cleanup.
-
-        Args:
-            resource: The resource to manage
-            resource_type: Type of resource (from ResourceType)
-            context_id: Optional context identifier for scoped cleanup
-            cleanup_callback: Optional custom cleanup function
-            metadata: Optional metadata about the resource
-
-        Returns:
-            ManagedResource wrapper
         """
         managed = ManagedResource(resource, resource_type, cleanup_callback, metadata)
 
@@ -267,9 +232,6 @@ class ResourceManager:
     def cleanup_context(self, context_id: str) -> None:
         """
         Clean up all resources for a specific context.
-
-        Args:
-            context_id: Context identifier
         """
         with self._lock:
             resources = self._resources.get(context_id, [])
@@ -324,15 +286,6 @@ class ResourceManager:
     ) -> Path:
         """
         Create a managed temporary file.
-
-        Args:
-            context_id: Optional context identifier
-            suffix: File suffix
-            prefix: File prefix
-            dir: Directory for temp file
-
-        Returns:
-            Path to temporary file
         """
         fd, path = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=dir)
         os.close(fd)  # Close file descriptor immediately
@@ -357,15 +310,6 @@ class ResourceManager:
     ) -> Path:
         """
         Create a managed temporary directory.
-
-        Args:
-            context_id: Optional context identifier
-            suffix: Directory suffix
-            prefix: Directory prefix
-            dir: Parent directory
-
-        Returns:
-            Path to temporary directory
         """
         path = tempfile.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
         temp_path = Path(path)
@@ -386,12 +330,6 @@ class ResourceManager:
     def get_resource_count(self, context_id: Optional[str] = None) -> int:
         """
         Get count of managed resources.
-
-        Args:
-            context_id: Optional context to count resources for
-
-        Returns:
-            Number of managed resources
         """
         with self._lock:
             if context_id:
@@ -402,9 +340,6 @@ class ResourceManager:
     def get_stats(self) -> Dict[str, Any]:
         """
         Get resource management statistics.
-
-        Returns:
-            Dictionary with resource statistics
         """
         with self._lock:
             context_counts = {ctx: len(res) for ctx, res in self._resources.items()}
@@ -437,9 +372,6 @@ _global_manager: Optional[ResourceManager] = None
 def get_resource_manager() -> ResourceManager:
     """
     Get the global ResourceManager instance.
-
-    Returns:
-        ResourceManager singleton instance
     """
     global _global_manager
     if _global_manager is None:
@@ -456,18 +388,6 @@ def managed_resource(
 ):
     """
     Context manager for automatic resource cleanup.
-
-    Args:
-        resource: The resource to manage
-        resource_type: Type of resource
-        context_id: Optional context identifier
-        cleanup_callback: Optional cleanup function
-
-    Example:
-        with managed_resource(connection, ResourceType.CONNECTION):
-            # Use connection
-            pass
-        # Connection automatically closed
     """
     manager = get_resource_manager()
     managed = manager.register(resource, resource_type, context_id, cleanup_callback)

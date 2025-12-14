@@ -23,6 +23,19 @@ class ContextInitializer:
 
     def initialize(self, env: str) -> Context:
         """Initialize context for given environment."""
+        # Print configuration loading separator
+        try:
+            from core.cli.rich_logger import RichLoggerManager, print_process_separator
+
+            console = RichLoggerManager.get_console()
+            console.print()
+            print_process_separator(
+                "configuration", "LOADING CONFIGURATION", f"Environment: {env}", console
+            )
+            console.print()
+        except Exception:
+            pass
+
         try:
             config_file_path = self.config_manager.get_config_file_path()
             app_config = AppConfigManager(config_file_path)
@@ -59,7 +72,6 @@ class PipelineExecutor:
             if self.path_manager:
                 self.path_manager.setup_import_paths()
 
-            logger.info(f"Executing pipeline: {pipeline_name}")
             if node_name:
                 logger.info(f"Target node: {node_name}")
 
@@ -69,6 +81,17 @@ class PipelineExecutor:
                 start_date=start_date,
                 end_date=end_date,
             )
+
+            try:
+                from core.cli.rich_logger import RichLoggerManager, print_process_separator
+                from rich.rule import Rule
+
+                console = RichLoggerManager.get_console()
+                print_process_separator(
+                    "success", "PIPELINE COMPLETED SUCCESSFULLY", pipeline_name, console
+                )
+            except Exception:
+                pass
 
             logger.success(f"Pipeline '{pipeline_name}' completed successfully")
 

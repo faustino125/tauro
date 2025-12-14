@@ -728,6 +728,23 @@ class UnifiedCLI:
             raise ValidationError("--pipeline required for pipeline execution")
 
         logger.info("Starting Tauro pipeline execution")
+
+        # Print elegant header
+        try:
+            from core.cli.rich_logger import RichLoggerManager
+            from rich.rule import Rule
+
+            console = RichLoggerManager.get_console()
+            console.print()
+            from core.cli.rich_logger import print_process_separator
+
+            print_process_separator(
+                "execution", "PIPELINE EXECUTION", f"Environment: {self.config.env}", console
+            )
+            console.print()
+        except Exception:
+            pass
+
         logger.info(f"Environment: {self.config.env.upper()}")
         logger.info(f"Pipeline: {self.config.pipeline}")
 
@@ -921,6 +938,25 @@ class UnifiedCLI:
             end_date=self.config.end_date,
             dry_run=self.config.dry_run,
         )
+
+        # Print elegant completion
+        try:
+            from core.cli.rich_logger import RichLoggerManager
+            from rich.rule import Rule
+            from rich.panel import Panel
+            from rich.text import Text
+            from rich import box
+
+            console = RichLoggerManager.get_console()
+            console.print()
+            from core.cli.rich_logger import print_process_separator
+
+            print_process_separator(
+                "success", "EXECUTION COMPLETED", f"Pipeline: {self.config.pipeline}", console
+            )
+            console.print()
+        except Exception:
+            pass
 
         logger.success("Tauro pipeline execution completed successfully")
         return ExitCode.SUCCESS.value

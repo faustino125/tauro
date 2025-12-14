@@ -85,10 +85,9 @@ class SecureModuleImporter:
                 logger.debug(f"Search path does not exist or is not a directory: {path}")
                 return None
 
-            # Check for suspicious patterns
             path_str = str(resolved_path)
-            if any(re.search(pattern, path_str) for pattern in self.FORBIDDEN_PATTERNS):
-                logger.warning(f"Search path contains forbidden pattern: {path}")
+            if ".." in path_str:
+                logger.warning(f"Search path contains parent directory traversal: {path}")
                 return None
 
             # Check read permissions

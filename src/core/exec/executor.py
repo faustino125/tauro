@@ -264,10 +264,12 @@ class BaseExecutor:
     ) -> None:
         """Log pipeline execution start."""
         if self.is_ml_layer:
-            logger.info("=" * 60)
             logger.info(f"🚀 Starting {pipeline_type} ML Pipeline: '{pipeline_name}'")
             logger.info(f"📦 Project: {ml_info.get('project_name', 'Unknown')}")
-            logger.info(f"🏷️  Model Version: {ml_info.get('model_version', 'Unknown')}")
+
+            model_version = ml_info.get("model_version")
+            if model_version and str(model_version).lower() != "none":
+                logger.info(f"🏷️  Model Version: {model_version}")
         else:
             logger.info(f"Running {pipeline_type.lower()} pipeline '{pipeline_name}'")
 
@@ -303,8 +305,6 @@ class BatchExecutor(BaseExecutor):
         model_version: Optional[str] = None,
         hyperparams: Optional[Dict[str, Any]] = None,
     ) -> None:
-        logger.info(f"Executing batch pipeline: {pipeline_name}")
-
         pipeline = self._get_pipeline_config(pipeline_name)
 
         start_date = start_date or self.context.global_settings.get("start_date")
@@ -399,8 +399,14 @@ class BatchExecutor(BaseExecutor):
         mlops_run_id: Optional[str] = None
         experiment_id: Optional[str] = None
 
+        # Check if MLOps is explicitly disabled in global settings
+        mlops_enabled = self.context.global_settings.get("mlops_enabled", True)
+        if not mlops_enabled:
+            logger.debug("MLOps tracking disabled via global settings (mlops_enabled: false)")
+            return None, None, None
+
         try:
-            mlops_integration = MLOpsExecutorIntegration(context=self.context)
+            mlops_integration = MLOpsExecutorIntegration(context=self.context, auto_init=True)
             if not mlops_integration.is_available():
                 return mlops_integration, None, None
 
@@ -898,8 +904,22 @@ class PipelineExecutor:
     def __init__(self, context: Context):
         self.context = context
         self.batch_executor = BatchExecutor(context)
-        self.streaming_executor = StreamingExecutor(context)
-        self.hybrid_executor = HybridExecutor(context)
+        self._streaming_executor: Optional[StreamingExecutor] = None
+        self._hybrid_executor: Optional[HybridExecutor] = None
+
+    @property
+    def streaming_executor(self) -> StreamingExecutor:
+        """Lazy initialization of StreamingExecutor."""
+        if self._streaming_executor is None:
+            self._streaming_executor = StreamingExecutor(self.context)
+        return self._streaming_executor
+
+    @property
+    def hybrid_executor(self) -> HybridExecutor:
+        """Lazy initialization of HybridExecutor."""
+        if self._hybrid_executor is None:
+            self._hybrid_executor = HybridExecutor(self.context)
+        return self._hybrid_executor
 
     def run_pipeline(
         self,
@@ -914,16 +934,17 @@ class PipelineExecutor:
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
-        logger.info(f"Executing {pipeline_type} pipeline: '{pipeline_name}'")
-
         # Only validate dates for batch and hybrid pipelines, not for streaming
         if pipeline_type in [PipelineType.BATCH.value, PipelineType.HYBRID.value]:
+            # Check if pipeline requires dates (default True, but can be overridden for static data like catalogs)
+            requires_dates = pipeline.get("requires_dates", True)
             PipelineValidator.validate_required_params(
                 pipeline_name,
                 start_date,
                 end_date,
                 self.context.global_settings.get("start_date"),
                 self.context.global_settings.get("end_date"),
+                requires_dates=requires_dates,
             )
 
         if pipeline_type == PipelineType.BATCH.value:
