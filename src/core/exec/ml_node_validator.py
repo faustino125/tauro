@@ -11,8 +11,8 @@ from loguru import logger  # type: ignore
 class MLNodeValidator:
     """Validator for ML node function signatures and compatibility."""
 
-    # Required parameters that all ML nodes must have
-    REQUIRED_PARAMETERS = {"start_date", "end_date"}
+    # Parámetros opcionales que pueden estar presentes
+    OPTIONAL_PARAMETERS = {"start_date", "end_date"}
 
     # Optional ML-specific parameters
     OPTIONAL_ML_PARAMETERS = {"ml_context"}
@@ -34,10 +34,12 @@ class MLNodeValidator:
             if not has_var_positional:
                 issues.append(f"Node '{node_name}' must accept *input_dfs for variable inputs")
 
-            # Check for required parameters
-            missing_required = MLNodeValidator.REQUIRED_PARAMETERS - param_names
-            if missing_required:
-                issues.append(f"Node '{node_name}' missing required parameters: {missing_required}")
+            missing_optional = MLNodeValidator.OPTIONAL_PARAMETERS - param_names
+            if missing_optional:
+                logger.debug(
+                    f"Node '{node_name}' does not accept optional parameters: {missing_optional}. "
+                    "These will not be passed to the function."
+                )
 
             # Check for ML context support
             has_ml_context = "ml_context" in param_names
@@ -78,29 +80,41 @@ class MLNodeValidator:
     @staticmethod
     def create_ml_context_wrapper(function: Callable, mode: str) -> Callable:
         """Create a wrapper that ensures ml_context is handled correctly."""
+        sig = inspect.signature(function)
+        params = sig.parameters
+        param_names = set(params.keys())
+
+        accepts_start_date = "start_date" in param_names
+        accepts_end_date = "end_date" in param_names
+
+        def _prepare_kwargs(
+            start_date: str = None, end_date: str = None, extra: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]:
+            call_kwargs: Dict[str, Any] = {}
+            if accepts_start_date and start_date is not None:
+                call_kwargs["start_date"] = start_date
+            if accepts_end_date and end_date is not None:
+                call_kwargs["end_date"] = end_date
+            if extra:
+                call_kwargs.update(extra)
+            return call_kwargs
+
         if mode == "explicit":
             # Function already expects ml_context, no wrapper needed
             return function
 
-        elif mode == "kwargs":
+        if mode == "kwargs":
             # Function accepts **kwargs, wrap to pass ml_context explicitly
-            def kwargs_wrapper(*input_dfs, start_date: str, end_date: str, **kwargs):
-                return function(
-                    *input_dfs,
-                    start_date=start_date,
-                    end_date=end_date,
-                    **kwargs,
-                )
+            def kwargs_wrapper(*input_dfs, start_date: str = None, end_date: str = None, **kwargs):
+                return function(*input_dfs, **_prepare_kwargs(start_date, end_date, kwargs))
 
             return kwargs_wrapper
 
-        else:
-            # Function doesn't support ml_context, create pass-through wrapper
-            def no_ml_wrapper(*input_dfs, start_date: str, end_date: str, **kwargs):
-                # Ignore ml_context and call function with just required params
-                return function(*input_dfs, start_date=start_date, end_date=end_date)
+        # Function doesn't support ml_context, create pass-through wrapper
+        def no_ml_wrapper(*input_dfs, start_date: str = None, end_date: str = None, **kwargs):
+            return function(*input_dfs, **_prepare_kwargs(start_date, end_date))
 
-            return no_ml_wrapper
+        return no_ml_wrapper
 
     @staticmethod
     def validate_ml_node_execution(

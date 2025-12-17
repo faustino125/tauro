@@ -94,14 +94,6 @@ class BaseExecutor:
     def _should_enable_mlflow(self) -> bool:
         """
         Determine if MLflow should be enabled.
-
-        Checks:
-        1. MLflow library availability
-        2. Global settings (mlflow.enabled)
-        3. Environment variable (TAURO_MLFLOW_ENABLED)
-
-        Returns:
-            True if MLflow should be enabled
         """
         if not MLFLOW_INTEGRATION_AVAILABLE:
             return False
@@ -122,13 +114,6 @@ class BaseExecutor:
     def _should_init_mlops(self) -> bool:
         """
         Determine if MLOps should be initialized for this execution.
-
-        Checks:
-        1. Global override (mlops.enabled in global_settings)
-        2. Pipeline-specific nodes (auto-detection)
-
-        Returns:
-            True if MLOps should be initialized
         """
         gs = getattr(self.context, "global_settings", {}) or {}
 
@@ -164,9 +149,6 @@ class BaseExecutor:
     def mlops_context(self):
         """
         Get MLOps context (lazy initialization).
-
-        Returns:
-            MLOpsContext if initialized, None otherwise
         """
         if not self._mlops_init_attempted:
             self._init_mlops_if_needed()
@@ -934,8 +916,12 @@ class PipelineExecutor:
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
-        # Only validate dates for batch and hybrid pipelines, not for streaming
-        if pipeline_type in [PipelineType.BATCH.value, PipelineType.HYBRID.value]:
+        # Only validate dates for batch, ml and hybrid pipelines, not for streaming
+        if pipeline_type in [
+            PipelineType.BATCH.value,
+            PipelineType.ML.value,
+            PipelineType.HYBRID.value,
+        ]:
             # Check if pipeline requires dates (default True, but can be overridden for static data like catalogs)
             requires_dates = pipeline.get("requires_dates", True)
             PipelineValidator.validate_required_params(
@@ -947,7 +933,8 @@ class PipelineExecutor:
                 requires_dates=requires_dates,
             )
 
-        if pipeline_type == PipelineType.BATCH.value:
+        if pipeline_type == PipelineType.BATCH.value or pipeline_type == PipelineType.ML.value:
+            # ML pipelines son ejecutados como batch con MLOps habilitado
             return self.batch_executor.execute(
                 pipeline_name,
                 node_name,

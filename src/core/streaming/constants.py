@@ -12,6 +12,7 @@ class PipelineType(Enum):
     BATCH = "batch"
     STREAMING = "streaming"
     HYBRID = "hybrid"  # Para futuros casos de uso mixtos
+    ML = "ml"  # Para pipelines de Machine Learning con tracking MLOps
 
 
 class StreamingMode(Enum):
