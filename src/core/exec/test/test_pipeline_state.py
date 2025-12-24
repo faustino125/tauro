@@ -22,8 +22,8 @@ def test_register_start_complete_node_and_notify_dependents():
     assert ups.get_node_status("batch1") == NodeStatus.PENDING
     started = ups.start_node_execution("batch1")
     assert started
-    ups.complete_node_execution("batch1", output_path="/tmp/out")
-    assert ups.get_batch_output_path("batch1") == "/tmp/out"
+    ups.complete_node_execution("batch1", output_path="output/out")
+    assert ups.get_batch_output_path("batch1") == "output/out"
     # now stream1 should be ready
     assert ups.is_node_ready("stream1") is True
 

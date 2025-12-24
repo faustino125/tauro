@@ -6,6 +6,46 @@ All notable changes to Tauro will be documented in this file.
 The format is based on `Keep a Changelog <https://keepachangelog.com/en/1.0.0/>`_,
 and this project adheres to `Semantic Versioning <https://semver.org/spec/v2.0.0.html>`_.
 
+[Unreleased]
+------------
+
+Changed
+~~~~~~~
+
+- **MLOps**: Both ExperimentTracker and ModelRegistry now use lazy initialization for 
+  directory structures. Tracking directories (experiments, runs, artifacts, metrics) and 
+  registry directories (models, versions, artifacts, metadata) are only created when 
+  actually needed (on first experiment/run creation or model registration), preventing 
+  empty directory creation during initialization.
+- **MLOps**: Enhanced logging for MLOps path resolution to improve debugging and visibility 
+  of where MLOps directories are being created.
+- **MLOps**: Disabled automatic initialization from environment variables when no execution 
+  context is available. This prevents creating MLOps directories in unexpected locations 
+  (e.g., current working directory). MLOps will only initialize when a proper execution 
+  context is provided.
+- **MLOps**: Improved pipeline-specific path resolution. When MLOpsContext is initialized 
+  with a pipeline_name, it correctly resolves paths to pipeline-specific MLOps directories. 
+  The executor now passes pipeline_name to MLOps initialization when available.
+- **MLOps**: Added fail-safe mechanism to prevent MLOps directory creation without proper 
+  context. If MLOps path resolution fails (missing output_path or environment), MLOps 
+  initialization is gracefully skipped rather than creating directories in the working 
+  directory. This ensures MLOps directories are only created in intended locations.
+
+Removed
+~~~~~~~
+
+- Removed auto-created `experiment_tracking` directory that was being created in use case 
+  root directories. MLOps directories should only be created in `data/{environment}/mlops/` 
+  when actually needed.
+
+Fixed
+~~~~~
+
+- Fixed MLOps directory creation happening in unexpected locations (use case root, layer 
+  root, working directory) instead of in the correct data directory structure. This was 
+  caused by fallback initialization paths that would create directories without proper 
+  context. Now MLOps gracefully skips initialization if proper context is unavailable.
+
 [0.1.3] - 2024-12-12
 --------------------
 

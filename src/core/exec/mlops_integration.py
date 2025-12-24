@@ -21,33 +21,44 @@ class MLOpsExecutorIntegration:
         context: Optional["Context"] = None,
         mlops_context: Optional[MLOpsContext] = None,
         auto_init: bool = True,
+        pipeline_name: Optional[str] = None,
     ):
         """
         Initialize MLOps-Executor integration.
+
+        Args:
+            context: Execution context
+            mlops_context: Pre-configured MLOps context (optional)
+            auto_init: Whether to auto-initialize from context
+            pipeline_name: Pipeline name for resolving pipeline-specific paths
         """
         self.context = context
         self.mlops_context = mlops_context
+        self.pipeline_name = pipeline_name
         self.active_experiment_id: Optional[str] = None
         self.active_run_id: Optional[str] = None
         self.pipeline_runs: Dict[str, str] = {}  # pipeline_name -> run_id
         self.node_artifacts: Dict[str, List[str]] = {}  # run_id -> artifact_paths
 
-        # Auto-init with priority: context > mlops_context > env
+        # Auto-init with priority: context > mlops_context
         if self.mlops_context is None and auto_init:
             if self.context is not None:
                 # ✅ PREFERRED: Use factory from context
                 try:
-                    self.mlops_context = MLOpsContext.from_context(self.context)
+                    self.mlops_context = MLOpsContext.from_context(
+                        self.context,
+                        pipeline_name=pipeline_name,
+                    )
                     logger.info("MLOpsContext initialized from execution context")
                 except Exception as e:
                     logger.warning(f"Could not init MLOpsContext from context: {e}")
             else:
-                # Fallback to env vars (legacy)
-                try:
-                    self.mlops_context = MLOpsContext.from_env()
-                    logger.info("MLOpsContext initialized from environment (legacy)")
-                except Exception as e:
-                    logger.warning(f"Could not auto-initialize MLOpsContext: {e}")
+                # ⚠️ DISABLED: Don't initialize from env vars without context
+                # This prevents creating directories in unexpected locations (e.g., current working directory)
+                logger.debug(
+                    "MLOps auto-init skipped: no context available. "
+                    "MLOps will not be available unless explicitly configured."
+                )
 
     def is_available(self) -> bool:
         """Check if MLOps context is available."""

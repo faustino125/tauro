@@ -337,7 +337,14 @@ class TestLoaderSecurity:
 
         # This is optional depending on security implementation
         # Some systems may allow absolute paths with validation
-        dangerous_path = Path("/etc/passwd")
+        # Use a platform-specific absolute path that doesn't exist
+        import sys
+
+        if sys.platform == "win32":
+            dangerous_path = Path("C:\\Windows\\nonexistent_secure_file.txt")
+        else:
+            dangerous_path = Path("/etc/nonexistent_secure_file")
+
         if not dangerous_path.exists():
             with pytest.raises(ConfigLoadError):
                 loader.load(dangerous_path)

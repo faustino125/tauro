@@ -171,7 +171,8 @@ class ExperimentTracker:
         self._total_runs_failed = 0
         self._cleanup_count = 0
 
-        self._ensure_tracking_structure()
+        # Flag to track if structure has been ensured (lazy initialization)
+        self._structure_ensured = False
 
         # Register for cleanup on exit
         self._register_instance()
@@ -221,7 +222,13 @@ class ExperimentTracker:
                     logger.warning(f"Failed to close run {run_id}: {e}")
 
     def _ensure_tracking_structure(self) -> None:
-        """Ensure tracking directory structure exists."""
+        """
+        Ensure tracking directory structure exists (lazy initialization).
+        This is only called when actually creating an experiment or run.
+        """
+        if self._structure_ensured:
+            return
+
         paths = [
             f"{self.tracking_path}/experiments",
             f"{self.tracking_path}/runs",
@@ -239,6 +246,9 @@ class ExperimentTracker:
                 except Exception:
                     pass
 
+        self._structure_ensured = True
+        logger.debug(f"Tracking structure ensured at {self.tracking_path}")
+
     def create_experiment(
         self,
         name: str,
@@ -248,6 +258,9 @@ class ExperimentTracker:
         """
         Create new experiment.
         """
+        # Ensure tracking structure exists before creating experiment
+        self._ensure_tracking_structure()
+
         # Validate inputs
         name = validate_experiment_name(name)
         description = validate_description(description)
@@ -287,6 +300,9 @@ class ExperimentTracker:
         """
         Start new experiment run with memory protection.
         """
+        # Ensure tracking structure exists before starting run
+        self._ensure_tracking_structure()
+
         # Verify experiment exists
         self._get_experiment(experiment_id)
 

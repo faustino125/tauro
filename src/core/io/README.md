@@ -8,6 +8,69 @@ The module provides enterprise-grade data I/O capabilities with comprehensive er
 
 ---
 
+## 🔐 End User Responsibilities for Databricks & Unity Catalog
+
+**CRITICAL**: Tauro is a **pipeline execution framework**, NOT an infrastructure provisioning tool.
+
+### ✅ What You Must Provide
+
+**1. Databricks Workspace & Authentication**
+- Databricks workspace URL and access credentials
+- Environment variables: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`
+- Service principal or personal access token with appropriate permissions
+
+**2. Unity Catalog Infrastructure**
+- Pre-created catalogs (or CREATE CATALOG permission)
+- Pre-created schemas (or CREATE SCHEMA permission)
+- Pre-created volumes for artifact storage (or CREATE VOLUME permission)
+- Appropriate access controls (SELECT, MODIFY, CREATE TABLE, etc.)
+
+**3. Spark Session Configuration**
+- Databricks cluster with compatible runtime
+- Unity Catalog enabled: `spark.databricks.unityCatalog.enabled=true`
+- Proper configuration for cloud storage access (if using external tables)
+
+**4. Network & Security**
+- Network connectivity to Databricks workspace
+- Firewall rules and security groups configured
+- Cloud storage credentials and IAM roles (for S3, ADLS, GCS)
+
+### ⚙️ What Tauro Does
+
+- **Executes** read/write operations using your credentials
+- **Uses** existing Spark session and Unity Catalog tables
+- **Optionally creates** schemas/tables if you grant permissions (via `ensure_schema_exists`)
+- **Manages** pipeline execution and data transformations
+
+### ❌ What Tauro Does NOT Do
+
+- Does NOT provision Databricks workspaces or clusters
+- Does NOT create Unity Catalog infrastructure without user permissions
+- Does NOT manage authentication or credentials (only reads from environment)
+- Does NOT configure network, security, or IAM policies
+
+### 📋 Recommended Setup Workflow
+
+```bash
+# 1. Configure Databricks credentials (USER RESPONSIBILITY)
+export DATABRICKS_HOST="https://your-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="dapi1234567890..."
+
+# 2. Pre-create Unity Catalog infrastructure (RECOMMENDED)
+databricks sql --execute "CREATE CATALOG IF NOT EXISTS production;"
+databricks sql --execute "CREATE SCHEMA IF NOT EXISTS production.analytics;"
+databricks sql --execute "CREATE VOLUME IF NOT EXISTS production.analytics.artifacts;"
+
+# 3. Grant appropriate permissions
+databricks sql --execute "GRANT USE CATALOG ON CATALOG production TO `user@company.com`;"
+databricks sql --execute "GRANT ALL PRIVILEGES ON SCHEMA production.analytics TO `user@company.com`;"
+
+# 4. Run Tauro pipeline (Tauro executes using provided infrastructure)
+python -m core.cli.cli run_pipeline --config config.yaml --env production
+```
+
+---
+
 ## Features
 
 - **Unified API:** Consistent interface for reading/writing data from local, distributed, and cloud sources.

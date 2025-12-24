@@ -8,20 +8,16 @@ import time
 import threading
 import importlib
 import importlib.util
+import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, ClassVar, List, Tuple, TYPE_CHECKING
 from copy import deepcopy
 
 from loguru import logger  # type: ignore
+import pyspark.sql.functions as f  # type: ignore
+from pyspark.sql import DataFrame  # type: ignore
+from pyspark.sql.streaming import StreamingQuery  # type: ignore
 
-try:
-    from pyspark.sql import DataFrame  # type: ignore
-    from pyspark.sql.streaming import StreamingQuery  # type: ignore
-    import pyspark.sql.functions as f  # type: ignore
-except ImportError:
-    DataFrame = Any  # type: ignore
-    StreamingQuery = Any  # type: ignore
-    f = None  # type: ignore
 
 DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
@@ -48,21 +44,26 @@ class TransformationRegistry:
     Secure registry for streaming transformations.
     """
 
-    _registry: Dict[str, Callable[[DataFrame], DataFrame]] = {}
-    _lock = threading.Lock()
+    _registry: ClassVar[Dict[str, Callable[[DataFrame], DataFrame]]] = {}
+    _lock: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
     def register(cls, key: str, func: Callable[[DataFrame], DataFrame]) -> None:
         """
         Register a transformation function.
         """
-        if not key:
-            raise ValueError("Transformation key cannot be empty")
+        if not key or not isinstance(key, str):
+            raise ValueError("Transformation key must be a non-empty string")
+
+        if not key.strip():
+            raise ValueError("Transformation key cannot be whitespace only")
 
         if not callable(func):
-            raise TypeError(f"Transformation must be callable, got {type(func)}")
+            raise TypeError(f"Transformation must be callable, got {type(func).__name__}")
 
         with cls._lock:
+            if key in cls._registry:
+                logger.warning(f"Overwriting existing transformation: {key}")
             cls._registry[key] = func
             logger.debug(f"Registered transformation: {key}")
 
@@ -73,17 +74,20 @@ class TransformationRegistry:
         """
         with cls._lock:
             if key not in cls._registry:
-                available = list(cls._registry.keys())
+                available = sorted(cls._registry.keys())
                 raise ValueError(
-                    f"Transformation '{key}' not registered. " f"Available: {available}"
+                    f"Transformation '{key}' not registered. "
+                    f"Available transformations: {available}"
                 )
             return cls._registry[key]
 
     @classmethod
-    def list_transformations(cls) -> list:
-        """List all registered transformations."""
+    def list_transformations(cls) -> List[str]:
+        """
+        List all registered transformations.
+        """
         with cls._lock:
-            return list(cls._registry.keys())
+            return sorted(cls._registry.keys())
 
     @classmethod
     def unregister(cls, key: str) -> bool:
@@ -104,37 +108,79 @@ class TransformationRegistry:
 
 
 class StreamingQueryManager:
-    """Manages individual streaming queries with lifecycle and configuration."""
+    """
+    Manages individual streaming queries with lifecycle and configuration.
+    """
 
     def __init__(self, context, validator: Optional[StreamingValidator] = None):
+        """
+        Initialize the StreamingQueryManager.
+
+        Args:
+            context: Execution context containing configuration and resources
+            validator: Optional custom validator for streaming configurations
+        """
         self.context = context
         self.reader_factory = StreamingReaderFactory(context)
         self.writer_factory = StreamingWriterFactory(context)
         policy = getattr(context, "format_policy", None)
         self.validator = validator or StreamingValidator(policy)
+
+        # Capture active environment from context (managed by src/core/exec)
+        # This ensures streaming queries use the same environment as executor
+        self.active_environment = self._extract_environment_from_context()
+
         self._active_queries: Dict[str, Dict[str, Any]] = {}  # Track active queries
         self._active_queries_lock = threading.Lock()
 
+    def _extract_environment_from_context(self) -> Optional[str]:
+        """
+        Extract the active environment from context.
+        """
+        active_env = getattr(self.context, "env", None) or getattr(
+            self.context, "environment", None
+        )
+        if active_env:
+            logger.debug(f"StreamingQueryManager initialized for environment: '{active_env}'")
+        else:
+            logger.debug("StreamingQueryManager initialized without explicit environment")
+        return active_env
+
     def _is_query_active(self, query: StreamingQuery) -> bool:
+        """
+        Check if a streaming query is currently active.
+        """
         is_active = getattr(query, "isActive", None)
         if callable(is_active):
             try:
                 return bool(is_active())
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Error checking query active state: {e}")
                 return False
-        return bool(is_active)
+        return bool(is_active) if is_active is not None else False
 
     def _get_query_name(self, query: StreamingQuery) -> Optional[str]:
+        """
+        Get the name of a streaming query.
+        """
         return getattr(query, "name", getattr(query, "queryName", None))
 
     def _get_query_id(self, query: StreamingQuery) -> Optional[str]:
-        return getattr(query, "id", None)
+        """
+        Get the unique identifier of a streaming query.
+        """
+        query_id = getattr(query, "id", None)
+        if query_id is not None:
+            return str(query_id)
+        return None
 
     @handle_streaming_error
     def create_and_start_query(
         self, node_config: Dict[str, Any], execution_id: str, pipeline_name: str
     ) -> StreamingQuery:
-        """Create and start a streaming query from node configuration."""
+        """
+        Create and start a streaming query from node configuration.
+        """
         try:
             self.validator.validate_streaming_node_config(node_config)
 
@@ -186,7 +232,9 @@ class StreamingQueryManager:
                 ) from e
 
     def _load_streaming_input(self, node_config: Dict[str, Any]) -> DataFrame:
-        """Load streaming input DataFrame with error handling."""
+        """
+        Load streaming input DataFrame with error handling.
+        """
         try:
             input_config = node_config.get("input", {})
             if not input_config:
@@ -225,7 +273,9 @@ class StreamingQueryManager:
     def _apply_watermark(
         self, streaming_df: DataFrame, watermark_config: Dict[str, Any]
     ) -> DataFrame:
-        """Apply watermark on the streaming DataFrame using provided config."""
+        """
+        Apply watermark on the streaming DataFrame using provided config.
+        """
         try:
             timestamp_col = watermark_config.get("column")
             delay_threshold = watermark_config.get("delay", DEFAULT_PROCESSING_TIME_INTERVAL)
@@ -244,14 +294,21 @@ class StreamingQueryManager:
                     config_value=timestamp_col,
                 )
 
-            dtype = dict(streaming_df.dtypes).get(timestamp_col)
+            dtype = dict(streaming_df.dtypes).get(timestamp_col, "unknown")
             if dtype not in ("timestamp", "date"):
                 logger.warning(
-                    f"Watermark column '{timestamp_col}' is type '{dtype}', casting to timestamp"
+                    f"Watermark column '{timestamp_col}' has type '{dtype}', casting to timestamp"
                 )
-                streaming_df = streaming_df.withColumn(
-                    timestamp_col, f.col(timestamp_col).cast("timestamp")
-                )
+                try:
+                    streaming_df = streaming_df.withColumn(
+                        timestamp_col, f.col(timestamp_col).cast("timestamp")
+                    )
+                except Exception as e:
+                    raise StreamingError(
+                        f"Failed to cast watermark column '{timestamp_col}' to timestamp: {str(e)}",
+                        error_code="WATERMARK_CAST_ERROR",
+                        cause=e,
+                    ) from e
 
             logger.info(
                 f"Applying watermark on column '{timestamp_col}' with delay '{delay_threshold}'"
@@ -521,7 +578,9 @@ class StreamingQueryManager:
         node_name: str,
         execution_id: str,
     ) -> str:
-        """Get checkpoint location for the streaming query with validation."""
+        """
+        Get checkpoint location for the streaming query with validation.
+        """
         try:
             checkpoint_base = self._determine_checkpoint_base(base_checkpoint)
             checkpoint_path = self._build_checkpoint_path(
@@ -545,7 +604,9 @@ class StreamingQueryManager:
                 ) from e
 
     def _determine_checkpoint_base(self, base_checkpoint: Optional[str]) -> str:
-        """Determine the base directory for checkpoints."""
+        """
+        Determine the base directory for checkpoints.
+        """
         if base_checkpoint:
             return base_checkpoint
 
@@ -560,11 +621,16 @@ class StreamingQueryManager:
         if checkpoints_base:
             return str(checkpoints_base)
 
-        output_path = getattr(self.context, "output_path", "/tmp/checkpoints")
-        return os.path.join(output_path, "streaming_checkpoints")
+        output_path = getattr(self.context, "output_path", None)
+        if output_path is None:
+            # Use system temp directory as fallback
+            output_path = str(Path(tempfile.gettempdir()) / "tauro_checkpoints")
+        return str(Path(output_path) / "streaming_checkpoints")
 
     def _is_cloud_path(self, path: str) -> bool:
-        """Return True if path appears to be on a cloud filesystem."""
+        """
+        Check if path is on a cloud filesystem.
+        """
         cloud_schemes = (
             "s3://",
             "gs://",
@@ -582,13 +648,17 @@ class StreamingQueryManager:
         node_name: str,
         execution_id: str,
     ) -> str:
-        """Build the full checkpoint path from base and identifiers."""
+        """
+        Build the full checkpoint path from base and identifiers.
+        """
         if self._is_cloud_path(checkpoint_base):
             return f"{checkpoint_base.rstrip('/')}/{pipeline_name}/{node_name}/{execution_id}"
-        return os.path.join(checkpoint_base, pipeline_name, node_name, execution_id)
+        return str(Path(checkpoint_base) / pipeline_name / node_name / execution_id)
 
     def _ensure_checkpoint_dir(self, checkpoint_path: str) -> None:
-        """Ensure checkpoint directory exists for local filesystems, raising StreamingError on failure."""
+        """
+        Ensure checkpoint directory exists for local filesystems.
+        """
         try:
             Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -600,7 +670,9 @@ class StreamingQueryManager:
             ) from e
 
     def _validate_checkpoint_not_in_use(self, checkpoint_path: str, node_name: str) -> None:
-        """Validate checkpoint location is not already in use by another active query."""
+        """
+        Validate checkpoint location is not already in use by another active query.
+        """
         with self._active_queries_lock:
             for query_key, query_info in self._active_queries.items():
                 existing_config = query_info.get("node_config", {})
@@ -644,7 +716,9 @@ class StreamingQueryManager:
                     )
 
     def _configure_trigger(self, trigger_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Configure streaming trigger with minimum interval validation."""
+        """
+        Configure streaming trigger with minimum interval validation.
+        """
         try:
             trigger_type_raw = trigger_config.get("type", StreamingTrigger.PROCESSING_TIME.value)
             trigger_type = str(trigger_type_raw).lower()
@@ -677,7 +751,9 @@ class StreamingQueryManager:
                 ) from e
 
     def _map_trigger_type(self, trigger_type: str, trigger_type_raw: Any) -> str:
-        """Map raw trigger type to internal key and validate it."""
+        """
+        Map raw trigger type to internal key and validate it.
+        """
         trigger_map = {
             StreamingTrigger.PROCESSING_TIME.value.lower(): "processingTime",
             StreamingTrigger.ONCE.value.lower(): "once",
@@ -694,7 +770,9 @@ class StreamingQueryManager:
         return trigger_map[trigger_type]
 
     def _validate_interval(self, interval: str, config_section: str) -> None:
-        """Validate an interval string and ensure it meets the minimum configured seconds."""
+        """
+        Validate an interval string and ensure it meets minimum configured seconds.
+        """
         if not getattr(self.validator, "_validate_time_interval", lambda x: True)(interval):
             raise StreamingConfigurationError(
                 f"Invalid {config_section.split('.')[-1]} interval '{interval}'",
@@ -713,13 +791,17 @@ class StreamingQueryManager:
             )
 
     def _build_processing_time_trigger(self, trigger_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Build processingTime trigger dict after validation."""
+        """
+        Build processingTime trigger dict after validation.
+        """
         interval = str(trigger_config.get("interval", DEFAULT_PROCESSING_TIME_INTERVAL))
         self._validate_interval(interval, "trigger.interval")
         return {"processingTime": interval}
 
     def _build_continuous_trigger(self, trigger_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Build continuous trigger dict after validation."""
+        """
+        Build continuous trigger dict after validation.
+        """
         interval = str(trigger_config.get("interval", "1 second"))
         self._validate_interval(interval, "trigger.interval")
         return {"continuous": interval}
@@ -730,7 +812,9 @@ class StreamingQueryManager:
         graceful: bool = True,
         timeout_seconds: float = 30.0,
     ) -> bool:
-        """Stop a streaming query with timeout and error handling."""
+        """
+        Stop a streaming query with timeout and error handling.
+        """
         try:
             if not self._is_query_active(query):
                 logger.info(f"Query '{self._get_query_name(query)}' is already stopped")
@@ -768,7 +852,9 @@ class StreamingQueryManager:
             ) from e
 
     def _call_stop_or_set_inactive(self, query: StreamingQuery) -> None:
-        """Invoke the query stop if available, otherwise attempt to set isActive to False."""
+        """
+        Invoke the query stop method if available.
+        """
         stop_call = getattr(query, "stop", None)
         if callable(stop_call):
             try:
@@ -784,7 +870,9 @@ class StreamingQueryManager:
     def _wait_until_stopped(
         self, query: StreamingQuery, start_time: float, timeout_seconds: float
     ) -> bool:
-        """Wait until the query becomes inactive or the timeout elapses; returns True if stopped."""
+        """
+        Wait until the query becomes inactive or timeout elapses.
+        """
         try:
             while self._is_query_active(query) and (time.time() - start_time) < timeout_seconds:
                 time.sleep(0.5)
@@ -793,7 +881,9 @@ class StreamingQueryManager:
             return False
 
     def _remove_query_from_active(self, query: StreamingQuery) -> None:
-        """Remove query entry from the active queries map if present."""
+        """
+        Remove query entry from the active queries map if present.
+        """
         query_key = None
         with self._active_queries_lock:
             for key, info in self._active_queries.items():
@@ -808,7 +898,9 @@ class StreamingQueryManager:
                 del self._active_queries[query_key]
 
     def get_query_progress(self, query: StreamingQuery) -> Optional[Dict[str, Any]]:
-        """Get progress information for a streaming query with error handling."""
+        """
+        Get progress information for a streaming query with error handling.
+        """
         try:
             if not self._is_query_active(query):
                 return None
@@ -826,14 +918,18 @@ class StreamingQueryManager:
             ) from e
 
     def get_active_queries(self) -> Dict[str, Dict[str, Any]]:
-        """Get information about all active queries."""
+        """
+        Get information about all active queries.
+        """
         with self._active_queries_lock:
             return self._active_queries.copy()
 
     def stop_all_queries(
         self, graceful: bool = True, timeout_seconds: float = 30.0
     ) -> Dict[str, bool]:
-        """Stop all active queries and return results."""
+        """
+        Stop all active queries and return results.
+        """
         results: Dict[str, bool] = {}
 
         with self._active_queries_lock:

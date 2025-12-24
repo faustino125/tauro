@@ -74,8 +74,8 @@ def test_validate_dataframe_schema_pandas_like():
 
 def test_check_batch_stream_compatibility_path_mismatch_and_incompatibility():
     # Build simple configs to test compatibility helper
-    batch_config = {"output": {"format": "parquet", "path": "/tmp/batch"}}
-    streaming_config = {"input": {"format": "file_stream", "options": {"path": "/tmp/other"}}}
+    batch_config = {"output": {"format": "parquet", "path": "output/batch"}}
+    streaming_config = {"input": {"format": "file_stream", "options": {"path": "output/other"}}}
 
     issues = []
     pv.PipelineValidator._check_batch_stream_compatibility(
@@ -88,7 +88,7 @@ def test_check_batch_stream_compatibility_path_mismatch_and_incompatibility():
 
     # Now incompatible formats
     issues = []
-    batch_config2 = {"output": {"format": "json", "path": "/tmp/b"}}
+    batch_config2 = {"output": {"format": "json", "path": "output/b"}}
     streaming_config2 = {"input": {"format": "kafka", "options": {"topic": "t"}}}
     pv.PipelineValidator._check_batch_stream_compatibility(
         "b2", batch_config2, "s2", streaming_config2, pv.FormatPolicy(), issues

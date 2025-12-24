@@ -8,6 +8,8 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from loguru import logger
 
+from core.mlops.config import TrackingURIResolver
+
 
 MLFLOW_AVAILABLE = False
 try:
@@ -479,6 +481,13 @@ class MLflowPipelineTracker:
             or getattr(context, "project_name", "tauro_pipeline")
         )
 
+        # Resolve tracking_uri considering environment structure
+        tracking_uri = mlflow_config.get("tracking_uri")
+        resolved_tracking_uri = TrackingURIResolver.resolve_tracking_uri(
+            tracking_uri=tracking_uri,
+            context=context,
+        )
+
         tags = {
             "project": getattr(context, "project_name", "unknown"),
             "environment": gs.get("env", "unknown"),
@@ -487,7 +496,7 @@ class MLflowPipelineTracker:
 
         return MLflowPipelineTracker(
             experiment_name=experiment_name,
-            tracking_uri=mlflow_config.get("tracking_uri"),
+            tracking_uri=resolved_tracking_uri,
             artifact_location=mlflow_config.get("artifact_location"),
             enable_autolog=mlflow_config.get("enable_autolog", True),
             nested_runs=mlflow_config.get("nested_runs", True),

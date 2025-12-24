@@ -179,7 +179,7 @@ def test_sequential_load_inputs_fail_fast_false_fill_none(tmp_path):
 
 def test_load_single_dataset_missing_format_raises(tmp_path):
     # Missing format in dataset config
-    ctx = {"execution_mode": "local", "input_config": {"x": {"filepath": "/tmp/a"}}}
+    ctx = {"execution_mode": "local", "input_config": {"x": {"filepath": "data/a"}}}
     strategy = SequentialLoadingStrategy(ctx, MagicMock())
     # _load_single_dataset will re-raise as ReadOperationError
     with pytest.raises(ReadOperationError):

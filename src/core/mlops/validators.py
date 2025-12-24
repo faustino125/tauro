@@ -46,17 +46,22 @@ class PathValidator:
 
         # 3. Resolve and validate path is within base directory
         if base_path:
-            base_resolved = base_path.resolve()
+            # Ensure base_path is a Path object and resolve it to absolute
+            if isinstance(base_path, str):
+                base_resolved = Path(base_path).resolve()
+            else:
+                base_resolved = base_path.resolve()
+
             # Resolve path relative to base, then check it's still within base
             full_path = (base_resolved / path).resolve()
 
             # Verify resolved path is within base directory
             try:
                 full_path.relative_to(base_resolved)
-            except ValueError:
+            except ValueError as e:
                 raise ValidationError(
                     f"Path '{path}' resolves to '{full_path}' which is outside "
-                    f"base directory '{base_resolved}'"
+                    f"base directory '{base_resolved}'. Original error: {e}"
                 )
 
             # Additional check: ensure no symlinks escape the sandbox

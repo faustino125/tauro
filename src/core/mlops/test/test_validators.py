@@ -39,15 +39,17 @@ class TestPathValidator:
 
     def test_validate_path_rejects_absolute(self):
         """Test that absolute paths are rejected."""
-        # Test Unix-style absolute path
-        if Path("/etc/passwd").is_absolute():
+        # Test Unix-style absolute path on Unix systems
+        unix_path = Path("/etc/passwd")
+        if unix_path.is_absolute():
             with pytest.raises(ValidationError, match="Absolute paths not allowed"):
-                PathValidator.validate_path("/etc/passwd")
+                PathValidator.validate_path(str(unix_path))
 
-        # Test Windows-style absolute path
-        if Path("C:\\Windows\\System32").is_absolute():
+        # Test Windows-style absolute path on Windows
+        win_path = Path("C:\\Windows\\System32")
+        if win_path.is_absolute():
             with pytest.raises(ValidationError, match="Absolute paths not allowed"):
-                PathValidator.validate_path("C:\\Windows\\System32")
+                PathValidator.validate_path(str(win_path))
 
     def test_validate_path_rejects_parent_traversal(self):
         """Test that parent directory traversal is rejected."""

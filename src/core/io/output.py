@@ -321,7 +321,9 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         location: Optional[str] = None,
         managed: bool = False,
     ) -> None:
-        """Ensure catalog and schema exist."""
+        """
+        Ensure catalog and schema exist (convenience utility).
+        """
         if not self._spark_available():
             logger.warning("Spark unavailable for schema creation")
             return
@@ -329,12 +331,22 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         spark = self._ctx_spark()
 
         if not self._catalog_exists(catalog):
+            logger.warning(
+                f"Catalog '{catalog}' does not exist. Attempting to create it. "
+                f"Best practice: Pre-create catalogs using Databricks UI/CLI. "
+                f"This requires CREATE CATALOG permission."
+            )
             quoted_cat = self.quote_identifier(catalog)
             spark.sql(f"CREATE CATALOG {quoted_cat}")
             logger.info(f"Created catalog: {catalog}")
             self._catalog_exists.cache_clear()
 
         if not self._schema_exists(catalog, schema):
+            logger.warning(
+                f"Schema '{catalog}.{schema}' does not exist. Attempting to create it. "
+                f"Best practice: Pre-create schemas using Databricks UI/CLI. "
+                f"This requires CREATE SCHEMA permission."
+            )
             quoted_cat = self.quote_identifier(catalog)
             quoted_sch = self.quote_identifier(schema)
 

@@ -4,6 +4,8 @@ For licensing information, see the LICENSE file in the project root
 """
 from enum import Enum
 from typing import Dict, Any
+from pathlib import Path
+import tempfile
 
 
 class PipelineType(Enum):
@@ -59,7 +61,7 @@ DEFAULT_STREAMING_CONFIG = {
         "interval": "10 seconds",
     },
     "output_mode": StreamingOutputMode.APPEND.value,
-    "checkpoint_location": "/tmp/checkpoints",
+    "checkpoint_location": str(Path(tempfile.gettempdir()) / "tauro_checkpoints"),
     "query_name": None,
     "watermark": {"column": None, "delay": "10 seconds"},
     "options": {},

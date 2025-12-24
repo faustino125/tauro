@@ -123,23 +123,31 @@ class ModelRegistry:
         """
         self.storage = storage
         self.registry_path = registry_path
-        self._ensure_registry_structure()
+        # Flag to track if structure has been ensured (lazy initialization)
+        self._structure_ensured = False
         logger.info(f"ModelRegistry initialized at {registry_path}")
 
     @contextmanager
     def _registry_lock(self, timeout: float = 30.0):
         """Context manager for registry write operations"""
-        lock_path = f"{self.registry_path}/models.lock"
+        lock_path = str(Path(self.registry_path) / "models.lock")
         with file_lock(lock_path, timeout=timeout):
             yield
 
     def _ensure_registry_structure(self) -> None:
-        """Ensure registry directory structure exists."""
+        """
+        Ensure registry directory structure exists (lazy initialization).
+        This is only called when actually registering a model.
+        """
+        if self._structure_ensured:
+            return
+
+        base_path = Path(self.registry_path)
         paths = [
-            f"{self.registry_path}/models",
-            f"{self.registry_path}/versions",
-            f"{self.registry_path}/artifacts",
-            f"{self.registry_path}/metadata",
+            str(base_path / "models"),
+            str(base_path / "versions"),
+            str(base_path / "artifacts"),
+            str(base_path / "metadata"),
         ]
         for path in paths:
             if not self.storage.exists(path):
@@ -147,11 +155,14 @@ class ModelRegistry:
                 try:
                     self.storage.write_json(
                         {"created": datetime.now(tz=timezone.utc).isoformat()},
-                        f"{path}/.registry_marker.json",
+                        str(Path(path) / ".registry_marker.json"),
                         mode="overwrite",
                     )
                 except Exception:
                     pass
+
+        self._structure_ensured = True
+        logger.debug(f"Registry structure ensured at {self.registry_path}")
 
     def register_model(
         self,
@@ -171,6 +182,9 @@ class ModelRegistry:
         """
         Register a new model or version with validation and locking.
         """
+        # Ensure registry structure exists before registering model
+        self._ensure_registry_structure()
+
         # VALIDATION: Perform all validations before acquiring lock
         try:
             # Validate inputs
@@ -237,7 +251,9 @@ class ModelRegistry:
                 )
 
                 # Copy artifact to storage
-                artifact_destination = f"{self.registry_path}/artifacts/{model_id}/v{version}"
+                artifact_destination = str(
+                    Path(self.registry_path) / "artifacts" / model_id / f"v{version}"
+                )
                 artifact_metadata = self.storage.write_artifact(
                     str(artifact_file), artifact_destination, mode="overwrite"
                 )
@@ -256,7 +272,9 @@ class ModelRegistry:
                 )
 
                 # Persist metadata
-                metadata_path = f"{self.registry_path}/metadata/{model_id}/v{version}.json"
+                metadata_path = str(
+                    Path(self.registry_path) / "metadata" / model_id / f"v{version}.json"
+                )
                 self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
                 # Update index (skip_lock=True since we're already under _registry_lock)
@@ -298,7 +316,9 @@ class ModelRegistry:
                 raise ModelNotFoundError(name, version)
             row = row.iloc[0]
 
-        metadata_path = f"{self.registry_path}/metadata/{row['model_id']}/v{row['version']}.json"
+        metadata_path = str(
+            Path(self.registry_path) / "metadata" / row["model_id"] / f"v{row['version']}.json"
+        )
         data = self.storage.read_json(metadata_path)
         return ModelVersion.from_dict(data)
 
@@ -312,8 +332,8 @@ class ModelRegistry:
 
         candidates: List[ModelVersion] = []
         for _, row in model_rows.iterrows():
-            metadata_path = (
-                f"{self.registry_path}/metadata/{row['model_id']}/v{row['version']}.json"
+            metadata_path = str(
+                Path(self.registry_path) / "metadata" / row["model_id"] / f"v{row['version']}.json"
             )
             data = self.storage.read_json(metadata_path)
             mv = ModelVersion.from_dict(data)
@@ -383,7 +403,9 @@ class ModelRegistry:
         model_version.metadata.stage = stage
         model_version.updated_at = datetime.now(tz=timezone.utc).isoformat()
 
-        metadata_path = f"{self.registry_path}/metadata/{model_version.model_id}/v{version}.json"
+        metadata_path = str(
+            Path(self.registry_path) / "metadata" / model_version.model_id / f"v{version}.json"
+        )
         self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
         logger.info(f"Model {name} v{version} promoted to {stage.value}")
@@ -408,7 +430,9 @@ class ModelRegistry:
             logger.warning(f"Could not delete artifact: {e}")
 
         # Delete metadata
-        metadata_path = f"{self.registry_path}/metadata/{model_version.model_id}/v{version}.json"
+        metadata_path = str(
+            Path(self.registry_path) / "metadata" / model_version.model_id / f"v{version}.json"
+        )
         try:
             self.storage.delete(metadata_path)
         except Exception as e:
@@ -419,7 +443,7 @@ class ModelRegistry:
     def _load_models_index(self) -> pd.DataFrame:
         """Load models index."""
         try:
-            index_path = f"{self.registry_path}/models/index.parquet"
+            index_path = str(Path(self.registry_path) / "models" / "index.parquet")
             return self.storage.read_dataframe(index_path)
         except FileNotFoundError:
             return pd.DataFrame(columns=["model_id", "name", "version", "created_at"])
@@ -428,7 +452,7 @@ class ModelRegistry:
         """
         Update models index.
         """
-        lock_path = f"{self.registry_path}/models/.index.lock"
+        lock_path = str(Path(self.registry_path) / "models" / ".index.lock")
 
         def _do_update():
             df = self._load_models_index()
@@ -447,7 +471,7 @@ class ModelRegistry:
             df = pd.concat([df, new_row], ignore_index=True)
             df = df.drop_duplicates(subset=["model_id", "version"], keep="last")
 
-            index_path = f"{self.registry_path}/models/index.parquet"
+            index_path = str(Path(self.registry_path) / "models" / "index.parquet")
             self.storage.write_dataframe(df, index_path, mode="overwrite")
 
         if skip_lock:

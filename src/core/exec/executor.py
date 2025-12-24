@@ -120,9 +120,12 @@ class BaseExecutor:
         # Use auto-configurator to decide
         return self._mlops_auto_config.should_init_mlops_for_pipeline(self.context.nodes_config, gs)
 
-    def _init_mlops_if_needed(self) -> None:
+    def _init_mlops_if_needed(self, pipeline_name: Optional[str] = None) -> None:
         """
         Initialize MLOps lazily if needed.
+
+        Args:
+            pipeline_name: Optional pipeline name for pipeline-specific MLOps configuration
         """
         if self._mlops_init_attempted:
             return
@@ -134,13 +137,29 @@ class BaseExecutor:
             return
 
         try:
+            # ✅ INJECT ACTIVE ENVIRONMENT into context for MLOps to read
+            # This ensures MLOps uses the same environment as the executor
+            active_env = getattr(self.context, "env", None)
+            if active_env:
+                # Environment already set (from CLI or ContextInitializer)
+                logger.debug(f"MLOps will use active environment from context: '{active_env}'")
+            else:
+                # Fallback: try to get from environment attribute
+                active_env = getattr(self.context, "environment", None)
+                if active_env:
+                    logger.debug(f"MLOps will use environment attribute: '{active_env}'")
+
             from core.mlops.config import MLOpsContext
 
+            # Pass pipeline_name if available for proper path resolution
             self._mlops_context = MLOpsContext.from_context(
                 self.context,
-                auto_init=True,
+                pipeline_name=pipeline_name,
             )
-            logger.info("MLOps initialized successfully (auto-detected ML workload)")
+            logger.info(
+                f"MLOps initialized successfully (auto-detected ML workload"
+                f"{f', pipeline: {pipeline_name}' if pipeline_name else ''})"
+            )
         except Exception as e:
             logger.warning(f"MLOps initialization failed (non-critical): {e}")
             self._mlops_context = None
@@ -148,10 +167,19 @@ class BaseExecutor:
     @property
     def mlops_context(self):
         """
-        Get MLOps context (lazy initialization).
+        Get MLOps context (lazy initialization with pipeline-specific configuration).
+
+        Note: This property should be used after a pipeline is set for proper path resolution.
+        For better path resolution, use MLOpsExecutorMixin._init_mlops_integration with pipeline_name.
         """
         if not self._mlops_init_attempted:
-            self._init_mlops_if_needed()
+            # Initialize without pipeline_name (will use fallback paths)
+            # This is not ideal but maintains backward compatibility
+            logger.debug(
+                "MLOps context accessed before pipeline initialization. "
+                "Path resolution may not be pipeline-specific."
+            )
+            self._init_mlops_if_needed(pipeline_name=None)
 
         return self._mlops_context
 
@@ -388,7 +416,12 @@ class BatchExecutor(BaseExecutor):
             return None, None, None
 
         try:
-            mlops_integration = MLOpsExecutorIntegration(context=self.context, auto_init=True)
+            # Create MLOps integration with pipeline_name for path resolution
+            mlops_integration = MLOpsExecutorIntegration(
+                context=self.context,
+                auto_init=True,
+                pipeline_name=pipeline_name,
+            )
             if not mlops_integration.is_available():
                 return mlops_integration, None, None
 

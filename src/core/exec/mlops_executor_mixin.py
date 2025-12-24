@@ -17,22 +17,32 @@ class MLOpsExecutorMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._init_mlops_integration()
+        # Don't initialize MLOps here - wait until we know the pipeline_name
+        # This prevents creating empty directories for unused paths
+        self.mlops_integration = None
 
-    def _init_mlops_integration(self) -> None:
-        """Initialize MLOps integration with context awareness."""
+    def _init_mlops_integration(self, pipeline_name: Optional[str] = None) -> None:
+        """
+        Initialize MLOps integration with context and pipeline awareness.
+
+        Args:
+            pipeline_name: The pipeline being executed (used for path resolution)
+        """
         try:
             auto_init = os.getenv("TAURO_MLOPS_AUTO_INIT", "true").lower() == "true"
 
-            # ✅ NEW: Pass self.context to integration for auto-detection
+            # Pass both context and pipeline_name for proper initialization
             self.mlops_integration = MLOpsExecutorIntegration(
-                context=self.context,  # Enables auto mode detection
+                context=self.context,
                 auto_init=auto_init,
+                pipeline_name=pipeline_name,
             )
 
             if self.mlops_integration.is_available():
                 mode = getattr(self.context, "execution_mode", "unknown")
-                logger.info(f"MLOps integration enabled for executor (mode: {mode})")
+                logger.info(
+                    f"MLOps integration enabled for executor (mode: {mode}, pipeline: {pipeline_name})"
+                )
             else:
                 logger.info("MLOps integration available but not initialized")
 

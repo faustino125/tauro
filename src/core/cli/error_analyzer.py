@@ -361,14 +361,21 @@ class SparkErrorAnalyzer:
     @staticmethod
     def _shorten_file_path(file_path: str, max_length: int) -> str:
         """Shorten file path for display."""
+        from pathlib import Path
+
         if len(file_path) <= max_length:
             return file_path
 
-        parts = file_path.split("\\")
+        path_obj = Path(file_path)
+        parts = path_obj.parts
         if max_length == 60:
-            return "...\\" + "\\".join(parts[-3:]) if len(parts) > 3 else file_path
+            if len(parts) > 3:
+                return str(Path("...") / Path(*parts[-3:]))
+            return file_path
         else:  # max_length == 50
-            return "...\\" + "\\".join(parts[-2:]) if len(parts) > 2 else file_path
+            if len(parts) > 2:
+                return str(Path("...") / Path(*parts[-2:]))
+            return file_path
 
     @staticmethod
     def _build_error_content(

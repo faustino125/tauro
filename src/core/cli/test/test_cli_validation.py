@@ -12,6 +12,7 @@ Tests cover:
 """
 import pytest
 import argparse
+import tempfile
 from pathlib import Path
 from core.cli.cli import (
     validate_stream_run_arguments,
@@ -325,7 +326,7 @@ class TestTemplateValidation:
             list_templates=False,
             template=None,
             project_name="my_project",
-            output_path="/tmp/my_project",
+            output_path=str(Path(tempfile.gettempdir()) / "my_project"),
             format="yaml",
         )
         with pytest.raises(ValidationError, match="--template is required"):
@@ -337,7 +338,7 @@ class TestTemplateValidation:
             list_templates=False,
             template="medallion_basic",
             project_name=None,
-            output_path="/tmp/my_project",
+            output_path=str(Path(tempfile.gettempdir()) / "my_project"),
             format="yaml",
         )
         with pytest.raises(ValidationError, match="--project-name is required"):
@@ -349,7 +350,7 @@ class TestTemplateValidation:
             list_templates=False,
             template="medallion_basic",
             project_name="my project with spaces",
-            output_path="/tmp/my_project",
+            output_path=str(Path(tempfile.gettempdir()) / "my_project"),
             format="yaml",
         )
         with pytest.raises(ValidationError, match="Project name must contain only"):
@@ -361,7 +362,7 @@ class TestTemplateValidation:
             list_templates=False,
             template="medallion_basic",
             project_name="my-project!",
-            output_path="/tmp/my_project",
+            output_path=str(Path(tempfile.gettempdir()) / "my_project"),
             format="yaml",
         )
         with pytest.raises(ValidationError, match="Project name must contain only"):
@@ -382,7 +383,7 @@ class TestTemplateValidation:
                 list_templates=False,
                 template="medallion_basic",
                 project_name=name,
-                output_path=f"/tmp/{name}",
+                output_path=str(Path(tempfile.gettempdir()) / name),
                 format="yaml",
             )
             # Should not raise
@@ -394,7 +395,7 @@ class TestTemplateValidation:
             list_templates=False,
             template="medallion_basic",
             project_name="my_project",
-            output_path="/tmp/my_project",
+            output_path=str(Path(tempfile.gettempdir()) / "my_project"),
             format="xml",
         )
         with pytest.raises(ValidationError, match="Invalid format"):

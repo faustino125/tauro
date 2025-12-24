@@ -31,7 +31,7 @@ class QueryHealthMonitor:
     Monitor health of streaming queries.
     """
 
-    def __init__(self, query: StreamingQuery, query_name: str, timeout_seconds: float = 300):
+    def __init__(self, query: Any, query_name: str, timeout_seconds: float = 300):
         """
         Initialize query health monitor.
 
@@ -181,6 +181,16 @@ class StreamingPipelineManager:
         policy = getattr(context, "format_policy", None)
         self.validator = validator or StreamingValidator(policy)
         self.query_manager = StreamingQueryManager(context, validator=self.validator)
+
+        # ✅ CAPTURE ACTIVE ENVIRONMENT from context (managed by src/core/exec)
+        # This ensures streaming operations use the same environment as executor
+        active_env = getattr(context, "env", None) or getattr(context, "environment", None)
+        if active_env:
+            logger.debug(f"StreamingPipelineManager initialized for environment: '{active_env}'")
+            self.active_environment = active_env
+        else:
+            logger.debug("StreamingPipelineManager initialized without explicit environment")
+            self.active_environment = None
 
         self._running_pipelines: Dict[str, Dict[str, Any]] = {}
         self._pipeline_threads: Dict[str, Any] = {}

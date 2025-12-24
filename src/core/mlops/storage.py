@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import tempfile
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,9 +125,13 @@ class LocalStorageBackend(StorageBackend):
     ):
         """
         Initialize local storage backend.
+
+        Note: Directories are created lazily when needed, not during initialization.
+        This prevents creating empty directories for unused storage paths.
         """
-        self.base_path = Path(base_path)
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        # Resolve to absolute path to prevent validation issues with relative paths
+        self.base_path = Path(base_path).resolve()
+        # Do NOT create directory here - create it lazily when actually writing
 
         self._retry_config = retry_config or STORAGE_RETRY_CONFIG
 
@@ -530,7 +535,13 @@ class DatabricksStorageBackend(StorageBackend):
         self.volume_name = volume_name
 
         self._spark: Optional[Any] = None
-        cache_path = local_cache or f"/tmp/mlops_cache/{catalog}_{schema}"
+        if local_cache:
+            cache_path = local_cache
+        else:
+            # Use system temp directory for cross-platform compatibility
+            cache_path = str(
+                Path(tempfile.gettempdir()) / "tauro_mlops_cache" / f"{catalog}_{schema}"
+            )
         self._local_cache_path = Path(cache_path)
         self._local_cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -559,13 +570,15 @@ class DatabricksStorageBackend(StorageBackend):
         logger.info(f"DatabricksStorageBackend initialized for {catalog}.{schema}")
 
     def _init_spark_session(self) -> None:
-        """Initialize Spark session using databricks-connect or runtime."""
+        """
+        Initialize Spark session using databricks-connect or runtime.
+        """
         try:
             # Try databricks-connect first (local development)
             from databricks.connect import DatabricksSession  # type: ignore
 
             self._spark = DatabricksSession.builder.getOrCreate()
-            logger.info("Using databricks-connect session")
+            logger.info("Using databricks-connect session. ")
             return
         except ImportError:
             pass
@@ -577,7 +590,7 @@ class DatabricksStorageBackend(StorageBackend):
             from pyspark.sql import SparkSession  # type: ignore
 
             self._spark = SparkSession.builder.getOrCreate()
-            logger.info("Using existing SparkSession")
+            logger.info("Using existing SparkSession from Databricks Runtime")
             return
         except ImportError:
             pass
@@ -613,7 +626,12 @@ class DatabricksStorageBackend(StorageBackend):
             self._circuit_breaker.record_failure(error)
 
     def _get_volume_path(self, path: str) -> str:
-        """Get the full Unity Catalog volume path."""
+        """Get the full Unity Catalog volume path.
+
+        Note: /Volumes is a Databricks Unity Catalog path convention,
+        not a local filesystem path. This format is required by Databricks.
+        """
+        # Use forward slashes as required by Databricks Unity Catalog
         return f"/Volumes/{self.catalog}/{self.schema}/{self.volume_name}/{path}"
 
     def _get_table_name(self, path: str) -> str:

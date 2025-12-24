@@ -14,7 +14,6 @@ from core.config.loaders import ConfigLoaderFactory
 class ContextLoader:
     """
     Core component for loading execution contexts from configuration files.
-    Decoupled from CLI-specific logic.
     """
 
     def __init__(self):
@@ -75,9 +74,18 @@ class ContextLoader:
     def _inject_env(self, ctx: Context, env: str) -> None:
         """Inject environment into context and global settings."""
         try:
+            # ✅ PRIMARY: Set 'env' attribute (used by MLOps)
             setattr(ctx, "env", env)
-        except Exception:
-            pass
+            logger.debug(f"Injected env attribute into context: '{env}'")
+        except Exception as e:
+            logger.warning(f"Could not set env attribute: {e}")
+
+        try:
+            # ✅ SECONDARY: Set 'environment' attribute (fallback)
+            setattr(ctx, "environment", env)
+            logger.debug(f"Injected environment attribute into context: '{env}'")
+        except Exception as e:
+            logger.warning(f"Could not set environment attribute: {e}")
 
         if isinstance(ctx.global_settings, dict):
             ctx.global_settings.setdefault("environment", env)

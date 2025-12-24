@@ -1,4 +1,6 @@
 import pytest  # type: ignore
+import tempfile
+from pathlib import Path
 from unittest import mock
 from core.streaming.query_manager import StreamingQueryManager
 from core.streaming.exceptions import StreamingError
@@ -10,7 +12,7 @@ class DummyContext:
         self.format_policy = None
         self.spark = None
         self.global_settings = {}
-        self.output_path = "/tmp/test_checkpoints"
+        self.output_path = str(Path(tempfile.gettempdir()) / "test_checkpoints")
 
 
 @pytest.fixture
@@ -118,5 +120,6 @@ def test_ensure_checkpoint_dir_raises_streaming_error_on_mkdir_failure(sqm, monk
     import pathlib
 
     monkeypatch.setattr(pathlib.Path, "mkdir", mock.MagicMock(side_effect=OSError("no perm")))
+    forbidden_path = str(Path(tempfile.gettempdir()) / "forbidden_path")
     with pytest.raises(StreamingError):
-        sqm._ensure_checkpoint_dir("/tmp/forbidden_path")
+        sqm._ensure_checkpoint_dir(forbidden_path)

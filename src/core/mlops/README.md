@@ -90,6 +90,50 @@ This release includes **7 critical security and performance fixes**:
 
 ---
 
+## � End User Responsibilities for Databricks
+
+**IMPORTANT**: Tauro is a **pipeline execution framework**, NOT a Databricks provisioning tool. The end user is **fully responsible** for:
+
+### ✅ What You Must Provide
+
+1. **Databricks Workspace and Credentials**
+   - Databricks workspace URL
+   - Access token or service principal credentials
+   - Set via environment variables: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`
+
+2. **Unity Catalog Infrastructure**
+   - Pre-created catalogs (or permissions to create them)
+   - Pre-created schemas (or permissions to create them)
+   - Pre-created volumes for artifact storage (if needed)
+   - Appropriate access permissions (READ/WRITE/CREATE)
+
+3. **Spark Configuration**
+   - Databricks cluster with appropriate runtime
+   - Spark session properly configured
+   - Unity Catalog enabled: `spark.databricks.unityCatalog.enabled=true`
+
+4. **Network and Security**
+   - Network connectivity to Databricks workspace
+   - Firewall rules and security groups
+   - IAM roles and policies for cloud storage access
+
+### ⚙️ What Tauro Does
+
+- **Executes** pipelines using your provided credentials
+- **Reads/Writes** data to your pre-configured Unity Catalog tables
+- **Uses** your existing Spark session
+- **Optionally creates** schemas/tables if you grant permissions (via `ensure_schema_exists`)
+
+### ❌ What Tauro Does NOT Do
+
+- Does NOT provision Databricks workspaces
+- Does NOT create Unity Catalog infrastructure automatically without permissions
+- Does NOT manage authentication or credentials (except reading from env vars)
+- Does NOT configure Spark clusters or runtimes
+- Does NOT set up network or security policies
+
+---
+
 ## 🛡️ Security Best Practices
 
 ### Credentials Management
@@ -107,13 +151,17 @@ ctx = init_mlops(
 **✅ DO: Use environment variables**
 ```python
 # SECURE - Credentials from environment
+# User must set these BEFORE running Tauro:
+export DATABRICKS_HOST="https://your-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="dapi1234567890..."
+
 ctx = init_mlops(
     backend_type="databricks",
     catalog="main",
     # Token loaded from DATABRICKS_TOKEN env var
 )
 
-# Or set explicitly from secure source
+# Or set explicitly from secure source (e.g., Azure Key Vault, AWS Secrets Manager)
 os.environ["DATABRICKS_TOKEN"] = get_from_vault("databricks/token")
 ctx = init_mlops(backend_type="databricks", catalog="main")
 ```
