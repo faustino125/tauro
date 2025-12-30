@@ -3,7 +3,7 @@ This module re-exports the most commonly used Config components for convenience.
 """
 
 # Exceptions
-from core.config.exceptions import (
+from .exceptions import (
     ConfigurationError,
     ConfigLoadError,
     ConfigValidationError,
@@ -13,7 +13,7 @@ from core.config.exceptions import (
 )
 
 # Loaders
-from core.config.loaders import (
+from .loaders import (
     ConfigLoader,
     YamlConfigLoader,
     JsonConfigLoader,
@@ -23,10 +23,10 @@ from core.config.loaders import (
 )
 
 # Interpolator
-from core.config.interpolator import VariableInterpolator
+from .interpolator import VariableInterpolator
 
 # Validators
-from core.config.validators import (
+from .validators import (
     ConfigValidator,
     PipelineValidator,
     FormatPolicy,
@@ -37,24 +37,25 @@ from core.config.validators import (
 )
 
 # Session Management
-from core.config.session import SparkSessionFactory, SparkSessionManager
+from .session import SparkSessionFactory, SparkSessionManager
 
 # Context and Context Management
-from core.config.contexts import (
+from .contexts import (
     Context,
     PipelineManager,
     BaseSpecializedContext,
     MLContext,
     StreamingContext,
     HybridContext,
+    VirtualContext,
     ContextFactory,
 )
 
 # Context Loader
-from core.config.context_loader import ContextLoader
+from .context_loader import ContextLoader
 
 # Providers
-from core.config.providers import (
+from .providers import (
     IConfigRepository,
     ActiveConfigRecord,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "MLContext",
     "StreamingContext",
     "HybridContext",
+    "VirtualContext",
     "ContextFactory",
     # Context Loader
     "ContextLoader",

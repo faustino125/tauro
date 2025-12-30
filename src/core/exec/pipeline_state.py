@@ -189,6 +189,7 @@ class NodeType(Enum):
 
     BATCH = "batch"
     STREAMING = "streaming"
+    FEATURE_STORE = "feature_store"  # Native feature store operations
 
 
 @dataclass

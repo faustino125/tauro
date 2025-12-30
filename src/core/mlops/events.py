@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 import weakref
@@ -8,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -103,6 +105,178 @@ class Event:
         }
 
 
+class PersistentEventLog:
+    """
+    v2.1+: Persistent event log that writes events to JSONL files.
+    Prevents loss of events that would be discarded from in-memory deque.
+    """
+
+    def __init__(self, log_dir: str = "./mlops_logs"):
+        """
+        Initialize persistent event log.
+
+        Args:
+            log_dir: Directory to store event log files
+        """
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        self._lock = threading.RLock()
+        self._current_file: Optional[Path] = None
+        self._file_handle: Optional[Any] = None
+        self._events_written = 0
+        self._max_file_size = 100 * 1024 * 1024  # 100MB per file
+
+        logger.debug(f"PersistentEventLog initialized at {self.log_dir}")
+
+    def write_event(self, event: Event) -> None:
+        """
+        Write event to persistent log file.
+
+        Args:
+            event: Event to log
+        """
+        with self._lock:
+            try:
+                # Rotate file if too large
+                self._maybe_rotate()
+
+                # Ensure file is open
+                if self._file_handle is None:
+                    self._open_file()
+
+                # Write event as JSONL (one JSON per line)
+                event_dict = event.to_dict()
+                line = json.dumps(event_dict) + "\n"
+                self._file_handle.write(line)
+                self._file_handle.flush()
+                self._events_written += 1
+
+            except Exception as e:
+                logger.error(f"Failed to write event to persistent log: {e}")
+
+    def _open_file(self) -> None:
+        """Open a new log file."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        self._current_file = self.log_dir / f"events_{timestamp}.jsonl"
+        self._file_handle = open(self._current_file, "a")
+        logger.debug(f"Opened event log file: {self._current_file}")
+
+    def _maybe_rotate(self) -> None:
+        """Rotate to new file if current is too large."""
+        if self._current_file and self._current_file.exists():
+            size = self._current_file.stat().st_size
+            if size >= self._max_file_size:
+                if self._file_handle:
+                    self._file_handle.close()
+                self._file_handle = None
+                logger.info(f"Rotating event log (size: {size / 1e6:.1f}MB)")
+
+    def _parse_and_filter_line(
+        self,
+        line: str,
+        event_type: Optional[EventType],
+        start_time: Optional[str],
+        end_time: Optional[str],
+        log_file: Path,
+    ) -> Optional[Event]:
+        """Parse a single JSONL line and apply filters; return Event or None."""
+        try:
+            event_dict = json.loads(line)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse event from {log_file}: {e}")
+            return None
+
+        event_type_str = event_dict.get("event_type")
+        timestamp = event_dict.get("timestamp")
+
+        if event_type and event_type_str != event_type.value:
+            return None
+
+        if start_time and timestamp < start_time:
+            return None
+
+        if end_time and timestamp > end_time:
+            return None
+
+        try:
+            return Event(
+                event_type=EventType(event_type_str),
+                timestamp=timestamp,
+                data=event_dict.get("data", {}),
+                source=event_dict.get("source", "mlops"),
+                correlation_id=event_dict.get("correlation_id"),
+            )
+        except (KeyError, ValueError) as e:
+            logger.warning(f"Failed to construct Event from {log_file}: {e}")
+            return None
+
+    def get_events(
+        self,
+        event_type: Optional[EventType] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        limit: int = 1000,
+    ) -> List[Event]:
+        """
+        Query events from log files.
+        """
+        events: List[Event] = []
+
+        # Get all log files, sorted by name (timestamp)
+        log_files = sorted(self.log_dir.glob("events_*.jsonl"), reverse=True)
+
+        for log_file in log_files:
+            try:
+                with open(log_file) as f:
+                    for line in f:
+                        if len(events) >= limit:
+                            return events
+
+                        event = self._parse_and_filter_line(
+                            line, event_type, start_time, end_time, log_file
+                        )
+                        if event is not None:
+                            events.append(event)
+
+            except Exception as e:
+                logger.error(f"Error reading event log {log_file}: {e}")
+                continue
+
+        return events
+
+    def cleanup_old_files(self, days: int = 30) -> None:
+        """
+        Remove event log files older than specified days.
+
+        Args:
+            days: Age threshold in days
+        """
+        import time
+
+        threshold = time.time() - (days * 24 * 3600)
+
+        removed_count = 0
+        for log_file in self.log_dir.glob("events_*.jsonl"):
+            if log_file.stat().st_mtime < threshold:
+                try:
+                    log_file.unlink()
+                    removed_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to remove old event log {log_file}: {e}")
+
+        if removed_count > 0:
+            logger.info(f"Cleaned up {removed_count} old event log files")
+
+    def close(self) -> None:
+        """Close the current log file."""
+        with self._lock:
+            if self._file_handle:
+                self._file_handle.close()
+                self._file_handle = None
+            logger.debug(f"Closed event log (wrote {self._events_written} events)")
+
+
 EventCallback = Callable[[Event], None]
 
 
@@ -111,7 +285,13 @@ class EventEmitter:
     Thread-safe event emitter for MLOps components.
     """
 
-    def __init__(self, name: str = "default", max_history: int = 1000, max_workers: int = 4):
+    def __init__(
+        self,
+        name: str = "default",
+        max_history: int = 1000,
+        max_workers: int = 4,
+        log_dir: Optional[str] = None,
+    ):
         self.name = name
         self._listeners: Dict[EventType, Set[EventCallback]] = defaultdict(set)
         self._async_listeners: Dict[EventType, Set[EventCallback]] = defaultdict(set)
@@ -124,7 +304,13 @@ class EventEmitter:
         self._enabled = True
         # Thread pool for async callbacks
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="event-")
-        logger.debug(f"EventEmitter '{name}' initialized with max_history={max_history}")
+        # Optional persistent event log for audit trail
+        self._persistent_log: Optional[PersistentEventLog] = None
+        if log_dir:
+            self._persistent_log = PersistentEventLog(log_dir=log_dir)
+        logger.debug(
+            f"EventEmitter '{name}' initialized with max_history={max_history}, persistent_log={bool(self._persistent_log)}"
+        )
 
     def on(
         self,
@@ -183,6 +369,13 @@ class EventEmitter:
         with self._lock:
             # Store in history (deque auto-removes old entries)
             self._event_history.append(event)
+
+            # Persist to disk if configured (non-blocking)
+            if self._persistent_log:
+                try:
+                    self._persistent_log.write_event(event)
+                except Exception as e:
+                    logger.warning(f"Failed to write persistent event log: {e}")
 
             # Get listeners (copy to avoid modification during iteration)
             sync_listeners = list(self._listeners.get(event_type, set()))
@@ -269,6 +462,25 @@ class EventEmitter:
         """Clear event history."""
         with self._lock:
             self._event_history.clear()
+
+    def close(self) -> None:
+        """Close event emitter and cleanup resources (persistent log, thread pool)."""
+        with self._lock:
+            if self._persistent_log:
+                self._persistent_log.close()
+                self._persistent_log = None
+            self._executor.shutdown(wait=True)
+            logger.debug(f"EventEmitter '{self.name}' closed")
+
+    def __del__(self) -> None:
+        """Ensure cleanup on garbage collection."""
+        try:
+            if hasattr(self, "_persistent_log") and self._persistent_log:
+                self._persistent_log.close()
+            if hasattr(self, "_executor"):
+                self._executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     def listener_count(self, event_type: Optional[EventType] = None) -> int:
         """Get count of registered listeners."""

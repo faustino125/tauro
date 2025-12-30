@@ -39,6 +39,147 @@ DEFAULT_MAX_METRICS_PER_KEY = 10000  # Max metrics per key in memory (rolling wi
 DEFAULT_MAX_METRICS_PER_RUN = 100000  # Absolute limit per run
 
 
+class MetricRollingWindow:
+    """
+    Rolling window container for metrics that auto-evicts oldest when full.
+    v2.1+: Prevents OOM by automatically discarding oldest metrics.
+    """
+
+    def __init__(self, max_size: int = DEFAULT_MAX_METRICS_PER_KEY):
+        """Initialize with max size."""
+        self.max_size = max_size
+        self.metrics: deque = deque(maxlen=max_size)
+        self._evictions = 0
+
+    def add(self, metric: "Metric") -> None:
+        """
+        Add metric to window, auto-evict oldest if full.
+        """
+        if len(self.metrics) >= self.max_size:
+            self._evictions += 1
+            if self._evictions % 1000 == 0:
+                logger.warning(
+                    f"Metric rolling window evicting old metrics. "
+                    f"Total evictions: {self._evictions}. "
+                    f"Consider increasing max_size or logging less frequently."
+                )
+
+        # Deque with maxlen automatically evicts oldest when appending to full deque
+        self.metrics.append(metric)
+
+    def get_all(self) -> List["Metric"]:
+        """Get all metrics in window."""
+        return list(self.metrics)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get statistics about this window."""
+        return {
+            "size": len(self.metrics),
+            "max_size": self.max_size,
+            "evictions": self._evictions,
+            "is_full": len(self.metrics) >= self.max_size,
+        }
+
+
+class MetricIndex:
+    """
+    Fast index for metrics enabling O(1) lookups.
+    v2.1+: Replaces O(n*m*k) search complexity with indexed access.
+
+    Indexes:
+    - by_key: {key -> [Metric]} - Get all metrics for a key
+    - by_range: {key -> {start_step -> Metric}} - Get metrics by step range
+    """
+
+    def __init__(self):
+        """Initialize empty indexes."""
+        # Map: metric_key -> list of Metric objects
+        self.by_key: Dict[str, List["Metric"]] = {}
+        # Map: metric_key -> {step -> Metric} for range queries
+        self.by_step: Dict[str, Dict[int, "Metric"]] = {}
+        self._lock = threading.RLock()
+
+    def index_metric(self, metric: "Metric") -> None:
+        """
+        Add metric to indexes.
+
+        Args:
+            metric: Metric to index
+        """
+        with self._lock:
+            # Index by key
+            if metric.key not in self.by_key:
+                self.by_key[metric.key] = []
+            self.by_key[metric.key].append(metric)
+
+            # Index by step for range queries
+            if metric.key not in self.by_step:
+                self.by_step[metric.key] = {}
+            self.by_step[metric.key][metric.step] = metric
+
+    def get_by_key(self, key: str) -> List["Metric"]:
+        """
+        Get all metrics for a key (O(1) lookup + list copy).
+
+        Args:
+            key: Metric key to retrieve
+
+        Returns:
+            List of metrics with this key (copy, safe to modify)
+        """
+        with self._lock:
+            return self.by_key.get(key, []).copy()
+
+    def get_by_step_range(self, key: str, start_step: int, end_step: int) -> List["Metric"]:
+        """
+        Get metrics within step range (O(n) where n = range size, not total metrics).
+
+        Args:
+            key: Metric key
+            start_step: Inclusive start step
+            end_step: Inclusive end step
+
+        Returns:
+            Metrics within range, sorted by step
+        """
+        with self._lock:
+            step_index = self.by_step.get(key, {})
+            metrics = [
+                step_index[step] for step in range(start_step, end_step + 1) if step in step_index
+            ]
+            return metrics
+
+    def get_latest(self, key: str) -> Optional["Metric"]:
+        """
+        Get latest metric for a key (O(1) access to list tail).
+
+        Args:
+            key: Metric key
+
+        Returns:
+            Latest metric or None if not found
+        """
+        with self._lock:
+            metrics = self.by_key.get(key)
+            return metrics[-1] if metrics else None
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get index statistics."""
+        with self._lock:
+            total_metrics = sum(len(m) for m in self.by_key.values())
+            return {
+                "indexed_keys": len(self.by_key),
+                "total_metrics": total_metrics,
+                "avg_metrics_per_key": total_metrics / len(self.by_key) if self.by_key else 0,
+            }
+
+    def clear(self) -> None:
+        """Clear all indexes."""
+        with self._lock:
+            self.by_key.clear()
+            self.by_step.clear()
+
+
 class RunStatus(str, Enum):
     """Run execution status."""
 
@@ -81,24 +222,39 @@ class Run:
     tags: Dict[str, str] = field(default_factory=dict)
     parent_run_id: Optional[str] = None
     notes: str = ""
+    # v2.1+: Fast index for metric lookups (not serialized)
+    metric_index: MetricIndex = field(default_factory=MetricIndex, init=False, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         d = asdict(self)
         d["status"] = self.status.value
-        d["metrics"] = {
-            key: [m.to_dict() for m in metrics] for key, metrics in self.metrics.items()
-        }
+        # v2.1+: Handle MetricRollingWindow serialization
+        d["metrics"] = {}
+        for key, metrics_container in self.metrics.items():
+            if isinstance(metrics_container, MetricRollingWindow):
+                d["metrics"][key] = [m.to_dict() for m in metrics_container.get_all()]
+            else:
+                # Backward compatibility with old list format
+                d["metrics"][key] = [
+                    m.to_dict() if isinstance(m, Metric) else m for m in metrics_container
+                ]
         return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Run":
         """Create from dictionary."""
         data["status"] = RunStatus(data.get("status", "RUNNING"))
+        # v2.1+: Restore MetricRollingWindow from serialized data
         if "metrics" in data:
-            data["metrics"] = {
-                key: [Metric(**m) for m in metrics] for key, metrics in data["metrics"].items()
-            }
+            metrics_dict = {}
+            for key, metrics_list in data["metrics"].items():
+                window = MetricRollingWindow()
+                for m_dict in metrics_list:
+                    metric = Metric(**m_dict) if isinstance(m_dict, dict) else m_dict
+                    window.add(metric)
+                metrics_dict[key] = window
+            data["metrics"] = metrics_dict
         return cls(**data)
 
 
@@ -421,8 +577,19 @@ class ExperimentTracker:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Log metric for run with memory protection and limits.
-        C4: Validate total metrics per run to prevent OOM.
+        Log metric for run with memory protection and rolling window limits.
+        v2.1+: Automatic rolling window eviction when limits exceeded.
+
+        Args:
+            run_id: ID of the run
+            key: Metric key
+            value: Metric value (must be int or float)
+            step: Training step/epoch
+            metadata: Optional metadata
+
+        Raises:
+            InvalidMetricError: If value is invalid (NaN, Inf)
+            RunNotFoundError: If run doesn't exist
         """
         import math
 
@@ -442,19 +609,6 @@ class ExperimentTracker:
         with self._runs_lock:
             run = self._get_active_run(run_id)
 
-            # C4: Count total metrics across all keys
-            current_total = sum(len(metrics) for metrics in run.metrics.values())
-
-            # Reject if adding this metric would exceed limit
-            if current_total >= self.max_metrics_per_run:
-                logger.error(
-                    f"Run {run_id}: Cannot log metric - total metrics limit "
-                    f"({self.max_metrics_per_run}) reached"
-                )
-                raise ResourceLimitError(
-                    f"run_{run_id}_metrics", current_total, self.max_metrics_per_run
-                )
-
             now = datetime.now(timezone.utc).isoformat()
 
             metric = Metric(
@@ -465,26 +619,35 @@ class ExperimentTracker:
                 metadata=metadata or {},
             )
 
+            # v2.1+: Use MetricRollingWindow for automatic eviction
             if key not in run.metrics:
-                run.metrics[key] = []
-            run.metrics[key].append(metric)
+                run.metrics[key] = MetricRollingWindow(max_size=self.max_metrics_per_key)
 
-            # Enforce rolling window limit per metric key
-            if len(run.metrics[key]) > self.max_metrics_per_key:
-                # Remove oldest metrics to maintain limit (rolling window)
-                excess = len(run.metrics[key]) - self.max_metrics_per_key
-                run.metrics[key] = run.metrics[key][excess:]
-                logger.debug(
-                    f"Run {run_id}: Trimmed {excess} old metrics for key '{key}' "
-                    f"(rolling window: {self.max_metrics_per_key})"
+            # Add metric (auto-evicts oldest if window is full)
+            run.metrics[key].add(metric)
+
+            # v2.1+: Index metric for O(1) lookups
+            run.metric_index.index_metric(metric)
+
+            # Check total metrics across all keys
+            total_metrics = sum(
+                len(window.metrics)
+                for window in run.metrics.values()
+                if isinstance(window, MetricRollingWindow)
+            )
+
+            # Warn if approaching total limit
+            if total_metrics > self.max_metrics_per_run * 0.8:
+                logger.warning(
+                    f"Run {run_id}: High metric count ({total_metrics}/{self.max_metrics_per_run}). "
+                    f"Consider logging less frequently or flushing metrics."
                 )
 
-            # Track total metrics for memory warning
-            total_metrics = sum(len(m) for m in run.metrics.values())
-            if total_metrics > METRICS_CLEANUP_THRESHOLD:
-                logger.warning(
-                    f"Run {run_id} has {total_metrics} metrics. "
-                    "Consider flushing or ending the run to free memory."
+            # Warn if key window is full (heavy logging)
+            if run.metrics[key].get_stats()["is_full"]:
+                logger.debug(
+                    f"Run {run_id}: Metric key '{key}' rolling window full "
+                    f"(evictions: {run.metrics[key]._evictions})"
                 )
 
             logger.debug(f"Run {run_id}: Logged metric {key}={value} (step {step})")
@@ -1030,6 +1193,75 @@ class ExperimentTracker:
                 )
 
             return result
+
+    def search_metrics_by_key(self, run_id: str, key: str) -> List[Metric]:
+        """
+        Search metrics by key (O(1) lookup using index).
+        v2.1+: Fast metric retrieval using MetricIndex.
+
+        Args:
+            run_id: ID of the run
+            key: Metric key to search for
+
+        Returns:
+            List of metrics matching the key
+
+        Raises:
+            RunNotFoundError: If run doesn't exist
+        """
+        with self._runs_lock:
+            run = self._get_active_run(run_id)
+            return run.metric_index.get_by_key(key)
+
+    def search_metrics_by_step_range(
+        self,
+        run_id: str,
+        key: str,
+        start_step: int,
+        end_step: int,
+    ) -> List[Metric]:
+        """
+        Search metrics within step range (O(n) where n = range size).
+        v2.1+: Efficient range queries using MetricIndex.
+
+        Args:
+            run_id: ID of the run
+            key: Metric key
+            start_step: Inclusive start step
+            end_step: Inclusive end step
+
+        Returns:
+            Metrics within step range, sorted by step
+
+        Raises:
+            RunNotFoundError: If run doesn't exist
+        """
+        with self._runs_lock:
+            run = self._get_active_run(run_id)
+            return run.metric_index.get_by_step_range(key, start_step, end_step)
+
+    def get_latest_metric(
+        self,
+        run_id: str,
+        key: str,
+    ) -> Optional[Metric]:
+        """
+        Get latest metric for a key (O(1) lookup).
+        v2.1+: Fast access to most recent metric value.
+
+        Args:
+            run_id: ID of the run
+            key: Metric key
+
+        Returns:
+            Latest metric or None if not found
+
+        Raises:
+            RunNotFoundError: If run doesn't exist
+        """
+        with self._runs_lock:
+            run = self._get_active_run(run_id)
+            return run.metric_index.get_latest(key)
 
     def get_stats(self) -> Dict[str, Any]:
         """

@@ -734,6 +734,125 @@ class HybridContext(Context):
         HybridValidator.validate_context(self)
 
 
+class VirtualContext:
+    """Context for data virtualization workflows."""
+
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        spark_session: Optional[Any] = None,
+    ):
+        """Initialize virtual context."""
+        from src.core.virtualization import VirtualDataLayer
+        from src.core.virtualization.federation_engine import FederationEngine
+        from src.core.virtualization.security import SecurityEnforcer
+
+        self.config = config or {}
+        self.spark = spark_session
+
+        # Initialize virtualization layer
+        self.virtual_layer = VirtualDataLayer.from_config(self.config)
+
+        # Initialize query federation
+        self.federation_engine = FederationEngine()
+
+        # Initialize security
+        self.enforcer = SecurityEnforcer()
+        self._register_security_policies()
+
+        logger.debug("VirtualContext initialized")
+
+    def _register_security_policies(self):
+        """Register all security policies from config."""
+        from src.core.virtualization.security import (
+            TableSecurityPolicy,
+            FieldSecurityPolicy,
+            AccessLevel,
+        )
+
+        for table_name, policy_config in self.config.get("security_policies", {}).items():
+            # Convert config to policy object
+            field_policies = {}
+            for field_name, field_cfg in policy_config.get("field_policies", {}).items():
+                field_policies[field_name] = FieldSecurityPolicy(
+                    field_name=field_name,
+                    access_level=AccessLevel(field_cfg.get("access_level", "unrestricted")),
+                    encryption_enabled=field_cfg.get("encryption_enabled", False),
+                    masking_enabled=field_cfg.get("masking_enabled", False),
+                    masking_pattern=field_cfg.get("masking_pattern", "***"),
+                    allowed_roles=field_cfg.get("allowed_roles", ["*"]),
+                )
+
+            policy = TableSecurityPolicy(
+                table_name=table_name,
+                field_policies=field_policies,
+                row_level_filters=policy_config.get("row_level_filters", {}),
+                requires_encryption=policy_config.get("requires_encryption", False),
+                audit_all_access=policy_config.get("audit_all_access", True),
+                allowed_roles=policy_config.get("allowed_roles", ["*"]),
+            )
+
+            self.enforcer.register_policy(policy)
+
+    def get_table(self, name: str) -> Optional[Any]:
+        """Get virtual table by name."""
+        return self.virtual_layer.get_table(name)
+
+    def list_tables(self, **filters) -> List[Any]:
+        """List virtual tables with optional filters."""
+        return self.virtual_layer.list_tables(**filters)
+
+    def read_table(
+        self, table_name: str, principal: Optional[str] = None, apply_security: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Read table with optional security applied."""
+        from src.core.virtualization.readers import VirtualReaderFactory
+
+        table = self.get_table(table_name)
+        if not table:
+            raise ValueError(f"Table not found: {table_name}")
+
+        # Read data
+        factory = VirtualReaderFactory(context=None)
+        reader = factory.create_reader(table)
+        rows = list(reader.read())
+
+        # Apply security if requested
+        if apply_security and principal:
+            # RLS
+            rows = self.enforcer.apply_row_level_security(table_name, principal, rows)
+            # Field masking
+            rows = self.enforcer.apply_field_masking(table_name, principal, rows)
+            # Audit
+            self.enforcer.audit_access(
+                principal=principal, table_name=table_name, row_count=len(rows), status="SUCCESS"
+            )
+
+        return rows
+
+    @classmethod
+    def from_config(cls, config_path: Union[str, Path]) -> "VirtualContext":
+        """Create VirtualContext from YAML/JSON config file."""
+        from core.config.loaders import ConfigLoaderFactory
+
+        loader = ConfigLoaderFactory()
+        config = loader.load_config(str(config_path))
+
+        return cls(config=config)
+
+    def export_catalog(self, format: str = "json") -> Dict[str, Any]:
+        """Export virtual table catalog."""
+        return self.virtual_layer.schema_registry.export_catalog(format=format)
+
+    def get_audit_logs(self, **filters) -> List[Any]:
+        """Get audit logs with optional filters."""
+        return self.enforcer.get_audit_logs(**filters)
+
+    def export_audit_trail(self, format: str = "json") -> str:
+        """Export audit trail for compliance."""
+        return self.enforcer.export_audit_trail(format=format)
+
+
 class ContextFactory:
     """Factory for creating specialized contexts with priority handling."""
 

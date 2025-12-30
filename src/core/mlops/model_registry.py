@@ -19,6 +19,7 @@ from core.mlops.validators import (
     validate_tags,
     validate_description,
     PathValidator,
+    ArtifactValidator,
 )
 from core.mlops.exceptions import (
     ModelNotFoundError,
@@ -206,6 +207,11 @@ class ModelRegistry:
             artifact_file = Path(artifact_path)
             PathValidator.validate_file_exists(artifact_file)
             PathValidator.validate_is_file_or_dir(artifact_file)
+
+            # NEW: Validate that artifact can be loaded (v2.1+)
+            ArtifactValidator.validate_artifact(
+                artifact_path=str(artifact_file), framework=framework
+            )
             logger.debug(f"Artifact validation passed: {artifact_file}")
 
         except Exception as e:

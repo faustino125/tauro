@@ -1,33 +1,6 @@
 version: '3.8'
 
 services:
-  # MongoDB Database
-  mongodb:
-    image: mongo:6.0
-    container_name: tauro-mongodb
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_DATABASE: tauro
-    volumes:
-      - mongodb_data:/data/db
-      - mongodb_config:/data/configdb
-    networks:
-      - tauro-network
-    healthcheck:
-      test: echo 'db.adminCommand("ping")' | mongosh localhost:27017/test --quiet
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-
   # Tauro API and CLI Container
   tauro-container:
     image: tauro:latest
@@ -42,17 +15,9 @@ services:
     environment:
       - API_PORT=8000
       - PYTHONUNBUFFERED=1
-      - MONGODB_URI=mongodb://mongodb:27017
-      - MONGODB_DB_NAME=tauro
-      - MONGODB_TIMEOUT_SECONDS=30
     working_dir: /tauro
     tty: true
     stdin_open: true
-    networks:
-      - tauro-network
-    depends_on:
-      mongodb:
-        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -61,13 +26,3 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-
-networks:
-  tauro-network:
-    driver: bridge
-
-volumes:
-  mongodb_data:
-    driver: local
-  mongodb_config:
-    driver: local

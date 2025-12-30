@@ -9,11 +9,10 @@ RUN apt-get update -qq && \
     openjdk-11-jdk \
     libgl1-mesa-glx \
     libxrender1 \
-    libxext6 \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN conda create -y -n tauro python=3.10 && \
+    libxext6 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    conda create -y -n tauro python=3.10 && \
     conda clean -ya
 
 ENV PATH /opt/conda/envs/tauro/bin:$PATH

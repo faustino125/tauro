@@ -203,6 +203,13 @@ class NodeExecutor:
         with resource_manager.resource_context(f"node_{node_name}"):
             try:
                 node_config = self._get_node_config(node_name)
+
+                # Check if this is a Feature Store node
+                node_type = node_config.get("type", "batch")
+                if node_type == "feature_store":
+                    self._execute_feature_store_node(node_name, node_config)
+                    return
+
                 function = self._load_node_function(node_config)
                 input_dfs = self.input_loader.load_inputs(node_config)
 
@@ -912,6 +919,39 @@ class NodeExecutor:
             console.print()
         except Exception:
             logger.info(f"Output saved successfully for node '{node_name}'")
+
+    def _execute_feature_store_node(self, node_name: str, node_config: Dict[str, Any]) -> None:
+        """Execute a Feature Store node natively within the pipeline.
+
+        Feature Store nodes are fully integrated as first-class citizens in Tauro,
+        not as external services.
+
+        Args:
+            node_name: Name of the node
+            node_config: Node configuration dictionary
+        """
+        try:
+            from core.exec.feature_store_integration import FeatureStoreNodeHandler
+
+            logger.info(f"Executing Feature Store node: {node_name}")
+
+            # Create handler
+            handler = FeatureStoreNodeHandler(self.context)
+
+            # Execute appropriate operation
+            operation = node_config.get("operation")
+            if not operation:
+                raise ValueError(
+                    "Feature Store node requires 'operation' field (write/read/transform)"
+                )
+
+            result = handler.handle_feature_store_node(node_config)
+
+            logger.info(f"Feature Store node '{node_name}' completed: {result}")
+
+        except Exception as e:
+            logger.error(f"Feature Store node '{node_name}' failed: {str(e)}")
+            raise
 
     def _get_node_config(self, node_name: str) -> Dict[str, Any]:
         """Get configuration for a specific node with enhanced error handling."""

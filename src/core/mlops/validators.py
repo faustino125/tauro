@@ -413,3 +413,183 @@ def validate_tags(tags: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
 def validate_description(description: Optional[str]) -> Optional[str]:
     """Validate description"""
     return MetadataValidator.validate_description(description)
+
+
+class ArtifactValidator:
+    """Validator for model artifacts - ensures artifacts can be loaded"""
+
+    SUPPORTED_FRAMEWORKS = {
+        "sklearn": ["pkl", "joblib"],
+        "xgboost": ["pkl", "json", "ubj"],
+        "lightgbm": ["pkl", "txt"],
+        "pytorch": ["pt", "pth"],
+        "tensorflow": ["h5", "pb", "keras"],
+        "onnx": ["onnx", "pb"],
+        "pickle": ["pkl"],
+        "joblib": ["joblib"],
+        "custom": ["pkl", "bin"],
+    }
+
+    @staticmethod
+    def validate_artifact(
+        artifact_path: str,
+        framework: str,
+    ) -> None:
+        """
+        Validate that artifact exists and can be loaded.
+
+        Args:
+            artifact_path: Path to artifact file
+            framework: Model framework (sklearn, pytorch, etc.)
+
+        Raises:
+            ValidationError: If artifact is invalid or cannot be loaded
+        """
+        artifact_path_obj = Path(artifact_path)
+
+        # 1. Check existence
+        if not artifact_path_obj.exists():
+            raise ValidationError(f"Artifact not found at {artifact_path}")
+
+        if not artifact_path_obj.is_file():
+            raise ValidationError(f"Artifact path is not a file: {artifact_path}")
+
+        # 2. Check file size (warn if very large)
+        size_bytes = artifact_path_obj.stat().st_size
+        if size_bytes > 1_000_000_000:  # 1GB
+            logger.warning(
+                f"Artifact is very large: {size_bytes / 1e9:.2f}GB. "
+                f"Consider using external storage."
+            )
+
+        # 3. Try to load based on framework
+        try:
+            ArtifactValidator._validate_loadable(artifact_path_obj, framework)
+        except Exception as e:
+            raise ValidationError(f"Cannot load artifact with framework '{framework}': {e}")
+
+    @staticmethod
+    def _validate_loadable(artifact_path: Path, framework: str) -> None:
+        """
+        Attempt to load artifact to verify it's not corrupted.
+        Dispatches to framework-specific loader helpers to keep complexity low.
+        """
+        framework_key = framework.lower()
+        loaders = {
+            "sklearn": ArtifactValidator._load_pickle,
+            "scikit-learn": ArtifactValidator._load_pickle,
+            "xgboost": ArtifactValidator._load_xgboost,
+            "lightgbm": ArtifactValidator._load_lightgbm,
+            "pytorch": ArtifactValidator._load_pytorch,
+            "tensorflow": ArtifactValidator._load_tensorflow,
+            "onnx": ArtifactValidator._load_onnx,
+            "pickle": ArtifactValidator._load_pickle_joblib,
+            "joblib": ArtifactValidator._load_pickle_joblib,
+            "custom": ArtifactValidator._load_pickle_joblib,
+        }
+
+        loader = loaders.get(framework_key)
+        if loader:
+            # Let loader raise non-ImportError exceptions to indicate real failures
+            try:
+                loader(artifact_path)
+            except ImportError:
+                # Maintain previous behavior: log and skip validation when library not installed
+                logger.warning(f"{framework} runtime not installed, skipping validation")
+            return
+
+        logger.warning(
+            f"Unknown framework '{framework_key}', skipping artifact validation. "
+            f"Supported: {', '.join(ArtifactValidator.SUPPORTED_FRAMEWORKS.keys())}"
+        )
+
+    @staticmethod
+    def _load_pickle(artifact_path: Path) -> None:
+        import pickle
+
+        with open(artifact_path, "rb") as f:
+            pickle.load(f)
+
+    @staticmethod
+    def _load_xgboost(artifact_path: Path) -> None:
+        try:
+            import xgboost as xgb  # type: ignore
+        except ImportError as e:
+            logger.warning("xgboost runtime not installed, cannot validate xgboost artifacts")
+            raise ImportError("xgboost library is required to validate xgboost artifacts") from e
+        # Try JSON booster first, otherwise fallback to pickle
+        if str(artifact_path).endswith(".json"):
+            xgb.Booster(model_file=str(artifact_path))
+        else:
+            ArtifactValidator._load_pickle(artifact_path)
+
+    @staticmethod
+    def _load_lightgbm(artifact_path: Path) -> None:
+        try:
+            import lightgbm as lgb  # type: ignore
+        except ImportError as e:
+            logger.warning("lightgbm runtime not installed, cannot validate lightgbm artifacts")
+            raise ImportError("lightgbm library is required to validate lightgbm artifacts") from e
+        if str(artifact_path).endswith(".txt"):
+            lgb.Booster(model_file=str(artifact_path))
+        else:
+            ArtifactValidator._load_pickle(artifact_path)
+
+    @staticmethod
+    def _load_pytorch(artifact_path: Path) -> None:
+        try:
+            import torch  # type: ignore
+        except ImportError as e:
+            logger.warning("pytorch runtime not installed, cannot validate pytorch artifacts")
+            raise ImportError("pytorch library is required to validate pytorch artifacts") from e
+        state = torch.load(artifact_path, map_location="cpu")
+        if not isinstance(state, dict):
+            raise ValueError(f"Expected dict, got {type(state)}")
+
+    @staticmethod
+    def _load_tensorflow(artifact_path: Path) -> None:
+        try:
+            import tensorflow as tf  # type: ignore
+        except ImportError as e:
+            logger.warning("tensorflow runtime not installed, cannot validate tensorflow artifacts")
+            raise ImportError(
+                "tensorflow library is required to validate tensorflow artifacts"
+            ) from e
+        path_str = str(artifact_path)
+        if path_str.endswith(".h5") or path_str.endswith(".keras"):
+            tf.keras.models.load_model(artifact_path)
+        elif path_str.endswith((".pb", ".pbtxt")):
+            tf.saved_model.load(artifact_path)
+        else:
+            # Attempt to load as Keras model if extension is unknown
+            tf.keras.models.load_model(artifact_path)
+
+    @staticmethod
+    def _load_onnx(artifact_path: Path) -> None:
+        try:
+            import onnx  # type: ignore
+        except ImportError as e:
+            logger.warning("onnx runtime not installed, cannot validate onnx artifacts")
+            raise ImportError("onnx library is required to validate onnx artifacts") from e
+        model = onnx.load(str(artifact_path))
+        onnx.checker.check_model(model)
+
+    @staticmethod
+    def _load_pickle_joblib(artifact_path: Path) -> None:
+        # Try pickle first, then joblib; raise ValueError if both fail
+        try:
+            ArtifactValidator._load_pickle(artifact_path)
+            return
+        except Exception:
+            pass
+
+        try:
+            import joblib  # type: ignore
+        except ImportError:
+            # If joblib not installed, raise previous exception as generic failure
+            raise ValueError("Cannot load as pickle and joblib not available")
+
+        try:
+            joblib.load(artifact_path)
+        except Exception as e:
+            raise ValueError(f"Cannot load as pickle or joblib: {e}")

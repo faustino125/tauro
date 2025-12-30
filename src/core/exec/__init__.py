@@ -85,6 +85,21 @@ from core.exec.utils import (
     get_node_dependencies,
 )
 
+# Feature Store Integration
+from core.exec.feature_store_executor import (
+    FeatureStoreExecutorAdapter,
+    write_features_node,
+    read_features_node,
+    create_feature_store_for_pipeline,
+)
+
+# Native Feature Store Integration (no external service)
+from core.exec.feature_store_integration import (
+    FeatureStoreNodeHandler,
+    FeatureStoreNodeConfig,
+    create_feature_store_handler,
+)
+
 __all__ = [
     # Commands
     "Command",
@@ -135,4 +150,12 @@ __all__ = [
     "extract_dependency_name",
     "extract_pipeline_nodes",
     "get_node_dependencies",
+    # Feature Store Integration
+    "FeatureStoreExecutorAdapter",
+    "write_features_node",
+    "read_features_node",
+    "create_feature_store_for_pipeline",
+    "FeatureStoreNodeHandler",
+    "FeatureStoreNodeConfig",
+    "create_feature_store_handler",
 ]

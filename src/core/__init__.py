@@ -25,12 +25,13 @@ def about() -> Dict[str, str]:
     }
 
 
-_CLI_MODULE = "core.cli"
-_CONFIG_MODULE = "core.config"
-_EXEC_MODULE = "core.exec"
-_IO_MODULE = "core.io"
-_MLOPS_MODULE = "core.mlops"
-_STREAMING_MODULE = "core.streaming"
+_CLI_MODULE = "src.core.cli"
+_CONFIG_MODULE = "src.core.config"
+_EXEC_MODULE = "src.core.exec"
+_IO_MODULE = "src.core.io"
+_MLOPS_MODULE = "src.core.mlops"
+_STREAMING_MODULE = "src.core.streaming"
+_VIRTUALIZATION_MODULE = "src.core.virtualization"
 
 _SUBMODULE_ALIASES = {
     "cli": _CLI_MODULE,
@@ -40,6 +41,7 @@ _SUBMODULE_ALIASES = {
     "io": _IO_MODULE,
     "mlops": _MLOPS_MODULE,
     "streaming": _STREAMING_MODULE,
+    "virtualization": _VIRTUALIZATION_MODULE,
 }
 
 _SYMBOL_EXPORTS = {
@@ -99,6 +101,37 @@ _SYMBOL_EXPORTS = {
     "get_mlops_context": (_MLOPS_MODULE, "get_mlops_context"),
     "ModelRegistry": (_MLOPS_MODULE, "ModelRegistry"),
     "ExperimentTracker": (_MLOPS_MODULE, "ExperimentTracker"),
+    # Virtualization layer
+    "VirtualDataLayer": (_VIRTUALIZATION_MODULE, "VirtualDataLayer"),
+    "VirtualTable": (_VIRTUALIZATION_MODULE, "VirtualTable"),
+    "SourceType": (_VIRTUALIZATION_MODULE, "SourceType"),
+    "CacheStrategy": (_VIRTUALIZATION_MODULE, "CacheStrategy"),
+    "EncryptionConfig": (_VIRTUALIZATION_MODULE, "EncryptionConfig"),
+    "SchemaRegistry": (_VIRTUALIZATION_MODULE, "SchemaRegistry"),
+    "TableStatistics": (_VIRTUALIZATION_MODULE, "TableStatistics"),
+    # Virtualization security
+    "SecurityEnforcer": (_VIRTUALIZATION_MODULE, "SecurityEnforcer"),
+    "TableSecurityPolicy": (_VIRTUALIZATION_MODULE, "TableSecurityPolicy"),
+    "FieldSecurityPolicy": (_VIRTUALIZATION_MODULE, "FieldSecurityPolicy"),
+    "AccessLevel": (_VIRTUALIZATION_MODULE, "AccessLevel"),
+    "Operation": (_VIRTUALIZATION_MODULE, "Operation"),
+    "AuditLog": (_VIRTUALIZATION_MODULE, "AuditLog"),
+    # Virtualization federation
+    "FederationEngine": (_VIRTUALIZATION_MODULE, "FederationEngine"),
+    "QueryOptimizer": (_VIRTUALIZATION_MODULE, "QueryOptimizer"),
+    "QueryPlan": (_VIRTUALIZATION_MODULE, "QueryPlan"),
+    "Predicate": (_VIRTUALIZATION_MODULE, "Predicate"),
+    "PredicateOperator": (_VIRTUALIZATION_MODULE, "PredicateOperator"),
+    "ExecutionStrategy": (_VIRTUALIZATION_MODULE, "ExecutionStrategy"),
+    "QueryStatistics": (_VIRTUALIZATION_MODULE, "QueryStatistics"),
+    # Virtualization readers
+    "VirtualReaderFactory": (_VIRTUALIZATION_MODULE, "VirtualReaderFactory"),
+    "VirtualDataSourceReader": (_VIRTUALIZATION_MODULE, "VirtualDataSourceReader"),
+    "FilesystemVirtualReader": (_VIRTUALIZATION_MODULE, "FilesystemVirtualReader"),
+    "DatabaseVirtualReader": (_VIRTUALIZATION_MODULE, "DatabaseVirtualReader"),
+    "DataWarehouseVirtualReader": (_VIRTUALIZATION_MODULE, "DataWarehouseVirtualReader"),
+    # Context
+    "VirtualContext": (_CONFIG_MODULE, "VirtualContext"),
 }
 
 _ALL_EXPORTS = {
