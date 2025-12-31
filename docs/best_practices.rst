@@ -1,102 +1,576 @@
 Best Practices
 ==============
 
-This guide covers best practices for using Tauro effectively.
+Learn how to use Tauro effectively and avoid common pitfalls.
 
-Security
---------
+Project Organization
+---------------------
 
-Path Validation
-~~~~~~~~~~~~~~~
+**Keep your project clean and organized.** A good structure makes collaboration easier:
 
-Always validate file paths to prevent directory traversal attacks:
+.. code-block:: text
+
+   my_project/
+   ├── config/              # Configuration files
+   │   ├── global.yaml
+   │   ├── pipelines.yaml
+   │   ├── nodes.yaml
+   │   ├── inputs.yaml
+   │   ├── outputs.yaml
+   │   ├── dev/             # Dev overrides
+   │   ├── staging/         # Staging overrides
+   │   └── prod/            # Production overrides
+   │
+   ├── src/                 # Your Python code
+   │   └── nodes/
+   │       ├── __init__.py
+   │       ├── extract.py
+   │       ├── transform.py
+   │       └── load.py
+   │
+   ├── data/                # Local test data (gitignore!)
+   │   ├── input/
+   │   └── output/
+   │
+   ├── tests/               # Unit tests
+   │   ├── test_extract.py
+   │   ├── test_transform.py
+   │   └── test_load.py
+   │
+   ├── logs/                # Execution logs (gitignore!)
+   │
+   ├── .env                 # Secrets (gitignore!)
+   ├── .gitignore
+   ├── requirements.txt
+   └── README.md
+
+Follow this structure and you'll be in good shape.
+
+Writing Good Node Functions
+-----------------------------
+
+**Simple and Clear**
+
+Each node function should do one thing well:
 
 .. code-block:: python
 
-   from tauro import PathValidator
+   # ✓ Good: Simple, clear purpose
+   def extract_sales_data(df):
+       """Load sales data from database."""
+       return df.dropna()
 
-   validator = PathValidator(allowed_paths=["/data", "/tmp"])
-   
-   # This will pass
-   validator.validate("/data/sales.csv")
-   
-   # This will raise SecurityError
-   validator.validate("/etc/passwd")
+   # ✗ Bad: Does too much
+   def do_everything(df):
+       """Process all data."""
+       df = df.dropna()
+       df = df.groupby(...).sum()
+       df = df[df['amount'] > 0]
+       return df
 
-Configuration
-.. code-block:: yaml
+**Always Include Docstrings**
 
-   security:
-     validate_paths: true
-     allowed_paths:
-       - "/data"
-       - "/tmp"
-       - "/app/output"
-
-Input Sanitization
-~~~~~~~~~~~~~~~~~~
-
-Sanitize all user inputs:
+Write a one-line description of what the function does:
 
 .. code-block:: python
 
-   from tauro import InputSanitizer
+   def clean_customer_data(df):
+       """Remove duplicate customers and invalid emails."""
+       df = df.drop_duplicates(subset=['customer_id'])
+       df = df[df['email'].str.contains('@')]
+       return df
 
-   sanitizer = InputSanitizer()
-   
-   # Sanitize pipeline name
-   safe_name = sanitizer.sanitize_pipeline_name(user_input)
-   
-   # Sanitize SQL
-   safe_sql = sanitizer.sanitize_sql(user_query)
+**Handle Errors Gracefully**
 
-Credential Management
-~~~~~~~~~~~~~~~~~~~~~
+Don't let silent failures happen:
 
-Never hardcode credentials:
+.. code-block:: python
+
+   # ✗ Bad: Ignores errors
+   def transform_data(df):
+       try:
+           return df['amount'].apply(float)
+       except:
+           pass  # Oops, lost data
+
+   # ✓ Good: Handles errors properly
+   def transform_data(df):
+       """Convert amounts to numbers."""
+       try:
+           return df['amount'].astype(float)
+       except ValueError as e:
+           raise ValueError(f"Could not convert amounts: {e}")
+
+**Validate Your Input**
+
+Don't assume data is correct:
+
+.. code-block:: python
+
+   # ✓ Good: Validates data
+   def process_sales(df):
+       """Process sales data."""
+       if df is None or df.empty:
+           raise ValueError("No data provided")
+
+       required_cols = ['id', 'amount', 'date']
+       missing = [c for c in required_cols if c not in df.columns]
+       if missing:
+           raise ValueError(f"Missing columns: {missing}")
+
+       return df[df['amount'] > 0]
+
+Configuration Best Practices
+------------------------------
+
+**Use Environment Variables, Never Hardcode Secrets**
 
 .. code-block:: yaml
 
-   # ❌ BAD
+   # ✗ Never do this
    database:
      password: "my_secret_password"
 
-   # ✅ GOOD
+   # ✓ Always do this
    database:
-     password: "${DB_PASSWORD}"
+     password: ${DB_PASSWORD}
 
-Use environment variables or secret managers:
+Then set the variable:
 
 .. code-block:: bash
 
-   export DB_PASSWORD="secret"
-   
-   # Or use AWS Secrets Manager, Azure Key Vault, etc.
+   export DB_PASSWORD="my_secret_password"
+   tauro --env prod --pipeline my_pipeline
 
-Performance
------------
+Or use a ``.env`` file:
 
-Enable Caching
-~~~~~~~~~~~~~~
+.. code-block:: bash
 
-Cache frequently accessed configurations:
+   # .env (add to .gitignore)
+   DB_PASSWORD=my_secret_password
+   API_KEY=abc123
 
-.. code-block:: python
-
-   from tauro import ContextLoader
-
-   # Configuration is cached automatically (TTL: 5 minutes)
-   context = ContextLoader().load_from_env("prod")
-
-Use Appropriate Data Formats
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Use Relative Paths or Cloud Storage**
 
 .. code-block:: yaml
 
-   # For large datasets
-   output:
-     format: "delta"  # or "parquet"
-     compression: "snappy"
+   # ✗ Don't use absolute paths
+   input_path: /home/john/data/input
+
+   # ✓ Use relative paths
+   input_path: data/input
+
+   # ✓ Or use cloud storage
+   input_path: s3://my-bucket/data/input
+
+**Name Nodes Clearly**
+
+Use short, descriptive names:
+
+.. code-block:: yaml
+
+   # ✗ Unclear
+   nodes:
+     n1:
+       function: "src.nodes.a"
+     n2:
+       function: "src.nodes.b"
+
+   # ✓ Clear
+   nodes:
+     extract_customers:
+       function: "src.nodes.extract.get_customers"
+     clean_emails:
+       function: "src.nodes.clean.normalize_emails"
+
+**Organize Pipelines by Layer**
+
+Follow medallion architecture:
+
+.. code-block:: yaml
+
+   pipelines:
+     # Bronze: Raw data ingestion
+     bronze_load_raw_sales:
+       nodes: [ingest_sales]
+
+     # Silver: Clean and validate
+     silver_clean_sales:
+       nodes: [deduplicate, validate]
+
+     # Gold: Business metrics
+     gold_sales_metrics:
+       nodes: [aggregate, calculate_kpis]
+
+Deployment Checklist
+---------------------
+
+Before running in production, verify:
+
+✅ **Configuration**
+
+.. code-block:: bash
+
+   # Validate config before running
+   tauro --env prod --pipeline my_pipeline --validate
+
+✅ **Test the Pipeline Locally First**
+
+.. code-block:: bash
+
+   # Run on dev with small data
+   tauro --env dev --pipeline my_pipeline
+
+✅ **Check for Secrets**
+
+.. code-block:: bash
+
+   # Make sure no passwords in code
+   grep -r "password" config/
+   grep -r "api_key" src/
+
+   # Should return nothing!
+
+✅ **Add Logging**
+
+.. code-block:: bash
+
+   # Run with debug logging
+   tauro --env prod --pipeline my_pipeline --log-level DEBUG
+
+✅ **Set Up Monitoring**
+
+Plan for what to do if something fails:
+
+.. code-block:: bash
+
+   # Save logs for debugging
+   tauro --env prod --pipeline my_pipeline 2>&1 | tee logs/pipeline.log
+
+✅ **Document Your Pipeline**
+
+Add a README explaining:
+   - What the pipeline does
+   - When it runs
+   - What data it needs
+   - What it produces
+
+.. code-block:: markdown
+
+   # Sales ETL Pipeline
+
+   ## Purpose
+   Daily sales data transformation
+
+   ## Schedule
+   Runs at 9 AM every weekday
+
+   ## Inputs
+   - Raw sales database
+   - Customer master data
+
+   ## Outputs
+   - Processed sales data in S3
+
+   ## Troubleshooting
+   If the pipeline fails:
+   1. Check database connection
+   2. Verify S3 permissions
+   3. See logs/ directory
+
+Error Handling Strategy
+-----------------------
+
+**Plan for Failures**
+
+Data pipelines fail. Plan for it:
+
+.. code-block:: yaml
+
+   nodes:
+     critical_transform:
+       function: "src.nodes.transform"
+       timeout: 600
+       retry: 3              # Retry 3 times
+
+     non_critical:
+       function: "src.nodes.aggregate"
+       timeout: 300
+       continue_on_error: true  # Continue if it fails
+
+**Log Everything**
+
+.. code-block:: python
+
+   import logging
+
+   logger = logging.getLogger(__name__)
+
+   def extract_data():
+       """Extract with logging."""
+       logger.info("Starting extraction...")
+
+       df = read_data()
+       logger.info(f"Extracted {len(df)} records")
+
+       return df
+
+**Monitor Results**
+
+Check that output looks right:
+
+.. code-block:: python
+
+   def load_data(df):
+       """Load with validation."""
+       if df.empty:
+           raise ValueError("No data to load")
+
+       # Log some statistics
+       logger.info(f"Saving {len(df)} records")
+       logger.info(f"Columns: {', '.join(df.columns)}")
+
+       df.to_parquet('output.parquet')
+
+Testing Strategy
+-----------------
+
+**Write Unit Tests**
+
+Test each node function:
+
+.. code-block:: python
+
+   # test_extract.py
+   import pandas as pd
+   from src.nodes.extract import extract_data
+
+   def test_extract_data():
+       """Test extraction."""
+       df = extract_data()
+
+       assert not df.empty
+       assert 'id' in df.columns
+       assert len(df) > 0
+
+   def test_handles_missing_file():
+       """Test error handling."""
+       with pytest.raises(FileNotFoundError):
+           extract_data(path="nonexistent.csv")
+
+**Run Tests Before Deploying**
+
+.. code-block:: bash
+
+   # Run all tests
+   pytest tests/
+
+   # Run with coverage
+   pytest --cov=src tests/
+
+**Test with Real Data (Locally)**
+
+.. code-block:: bash
+
+   # Test with actual data structure
+   tauro --env dev --pipeline my_pipeline
+
+Common Mistakes to Avoid
+------------------------
+
+❌ **Mistake: Assuming data is clean**
+
+.. code-block:: python
+
+   # ✗ Don't assume
+   def bad_transform(df):
+       return df['amount'].apply(float)  # Crashes if invalid values
+
+   # ✓ Validate first
+   def good_transform(df):
+       df = df[df['amount'].notna()]
+       return df['amount'].astype(float)
+
+❌ **Mistake: Hardcoding values**
+
+.. code-block:: python
+
+   # ✗ Don't hardcode
+   def bad_extract():
+       return pd.read_csv("/home/john/data.csv")
+
+   # ✓ Use configuration
+   def good_extract(input_data):
+       return pd.read_csv(input_data['path'])
+
+❌ **Mistake: Ignoring errors**
+
+.. code-block:: python
+
+   # ✗ Don't ignore
+   try:
+       process_data()
+   except:
+       pass
+
+   # ✓ Handle properly
+   try:
+       process_data()
+   except ValueError as e:
+       logger.error(f"Processing failed: {e}")
+       raise
+
+❌ **Mistake: Large data in memory**
+
+.. code-block:: python
+
+   # ✗ Don't load everything
+   df = pd.read_csv("huge_file.csv")  # Crashes on large files
+
+   # ✓ Process in chunks
+   for chunk in pd.read_csv("huge_file.csv", chunksize=10000):
+       process_chunk(chunk)
+
+Performance Tips
+-----------------
+
+**Use Parquet for Large Files**
+
+.. code-block:: yaml
+
+   # ✗ CSV is slow
+   format: csv
+
+   # ✓ Parquet is fast
+   format: parquet
+
+**Partition Your Data**
+
+.. code-block:: yaml
+
+   outputs:
+     results:
+       path: data/output/results
+       format: parquet
+       partitioned_by: date  # Stores by date folder
+
+**Run Nodes in Parallel**
+
+.. code-block:: yaml
+
+   # Tauro automatically runs independent nodes in parallel
+   # Configure how many:
+   max_workers: 8  # Up from default 4
+
+**Use Date Ranges Wisely**
+
+.. code-block:: bash
+
+   # Process only what changed
+   tauro --env prod --pipeline daily_etl \
+     --start-date 2024-01-15 \
+     --end-date 2024-01-15
+
+Operationalizing Pipelines
+----------------------------
+
+**Schedule with Cron (Linux/Mac)**
+
+.. code-block:: bash
+
+   # Run at 9 AM every weekday
+   0 9 * * 1-5 cd /home/user/project && tauro --env prod --pipeline daily_etl
+
+**Schedule with Windows Task Scheduler**
+
+Create a batch file:
+
+.. code-block:: batch
+
+   REM run_pipeline.bat
+   cd C:\Users\user\project
+   tauro --env prod --pipeline daily_etl
+
+Then schedule it in Task Scheduler.
+
+**Monitor Execution**
+
+Save logs and monitor them:
+
+.. code-block:: bash
+
+   # Run with logging
+   tauro --env prod --pipeline my_pipeline \
+     >> logs/execution.log 2>&1
+
+   # Check for errors
+   grep ERROR logs/execution.log
+
+**Set Alerts**
+
+Get notified if pipeline fails:
+
+.. code-block:: bash
+
+   # Example with email
+   tauro --env prod --pipeline my_pipeline || \
+     mail -s "Pipeline failed" admin@company.com
+
+Security Best Practices
+------------------------
+
+**Never Commit Secrets**
+
+.. code-block:: bash
+
+   # .gitignore
+   .env
+   logs/
+   data/
+   *.log
+
+**Use Principle of Least Privilege**
+
+Give users/services only the permissions they need:
+
+.. code-block:: bash
+
+   # Don't give admin access
+   # Only give read/write to specific paths and tables
+
+**Validate All Inputs**
+
+.. code-block:: python
+
+   # Validate file paths
+   import os
+   path = user_input
+   if not os.path.exists(path):
+       raise ValueError(f"File not found: {path}")
+
+**Rotate Credentials Regularly**
+
+Change passwords and API keys monthly.
+
+Conclusion
+----------
+
+Remember:
+
+✅ Keep things simple  
+✅ Test everything  
+✅ Handle errors gracefully  
+✅ Never hardcode secrets  
+✅ Document your work  
+✅ Monitor in production  
+✅ Learn from failures  
+
+Next Steps
+----------
+
+- :doc:`guides/batch_etl` - Build a complete example
+- :doc:`guides/troubleshooting` - Solve common problems
+- :doc:`guides/deployment` - Deploy to production
 
    # For small lookup tables
    output:

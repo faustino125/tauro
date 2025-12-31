@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.3-orange.svg)](https://pypi.org/project/tauro/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.4-orange.svg)](https://pypi.org/project/tauro/)
 
 **Tauro** is a framework designed to simplify the development and orchestration of batch, streaming, and hybrid data workflows. Built for data engineers and ML practitioners, Tauro provides enterprise-grade reliability with developer-friendly simplicity.
 
@@ -571,4 +571,4 @@ If you find Tauro useful, please ⭐ star the repository!
 ---
 
 **Built with ❤️ by [Faustino Lopez Ramos](https://github.com/faustino125)**  
-**Version**: 0.1.3 | **License**: MIT
+**Version**: 0.1.4 | **License**: MIT

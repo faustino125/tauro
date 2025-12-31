@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tauro"
-version = "0.1.3"
+version = "0.1.4"
 description = "Tauro - Data pipeline framework for batch, streaming, and hybrid workflows"
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 readme = "src/README.md"

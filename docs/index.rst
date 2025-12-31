@@ -1,11 +1,12 @@
 .. Tauro documentation master file
 
+=============================
 Tauro - Data Pipeline Framework
-============================================
+=============================
 
-**Tauro** is a data pipeline framework designed to simplify the development and orchestration of batch, streaming, and hybrid data workflows. Built for data engineers and ML practitioners, Tauro provides enterprise-grade reliability with developer-friendly simplicity.
+**Tauro** is a Python framework that makes it simple to build, test, and manage data pipelines. Whether you're processing data in batch, handling real-time streams, or training machine learning models, Tauro provides the tools you need with minimal overhead.
 
-.. image:: https://img.shields.io/badge/python-3.9%2B-blue.svg
+.. image:: https://img.shields.io/badge/python-3.10%2B-blue.svg
    :target: https://www.python.org/downloads/
    :alt: Python Version
 
@@ -13,70 +14,131 @@ Tauro - Data Pipeline Framework
    :target: https://github.com/faustino125/tauro/blob/main/LICENSE
    :alt: License
 
-.. image:: https://img.shields.io/badge/pypi-v0.1.3-orange.svg
+.. image:: https://img.shields.io/badge/pypi-v0.1.4-orange.svg
    :target: https://pypi.org/project/tauro/
    :alt: PyPI version
 
-Key Features
-------------
+.. contents:: **Table of Contents**
+   :local:
+   :depth: 2
 
-🔧 **Dual Mode: CLI + Library**
-   Use Tauro as a command-line tool or integrate it programmatically into your Python projects.
+What Can You Do With Tauro?
+============================
 
-📊 **Multi-Pipeline Support**
-   - Batch Processing with date ranges and incremental loads
-   - Real-time Streaming (Kafka, Kinesis, file-based)
-   - Hybrid Workflows combining batch and streaming
-   - ML/MLOps with experiment tracking and model registry
+✅ **Process Data in Batches**
+   - Daily or periodic ETL jobs that transform data from one format to another
+   - Incremental loading with date ranges
+   - Scheduled workflows
 
-🏗️ **Enterprise-Ready**
-   - Security: Path validation, input sanitization, secure module loading
-   - Resilience: Automatic retries, circuit breakers, graceful degradation
-   - Observability: Structured logging, metrics, and health checks
-   - Multi-Environment: Configuration per environment (dev, staging, prod)
+✅ **Handle Real-Time Data**
+   - Stream data from Kafka, files, or other sources
+   - Process events as they arrive
+   - Write results to data lakes or warehouses
 
-Quick Start
------------
+✅ **Build ML Pipelines**
+   - Prepare data for training
+   - Automatically track experiments and models
+   - Reproduce results consistently
 
-Installation
-~~~~~~~~~~~~
+✅ **Use Flexible Deployment**
+   - Run locally during development
+   - Deploy to Databricks or Spark clusters for scale
+   - Same code works everywhere
+
+Why Choose Tauro?
+==================
+
+**Simple Configuration**
+   Define your pipelines using clear YAML files—no complex code needed
+
+**Works Locally & At Scale**
+   Develop on your laptop, deploy to production without changes
+
+**Safe by Default**
+   Input validation, error handling, and automatic retries built-in
+
+**Production Ready**
+   Designed for real-world data engineering with monitoring and logging
+
+**Multi-Cloud**
+   Works with AWS, Azure, GCP, and Databricks
+
+**Batteries Included**
+   Handles batch processing, streaming, ML tracking, and feature management
+
+Getting Started in 5 Minutes
+=============================
+
+**Installation**
 
 .. code-block:: bash
 
-   # Basic installation
    pip install tauro
 
-   # With Spark support
-   pip install tauro[spark]
-
-   # Complete installation
-   pip install tauro[all]
-
-CLI Mode
-~~~~~~~~
+**Create Your First Project**
 
 .. code-block:: bash
 
-   # Create a project
    tauro --template medallion_basic --project-name my_project
    cd my_project
 
-   # Run a pipeline
+**Run a Pipeline**
+
+.. code-block:: bash
+
    tauro --env dev --pipeline sales_etl
 
-Library Mode
-~~~~~~~~~~~~
+**That's it!** Your pipeline is running.
 
-.. code-block:: python
+Next Steps
+==========
 
-   from tauro import PipelineExecutor, ContextLoader
+.. toctree::
+   :maxdepth: 2
+   :caption: Getting Started
 
-   # Load context
-   context = ContextLoader().load_from_env("dev")
+   installation
+   getting_started
+   how_tauro_works
 
-   # Execute pipeline
-   executor = PipelineExecutor(context)
-   result = executor.execute("sales_etl")
+.. toctree::
+   :maxdepth: 2
+   :caption: Using Tauro
+
+   cli_usage
+   configuration
+   best_practices
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Learning by Example
+
+   tutorials/batch_etl
+   tutorials/streaming
+   tutorials/mlops
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Troubleshooting
+
+   guides/troubleshooting
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference
+
+   api/reference
+   changelog
+   license
+
+Need Help?
+==========
+
+- 📖 **First time?** Start with :doc:`getting_started`
+- 🔧 **Building pipelines?** Check out :doc:`guides/batch_etl`
+- 📊 **Real-time data?** See :doc:`guides/streaming_pipelines`
+- ❓ **Something not working?** Visit :doc:`guides/troubleshooting`
+- 💬 **Have questions?** Open an issue on `GitHub <https://github.com/faustino125/tauro>`_
 
    print(f"✅ Success: {result.nodes_executed} nodes")
 

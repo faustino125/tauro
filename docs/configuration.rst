@@ -1,203 +1,463 @@
-Configuration
-=============
+Configuration Guide
+====================
 
-This guide covers Tauro's configuration system in detail.
+This guide explains how to configure your Tauro pipelines. Don't worry—it's just YAML, which is much simpler than it looks!
 
-Overview
---------
+The Big Picture
+---------------
 
-Tauro uses a flexible, environment-based configuration system that supports:
+A Tauro project has 5 key configuration files:
 
-- Multiple file formats (YAML, JSON, DSL)
-- Environment-specific overrides
-- Configuration inheritance
-- Dynamic interpolation
-- Validation and type checking
+1. **global.yaml** - General settings (paths, Spark config)
+2. **pipelines.yaml** - What pipelines you have
+3. **nodes.yaml** - What each step does
+4. **inputs.yaml** - Where data comes from
+5. **outputs.yaml** - Where results go
 
-Configuration Structure
------------------------
+Each file has a simple purpose. Let's look at each one.
 
-Standard Layout
-~~~~~~~~~~~~~~~
+Getting Started: The Basics
+----------------------------
+
+Here's the simplest possible configuration:
+
+**config/global.yaml** - Paths and Settings
+
+.. code-block:: yaml
+
+   input_path: /data/input           # Where to read data from
+   output_path: /data/output         # Where to save results
+   log_level: INFO                   # How verbose (DEBUG, INFO, WARNING, ERROR)
+
+**config/pipelines.yaml** - List Your Pipelines
+
+.. code-block:: yaml
+
+   pipelines:
+     my_pipeline:
+       nodes: [extract, transform, load]
+       description: "My first pipeline"
+
+**config/nodes.yaml** - Define Steps
+
+.. code-block:: yaml
+
+   nodes:
+     extract:
+       function: "src.nodes.extract"
+       description: "Read data from file"
+
+     transform:
+       function: "src.nodes.transform"
+       description: "Clean the data"
+
+     load:
+       function: "src.nodes.load"
+       description: "Save results"
+
+**config/inputs.yaml** - Data Sources
+
+.. code-block:: yaml
+
+   inputs:
+     raw_data:
+       path: data/input/sample.csv
+       format: csv
+
+**config/outputs.yaml** - Save Results
+
+.. code-block:: yaml
+
+   outputs:
+     results:
+       path: data/output/results.parquet
+       format: parquet
+
+That's a complete working pipeline! Now let's dive deeper.
+
+Detailed Configuration
+----------------------
+
+Global Settings (global.yaml)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This file controls overall behavior:
+
+.. code-block:: yaml
+
+   # Required
+   input_path: /data/input
+   output_path: /data/output
+
+   # Optional but useful
+   log_level: INFO
+   max_workers: 4              # Parallel execution (default: 4)
+   timeout_seconds: 3600       # Max time (1 hour)
+
+   # For Spark (if using large data)
+   mode: local                 # or "databricks", "distributed"
+   spark:
+     shuffle_partitions: 200
+     memory: "4g"
+
+Pipelines (pipelines.yaml)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Define what pipelines you have. A pipeline is a sequence of steps:
+
+.. code-block:: yaml
+
+   pipelines:
+     # Simple pipeline
+     basic_etl:
+       nodes: [extract, transform, load]
+
+     # More complex pipeline
+     advanced_pipeline:
+       nodes: [validate, transform, aggregate, load]
+       description: "Process sales data"
+       schedule: "0 9 * * *"           # Run at 9 AM daily (cron format)
+
+Nodes (nodes.yaml)
+~~~~~~~~~~~~~~~~~~~
+
+Each node is a step that does work. Point it to Python code:
+
+.. code-block:: yaml
+
+   nodes:
+     extract:
+       function: "src.nodes.extract"           # Path to Python function
+       description: "Read from source"
+       timeout: 300                             # Max 5 minutes
+       retry: 3                                 # Retry 3 times if it fails
+
+     transform:
+       function: "src.nodes.transform"
+       input: raw_data                          # Use "raw_data" from inputs.yaml
+       output: processed_data                   # Save result as "processed_data"
+
+     load:
+       function: "src.nodes.load"
+
+The ``function`` field points to your Python code. For example, ``src.nodes.extract`` means there's a file ``src/nodes/extract.py`` with a function inside.
+
+Inputs (inputs.yaml)
+~~~~~~~~~~~~~~~~~~~~~
+
+Define where data comes from:
+
+.. code-block:: yaml
+
+   inputs:
+     # File on local computer
+     local_file:
+       path: /data/input/sales.csv
+       format: csv
+
+     # Multiple files
+     all_parquets:
+       path: /data/input/*.parquet
+       format: parquet
+
+     # Cloud storage (AWS S3)
+     s3_data:
+       path: s3://my-bucket/data/
+       format: parquet
+       aws_profile: default              # AWS credentials
+
+     # Databricks table
+     databricks_table:
+       path: catalog.schema.table_name
+       format: delta
+
+Outputs (outputs.yaml)
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Define where to save results:
+
+.. code-block:: yaml
+
+   outputs:
+     # Save to local file
+     local_output:
+       path: /data/output/results.parquet
+       format: parquet
+       mode: overwrite                   # or "append"
+
+     # Save to cloud
+     s3_output:
+       path: s3://my-bucket/results/
+       format: parquet
+
+     # Save to Databricks
+     databricks_output:
+       path: catalog.schema.output_table
+       format: delta
+
+Real-World Example: Sales ETL
+------------------------------
+
+Let's build a realistic sales pipeline:
+
+**pipelines.yaml**
+
+.. code-block:: yaml
+
+   pipelines:
+     daily_sales_etl:
+       nodes: [extract_sales, clean_data, load_results]
+       description: "Daily sales data pipeline"
+
+**nodes.yaml**
+
+.. code-block:: yaml
+
+   nodes:
+     extract_sales:
+       function: "src.nodes.extract.get_daily_sales"
+       description: "Fetch sales from database"
+       timeout: 600
+
+     clean_data:
+       function: "src.nodes.transform.clean_sales"
+       description: "Remove bad records, normalize"
+       timeout: 900
+
+     load_results:
+       function: "src.nodes.load.save_to_warehouse"
+       description: "Save to data warehouse"
+       timeout: 600
+
+**inputs.yaml**
+
+.. code-block:: yaml
+
+   inputs:
+     sales_database:
+       path: "postgresql://localhost/sales"
+       table: "transactions"
+       query: "SELECT * FROM transactions WHERE date >= {{START_DATE}}"
+
+**outputs.yaml**
+
+.. code-block:: yaml
+
+   outputs:
+     warehouse:
+       path: s3://my-company/data/sales/
+       format: parquet
+       partitioned_by: date
+
+**src/nodes/extract.py**
+
+.. code-block:: python
+
+   import pandas as pd
+
+   def get_daily_sales(sales_database):
+       """Fetch today's sales."""
+       df = pd.read_sql(
+           "SELECT * FROM transactions WHERE date = TODAY()",
+           sales_database
+       )
+       return df
+
+**src/nodes/transform.py**
+
+.. code-block:: python
+
+   import pandas as pd
+
+   def clean_sales(df):
+       """Clean the sales data."""
+       # Remove nulls
+       df = df.dropna()
+       # Remove negative amounts
+       df = df[df['amount'] > 0]
+       return df
+
+**src/nodes/load.py**
+
+.. code-block:: python
+
+   import pandas as pd
+
+   def save_to_warehouse(df):
+       """Save results."""
+       df.to_parquet('data/output/sales.parquet')
+       print(f"Saved {len(df)} records")
+
+Using Environment Variables
+----------------------------
+
+Never hardcode secrets or paths. Use environment variables:
+
+**config/global.yaml**
+
+.. code-block:: yaml
+
+   input_path: ${INPUT_PATH}          # Read from environment
+   output_path: ${OUTPUT_PATH}
+
+**.env file (never commit this!)**
+
+.. code-block:: bash
+
+   INPUT_PATH=/data/input
+   OUTPUT_PATH=/data/output
+   DB_PASSWORD=secret123
+
+Tauro automatically loads ``.env`` before running.
+
+**Run it:**
+
+.. code-block:: bash
+
+   # .env is loaded automatically
+   tauro --env dev --pipeline my_pipeline
+
+Different Configurations per Environment
+-----------------------------------------
+
+It's common to have dev, staging, and production environments with different settings.
+
+**Directory structure:**
 
 .. code-block:: text
 
-   project/
-   ├── config/
-   │   ├── base/                    # Base configuration
-   │   │   ├── global_settings.yaml # Global settings
-   │   │   ├── pipelines.yaml       # Pipeline definitions
-   │   │   ├── nodes.yaml           # Node definitions
-   │   │   ├── input.yaml           # Input sources
-   │   │   └── output.yaml          # Output destinations
-   │   ├── dev/                     # Development overrides
-   │   │   ├── global_settings.yaml
-   │   │   └── ...
-   │   ├── staging/                 # Staging overrides
-   │   └── prod/                    # Production overrides
-   └── settings.json                # Environment mapping
+   config/
+   ├── global.yaml              # Base (used by all)
+   ├── inputs.yaml
+   ├── outputs.yaml
+   ├── pipelines.yaml
+   ├── nodes.yaml
+   ├── dev/
+   │   └── global.yaml          # Override for dev
+   ├── staging/
+   │   └── global.yaml          # Override for staging
+   └── prod/
+       └── global.yaml          # Override for production
 
-Environment Mapping
-~~~~~~~~~~~~~~~~~~~
+When you run ``tauro --env prod``, Tauro loads:
+   1. Base config files (config/global.yaml)
+   2. Environment overrides (config/prod/global.yaml)
 
-``settings.json``:
+**Example:**
 
-.. code-block:: json
-
-   {
-     "environments": {
-       "dev": {
-         "config_dir": "config/dev",
-         "fallback": "base"
-       },
-       "staging": {
-         "config_dir": "config/staging",
-         "fallback": "prod"
-       },
-       "prod": {
-         "config_dir": "config/prod",
-         "fallback": "base"
-       }
-     },
-     "default_environment": "dev"
-   }
-
-Global Settings
----------------
-
-``config/base/global_settings.yaml``:
-
+Base config/global.yaml:
 .. code-block:: yaml
 
-   # Spark Configuration
-   spark:
-     app_name: "Tauro Pipeline"
-     master: "local[*]"
-     config:
-       spark.sql.shuffle.partitions: 200
-       spark.sql.adaptive.enabled: true
-       spark.sql.adaptive.coalescePartitions.enabled: true
-       spark.driver.memory: "4g"
-       spark.executor.memory: "4g"
+   log_level: INFO
+   max_workers: 4
 
-   # Logging Configuration
-   logging:
-     level: "INFO"
-     format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-     handlers:
-       - type: "console"
-       - type: "file"
-         filename: "logs/tauro.log"
-         max_bytes: 10485760  # 10MB
-         backup_count: 5
-
-   # Resource Management
-   resources:
-     max_workers: 4
-     timeout_seconds: 3600
-     memory_limit: "8G"
-     enable_cache: true
-     cache_ttl_seconds: 300
-
-   # Security
-   security:
-     validate_paths: true
-     allowed_paths:
-       - "/data"
-       - "/tmp"
-     sanitize_inputs: true
-
-Pipeline Configuration
-----------------------
-
-``config/base/pipelines.yaml``:
-
+Override config/prod/global.yaml:
 .. code-block:: yaml
 
-   # Bronze Layer Pipeline
-   bronze_ingestion:
-     description: "Ingest raw data into Bronze layer"
-     nodes:
-       - load_raw_sales
-       - load_raw_customers
-       - load_raw_products
-     dependencies: []
-     schedule: "0 2 * * *"  # Daily at 2 AM
-     tags:
-       - bronze
-       - ingestion
-     retry:
-       enabled: true
-       max_attempts: 3
-       backoff_seconds: 60
+   log_level: WARNING        # Less logging in prod
+   max_workers: 8            # More workers in prod
 
-   # Silver Layer Pipeline
-   silver_cleansing:
-     description: "Clean and validate data in Silver layer"
-     nodes:
-       - validate_sales
-       - deduplicate_customers
-       - enrich_products
-     dependencies:
-       - bronze_ingestion
-     schedule: "0 3 * * *"  # Daily at 3 AM
-     tags:
-       - silver
-       - cleansing
-
-   # Gold Layer Pipeline
-   gold_aggregation:
-     description: "Aggregate metrics in Gold layer"
-     nodes:
-       - calculate_daily_sales
-       - customer_360_view
-       - product_performance
-     dependencies:
-       - silver_cleansing
-     schedule: "0 4 * * *"  # Daily at 4 AM
-     tags:
-       - gold
-       - metrics
-
-Node Configuration
+Performance Tuning
 ------------------
 
-``config/base/nodes.yaml``:
+Running slow? Try these:
 
 .. code-block:: yaml
 
-   # Bronze Nodes
-   load_raw_sales:
-     type: "input"
-     module: "core.io.readers"
-     class: "CSVReader"
-     params:
-       input_key: "raw_sales"
-       schema_validation: true
-       error_handling: "skip"
-     outputs:
-       - "bronze_sales"
+   # Use more workers for parallelism
+   max_workers: 8
 
-   load_raw_customers:
-     type: "input"
-     module: "core.io.readers"
-     class: "ParquetReader"
-     params:
-       input_key: "raw_customers"
-     outputs:
-       - "bronze_customers"
+   # Increase Spark memory for large datasets
+   spark:
+     driver_memory: "8g"
+     executor_memory: "8g"
+     shuffle_partitions: 500
 
-   # Silver Nodes
-   validate_sales:
-     type: "transform"
-     module: "core.exec.node_executor"
-     class: "PythonNode"
-     params:
-       function: "validators.validate_sales_data"
-       inputs:
-         - "bronze_sales"
-       validation_rules:
-         - column: "amount"
+   # Cache results between runs
+   enable_caching: true
+
+Common Mistakes
+---------------
+
+❌ **Don't:**
+
+.. code-block:: yaml
+
+   # Hardcoding passwords
+   database:
+     password: "my_secret"
+
+   # Using absolute Windows paths
+   path: "C:\\Users\\John\\data.csv"
+
+   # Forgetting to define nodes
+   pipelines:
+     my_pipeline:
+       nodes: [missing_node]   # This node not defined!
+
+✅ **Do:**
+
+.. code-block:: yaml
+
+   # Use environment variables
+   database:
+     password: ${DB_PASSWORD}
+
+   # Use relative or cloud paths
+   path: /data/input/data.csv
+   path: s3://bucket/data/
+
+   # Define every node
+   nodes:
+     extract:
+       function: "src.nodes.extract"
+
+Troubleshooting
+---------------
+
+**"Config file not found"**
+
+Make sure files are in the right place:
+
+.. code-block:: bash
+
+   ls -la config/
+   # Should show: global.yaml, pipelines.yaml, nodes.yaml, etc.
+
+**"Invalid YAML"**
+
+YAML is sensitive to spaces. Use 2 spaces for indentation:
+
+.. code-block:: yaml
+
+   # ✓ Correct (2 spaces)
+   pipelines:
+     my_pipeline:
+       nodes: [a, b, c]
+
+   # ✗ Wrong (1 space)
+   pipelines:
+    my_pipeline:
+      nodes: [a, b, c]
+
+**"Pipeline not found"**
+
+The pipeline name in your command must exactly match pipelines.yaml:
+
+.. code-block:: bash
+
+   tauro --env dev --pipeline my_pipeline
+
+   # The pipeline in pipelines.yaml must be exactly:
+   # pipelines:
+   #   my_pipeline:
+
+Next Steps
+----------
+
+- :doc:`guides/batch_etl` - Build a complete ETL example
+- :doc:`cli_usage` - Learn CLI commands
+- :doc:`best_practices` - Learn patterns for success
            rule: "not_null"
          - column: "amount"
            rule: "positive"

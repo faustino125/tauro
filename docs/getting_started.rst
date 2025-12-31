@@ -1,82 +1,233 @@
 Getting Started
 ===============
 
-This guide provides a hands-on introduction to Tauro, helping you install it and run your first data pipeline in minutes.
+Let's get you up and running with Tauro in 10 minutes. This guide takes you from zero to running your first data pipeline.
 
 What is Tauro?
 --------------
 
-Tauro is a Python framework for building and orchestrating data pipelines. It's designed to help you reliably process data for analytics, machine learning, and business intelligence, whether you're working with batch files, real-time streams, or both.
+Tauro is a Python framework that helps you:
 
-Tauro's core philosophy is to provide a unified, enterprise-grade foundation for your data workflows, while maintaining developer-friendly simplicity. It helps you focus on your business logic, not on boilerplate code.
+- **Define data workflows** using simple YAML configuration files
+- **Execute pipelines** on your laptop or on cloud infrastructure
+- **Handle errors gracefully** with automatic retries and health checks
+- **Track results** with built-in logging and metrics
+- **Deploy with confidence** knowing your data is validated at every step
 
-Key use cases include:
-
-- **Declarative ETL/ELT**: Define batch pipelines in simple YAML files.
-- **Streaming Workflows**: Process real-time data from sources like Kafka.
-- **MLOps Pipelines**: Build reproducible data workflows for training and inference.
-- **Hybrid Processing**: Combine batch and streaming logic in a single framework.
+You don't need to be a software engineer to use Tauro—just a data professional who wants reliable, repeatable pipelines.
 
 Prerequisites
--------------
+~~~~~~~~~~~~~
 
-- Python 3.9+
-- `pip` for package installation
-
-**(Optional) For specific features:**
-
-- Apache Spark 3.4+ (for Spark-based pipelines)
-- An account with a supported provider (e.g., Databricks, MLflow) for MLOps integrations.
+- **Python 3.10 or higher** (check with ``python --version``)
+- **pip** (usually comes with Python)
+- **5 minutes** of your time
 
 Installation
-------------
+~~~~~~~~~~~~
 
-We strongly recommend installing Tauro in a virtual environment to avoid conflicts with system-wide packages.
+**Step 1: Create a Virtual Environment** (recommended)
 
 .. code-block:: bash
 
-   # Create and activate a virtual environment (macOS/Linux)
-   python3 -m venv venv
-   source venv/bin/activate
+   # On Mac/Linux
+   python3 -m venv tauro-env
+   source tauro-env/bin/activate
 
-   # Create and activate a virtual environment (Windows)
-   python -m venv venv
-   venv\Scripts\activate
+   # On Windows
+   python -m venv tauro-env
+   tauro-env\Scripts\activate
 
-Once your environment is active, you can install Tauro.
-
-**1. Standard Installation**
-
-This installs the core framework, which is sufficient for many use cases.
+**Step 2: Install Tauro**
 
 .. code-block:: bash
 
    pip install tauro
 
-**2. Installation with Extras**
-
-Tauro uses "extras" to install dependencies for specific features. This keeps the core installation lightweight.
-
-.. code-block:: bash
-
-   # To process data with Apache Spark
+   # Or if you want to process large datasets:
    pip install tauro[spark]
 
-   # For MLOps integrations (like MLflow)
-   pip install tauro[mlops]
+**That's it!** You're ready to go.
 
-   # To install all optional dependencies at once
-   pip install tauro[all]
+Create Your First Project
+--------------------------
 
-**3. Installing from Source**
-
-If you want the latest development version, you can install from source.
+Tauro comes with project templates that set up everything you need. Let's create one:
 
 .. code-block:: bash
 
-   git clone https://github.com/faustino125/tauro.git
-   cd tauro
-   pip install -e .
+   tauro --template medallion_basic --project-name my_first_project
+   cd my_first_project
+   ls
+
+You'll see a structure like this:
+
+.. code-block:: text
+
+   my_first_project/
+   ├── config/
+   │   ├── pipelines.yaml      # What pipelines you have
+   │   ├── nodes.yaml          # What each node does
+   │   ├── inputs.yaml         # Where data comes from
+   │   ├── outputs.yaml        # Where results go
+   │   └── global.yaml         # General settings
+   ├── src/
+   │   └── nodes/              # Your custom code
+   │       ├── extract.py
+   │       ├── transform.py
+   │       └── load.py
+   ├── data/
+   │   ├── input/              # Test data
+   │   └── output/             # Results
+   └── .env                    # Environment variables
+
+This is the recommended project structure. It keeps configuration, code, and data separate and organized.
+
+Run Your First Pipeline
+------------------------
+
+Now let's run the included pipeline:
+
+.. code-block:: bash
+
+   tauro --env dev --pipeline sample_pipeline
+
+You should see:
+
+.. code-block:: text
+
+   ✓ Loading configuration...
+   ✓ Validating pipeline...
+   ✓ Starting execution...
+   ✓ extract ..................... [1/3]
+   ✓ transform ................... [2/3]
+   ✓ load ....................... [3/3]
+   ✓ Pipeline completed in 2.3 seconds
+
+Congratulations! Your first pipeline ran successfully.
+
+What Just Happened?
+~~~~~~~~~~~~~~~~~~~
+
+Tauro executed three steps:
+
+1. **extract** - Read data from ``data/input/sample.csv``
+2. **transform** - Cleaned and processed the data
+3. **load** - Saved results to ``data/output/results.parquet``
+
+Each step is defined in ``config/nodes.yaml`` and the logic is in ``src/nodes/``.
+
+Understand the Configuration
+-----------------------------
+
+Let's look at what makes up a Tauro pipeline. Open ``config/pipelines.yaml``:
+
+.. code-block:: yaml
+
+   pipelines:
+     sample_pipeline:
+       nodes: [extract, transform, load]
+       description: "A simple ETL pipeline"
+
+This says: "The pipeline called 'sample_pipeline' runs three steps in order: extract, transform, then load."
+
+Now look at ``config/nodes.yaml``:
+
+.. code-block:: yaml
+
+   nodes:
+     extract:
+       function: "src.nodes.extract.extract_data"
+       description: "Read data from CSV"
+       timeout: 300
+
+     transform:
+       function: "src.nodes.transform.clean_data"
+       description: "Clean and process data"
+       timeout: 600
+
+     load:
+       function: "src.nodes.load.save_results"
+       description: "Save processed data"
+       timeout: 300
+
+Each node points to a Python function that does the actual work. Let's look at one:
+
+Open ``src/nodes/extract.py``:
+
+.. code-block:: python
+
+   import pandas as pd
+
+   def extract_data():
+       """Read data from CSV file."""
+       df = pd.read_csv("data/input/sample.csv")
+       return df
+
+That's it! The function reads data and returns it. Tauro handles the plumbing—passing the result to the next step.
+
+Customize Your Pipeline
+-----------------------
+
+Let's modify the pipeline to make it your own.
+
+**Edit your data source:**
+
+Replace ``data/input/sample.csv`` with your own data file, or create a simple test file:
+
+.. code-block:: bash
+
+   echo "id,name,amount
+   1,Alice,100
+   2,Bob,200
+   3,Charlie,150" > data/input/sample.csv
+
+**Update the transform logic:**
+
+Edit ``src/nodes/transform.py``:
+
+.. code-block:: python
+
+   import pandas as pd
+
+   def clean_data(df):
+       """Add a total column and filter."""
+       df['amount_double'] = df['amount'] * 2
+       df = df[df['amount'] > 100]  # Only rows with amount > 100
+       return df
+
+**Run the modified pipeline:**
+
+.. code-block:: bash
+
+   tauro --env dev --pipeline sample_pipeline
+
+You'll see your custom logic executed!
+
+Next: What's Next?
+------------------
+
+✅ You've learned:
+   - How to install Tauro
+   - How to create a project
+   - How to run a pipeline
+   - How configuration works
+   - How to customize the code
+
+📖 **Continue learning:**
+
+- :doc:`cli_usage` - Learn all the CLI commands
+- :doc:`guides/batch_etl` - Build a realistic ETL pipeline
+- :doc:`guides/configuration` - Master configuration options
+- :doc:`best_practices` - Learn how to do things right
+
+💡 **Pro Tips:**
+
+- Use ``tauro --list-pipelines`` to see all available pipelines
+- Add ``--log-level DEBUG`` to see detailed execution logs
+- Use ``--validate`` to check your configuration without running it
+
+Got stuck? Check :doc:`guides/troubleshooting` for solutions to common problems.
 
 Verify Installation
 -------------------

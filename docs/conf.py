@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.abspath("../src"))
 project = "Tauro"
 copyright = "2024-2025, Faustino Lopez Ramos"
 author = "Faustino Lopez Ramos"
-release = "0.1.3"
-version = "0.1.3"
+release = "0.1.4"
+version = "0.1.4"
 
 # -- General configuration ---------------------------------------------------
 

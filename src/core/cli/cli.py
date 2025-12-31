@@ -970,7 +970,7 @@ def main() -> int:
 
 def _get_version() -> str:
     """Return the Tauro version string."""
-    return "0.1.3"
+    return "0.1.4"
 
 
 def _now_iso() -> str:

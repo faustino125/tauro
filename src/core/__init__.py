@@ -9,7 +9,7 @@ import sys as _sys
 try:  # pragma: no cover - metadata not available in editable installs
     __version__ = metadata.version("tauro")
 except PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.1.3"
+    __version__ = "0.1.4"
 
 __description__ = "Tauro - Data pipeline framework for batch, streaming, hybrid and ML workflows"
 
