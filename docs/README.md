@@ -1,17 +1,27 @@
 # Tauro Documentation
 
-This directory contains the documentation for Tauro, built with Sphinx and hosted on Read the Docs.
+Welcome to the Tauro documentation. This directory contains all documentation built with Sphinx and hosted on Read the Docs.
 
-## Building Documentation Locally
+## Getting Started
 
-### Prerequisites
+For users, documentation is available at:
+- **Online**: https://tauro.readthedocs.io
+- **Offline**: Build locally (see below)
+
+**First time with Tauro?** Start with [Getting Started](getting_started.rst)
+
+## For Documentation Developers
+
+### Building Locally
+
+**Prerequisites**
 
 ```bash
-# Install documentation dependencies
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Build HTML Documentation
+**Build HTML**
 
 ```bash
 # On Linux/Mac
@@ -20,84 +30,132 @@ make html
 # On Windows
 make.bat html
 
-# View documentation
-# Open _build/html/index.html in your browser
+# View output
+open _build/html/index.html  # Mac
+xdg-open _build/html/index.html  # Linux
+start _build/html/index.html  # Windows
 ```
 
-### Build Other Formats
+**Build Other Formats**
 
 ```bash
-# PDF (requires LaTeX)
-make latexpdf
-
-# EPUB
-make epub
-
-# Plain text
-make text
+make latexpdf  # PDF (requires LaTeX)
+make epub      # EPUB ebook
+make text      # Plain text
+make clean     # Clean build files
 ```
 
-### Clean Build Files
-
-```bash
-make clean
-```
-
-## Documentation Structure
+### Documentation Structure
 
 ```
 docs/
-├── conf.py                 # Sphinx configuration
-├── index.rst              # Documentation home page
-├── getting_started.rst    # Getting started guide
-├── installation.rst       # Installation instructions
-├── cli_usage.rst          # CLI usage guide
-├── library_usage.rst      # Library usage guide
-├── configuration.rst      # Configuration guide
-├── best_practices.rst     # Best practices
-├── changelog.rst          # Version history
-├── contributing.rst       # Contribution guidelines
-├── license.rst            # License information
-├── migration_guide.md     # CLI to Library migration
-├── api/                   # API reference
-│   ├── index.rst
-│   ├── core.rst
-│   ├── cli.rst
-│   ├── config.rst
-│   ├── exec.rst
-│   ├── io.rst
-│   ├── streaming.rst
-│   └── mlops.rst
-├── tutorials/             # Tutorials
-│   ├── index.rst
+├── index.rst                  # Main documentation home
+├── getting_started.rst        # Quick start guide
+├── quick_reference.rst        # Command cheat sheet
+├── installation.rst           # Installation instructions
+├── cli_usage.rst             # Command-line interface
+├── library_usage.rst         # Python library usage
+├── configuration.rst         # Configuration guide
+├── best_practices.rst        # Best practices
+├── migration_guide.rst       # CLI to library migration
+├── glossary.rst              # Terminology
+├── databricks_setup.rst      # Databricks integration
+├── feature_store.rst         # Feature store guide
+│
+├── tutorials/                 # Step-by-step examples
 │   ├── batch_etl.rst
 │   ├── streaming.rst
 │   ├── mlops.rst
 │   ├── airflow_integration.rst
 │   └── fastapi_integration.rst
-├── advanced/              # Advanced topics
+│
+├── advanced/                  # Advanced topics
 │   ├── architecture.rst
 │   ├── security.rst
 │   ├── performance.rst
 │   ├── testing.rst
 │   └── troubleshooting.rst
-├── _static/               # Static files (CSS, images)
-│   └── custom.css
-├── _templates/            # Custom templates
-├── requirements.txt       # Documentation dependencies
-├── Makefile              # Build automation (Linux/Mac)
-└── make.bat              # Build automation (Windows)
+│
+├── api/                       # API reference
+│   ├── index.rst
+│   └── reference.rst
+│
+├── changelog.rst              # Version history
+├── contributing.rst           # How to contribute
+├── license.rst                # MIT license
+│
+├── conf.py                    # Sphinx configuration
+├── Makefile                   # Build automation (Mac/Linux)
+├── make.bat                   # Build automation (Windows)
+└── requirements.txt           # Dependencies
 ```
 
-## Read the Docs Configuration
+### Documentation Standards
 
-The documentation is automatically built and published on Read the Docs when changes are pushed to the main branch.
+**Format**: All documentation uses reStructuredText (.rst)
 
-Configuration file: `.readthedocs.yaml` (in project root)
+**Style Guide**:
+- Use clear, professional English
+- Write for end users, not implementation details
+- Include practical examples
+- Use relative paths for links: `:doc:\`getting_started\``
+- Add table of contents to long documents
 
-## Writing Documentation
+**Testing**:
+- Run `make html` before committing
+- Check for broken links in Sphinx output
+- Test code examples work
 
-### Style Guide
+### Adding New Documentation
+
+1. Create `.rst` file in appropriate directory
+2. Add entry to `index.rst` toctree
+3. Follow style guide above
+4. Test with `make html`
+5. Commit and push
+
+### Common Tasks
+
+**Add new tutorial**
+```bash
+# Create file
+touch tutorials/my_tutorial.rst
+
+# Add to index.rst tutorials section
+# Edit index.rst and add line to tutorials toctree
+```
+
+**Fix typos or improve existing docs**
+```bash
+# Edit the .rst file directly
+# Test with make html
+# Commit changes
+```
+
+**Add API documentation**
+```bash
+# Add content to api/reference.rst
+# Update api/index.rst if needed
+# Test with make html
+```
+
+## Sphinx Configuration
+
+Configuration is in `conf.py`. Key settings:
+- **Theme**: Read the Docs theme
+- **Extensions**: sphinx.ext.autodoc, sphinx.ext.viewcode, etc.
+- **HTML output**: `_build/html/`
+
+## Read the Docs Integration
+
+Documentation is automatically built and published when changes are pushed to main branch.
+
+Configuration: `.readthedocs.yaml` (in project root)
+
+## Questions?
+
+For documentation improvements or issues, see [CONTRIBUTING.md](../CONTRIBUTING.md)
+
 
 - Use reStructuredText (.rst) for documentation files
 - Markdown (.md) is supported via MyST parser

@@ -40,7 +40,7 @@ What Can You Do With Tauro?
    - Automatically track experiments and models
    - Reproduce results consistently
 
-✅ **Use Flexible Deployment**
+✅ **Flexible Deployment Options**
    - Run locally during development
    - Deploy to Databricks or Spark clusters for scale
    - Same code works everywhere
@@ -48,50 +48,50 @@ What Can You Do With Tauro?
 Why Choose Tauro?
 ==================
 
-**Simple Configuration**
+**Simple Configuration** 
    Define your pipelines using clear YAML files—no complex code needed
 
-**Works Locally & At Scale**
+**Local & Production Ready**
    Develop on your laptop, deploy to production without changes
 
-**Safe by Default**
+**Production Safe**
    Input validation, error handling, and automatic retries built-in
 
-**Production Ready**
+**Enterprise Grade**
    Designed for real-world data engineering with monitoring and logging
 
-**Multi-Cloud**
+**Multi-Cloud Support**
    Works with AWS, Azure, GCP, and Databricks
 
-**Batteries Included**
+**Complete Solution**
    Handles batch processing, streaming, ML tracking, and feature management
 
-Getting Started in 5 Minutes
-=============================
+Quick Start
+===========
 
-**Installation**
+**1. Install**
 
 .. code-block:: bash
 
    pip install tauro
 
-**Create Your First Project**
+**2. Create a Project**
 
 .. code-block:: bash
 
    tauro --template medallion_basic --project-name my_project
    cd my_project
 
-**Run a Pipeline**
+**3. Run Your First Pipeline**
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline sales_etl
+   tauro --env dev --pipeline sample_pipeline
 
-**That's it!** Your pipeline is running.
+Done! Your pipeline is running.
 
-Next Steps
-==========
+Documentation Structure
+=======================
 
 .. toctree::
    :maxdepth: 2
@@ -105,60 +105,28 @@ Next Steps
    :maxdepth: 2
    :caption: Using Tauro
 
+   quick_reference
    cli_usage
+   library_usage
+   migration_guide
    configuration
    best_practices
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Integration & Advanced
+
+   databricks_setup
+   feature_store
+   advanced/architecture
+   advanced/security
+   advanced/performance
+   advanced/testing
+   advanced/troubleshooting
 
 .. toctree::
    :maxdepth: 2
    :caption: Learning by Example
-
-   tutorials/batch_etl
-   tutorials/streaming
-   tutorials/mlops
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Troubleshooting
-
-   guides/troubleshooting
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Reference
-
-   api/reference
-   changelog
-   license
-
-Need Help?
-==========
-
-- 📖 **First time?** Start with :doc:`getting_started`
-- 🔧 **Building pipelines?** Check out :doc:`guides/batch_etl`
-- 📊 **Real-time data?** See :doc:`guides/streaming_pipelines`
-- ❓ **Something not working?** Visit :doc:`guides/troubleshooting`
-- 💬 **Have questions?** Open an issue on `GitHub <https://github.com/faustino125/tauro>`_
-
-   print(f"✅ Success: {result.nodes_executed} nodes")
-
-Documentation
--------------
-
-.. toctree::
-   :maxdepth: 2
-   :caption: User Guide
-
-   getting_started
-   installation
-   cli_usage
-   library_usage
-   configuration
-   best_practices
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Tutorials
 
    tutorials/batch_etl
    tutorials/streaming
@@ -170,30 +138,23 @@ Documentation
    :maxdepth: 2
    :caption: API Reference
 
-   api/index
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Advanced Topics
-
-   advanced/architecture
-   advanced/security
-   advanced/performance
-   advanced/testing
-   advanced/troubleshooting
+   api/reference
 
 .. toctree::
    :maxdepth: 1
-   :caption: Additional Resources
+   :caption: Reference
 
-   migration_guide
+   glossary
    changelog
    contributing
    license
 
-Indices and tables
-==================
+Getting Help
+============
 
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+- **New to Tauro?** Start with :doc:`getting_started`
+- **Build batch pipelines?** Check out :doc:`tutorials/batch_etl`
+- **Real-time data?** See :doc:`tutorials/streaming`
+- **ML pipelines?** Read :doc:`tutorials/mlops`
+- **Something broken?** Visit :doc:`advanced/troubleshooting`
+- **Questions?** Open an issue on `GitHub <https://github.com/faustino125/tauro>`_

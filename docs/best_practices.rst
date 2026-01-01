@@ -1,12 +1,12 @@
 Best Practices
 ==============
 
-Learn how to use Tauro effectively and avoid common pitfalls.
+Learn how to use Tauro effectively and build reliable data pipelines.
 
 Project Organization
 ---------------------
 
-**Keep your project clean and organized.** A good structure makes collaboration easier:
+**Keep your project clean and organized.** A good structure makes collaboration easier and reduces errors:
 
 .. code-block:: text
 
@@ -28,23 +28,22 @@ Project Organization
    │       ├── transform.py
    │       └── load.py
    │
-   ├── data/                # Local test data (gitignore!)
-   │   ├── input/
-   │   └── output/
-   │
    ├── tests/               # Unit tests
    │   ├── test_extract.py
    │   ├── test_transform.py
    │   └── test_load.py
    │
-   ├── logs/                # Execution logs (gitignore!)
+   ├── data/                # Local test data (add to .gitignore)
+   │   ├── input/
+   │   └── output/
    │
-   ├── .env                 # Secrets (gitignore!)
+   ├── logs/                # Execution logs (add to .gitignore)
+   │
+   ├── .env                 # Secrets (add to .gitignore!)
    ├── .gitignore
    ├── requirements.txt
-   └── README.md
-
-Follow this structure and you'll be in good shape.
+   ├── README.md
+   └── Makefile             # Optional: helpful shortcuts
 
 Writing Good Node Functions
 -----------------------------

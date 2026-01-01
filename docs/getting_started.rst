@@ -1,27 +1,22 @@
 Getting Started
 ===============
 
-Let's get you up and running with Tauro in 10 minutes. This guide takes you from zero to running your first data pipeline.
+This guide takes you from installation to running your first Tauro pipeline in 10 minutes.
 
-What is Tauro?
---------------
+What You'll Learn
+-----------------
 
-Tauro is a Python framework that helps you:
-
-- **Define data workflows** using simple YAML configuration files
-- **Execute pipelines** on your laptop or on cloud infrastructure
-- **Handle errors gracefully** with automatic retries and health checks
-- **Track results** with built-in logging and metrics
-- **Deploy with confidence** knowing your data is validated at every step
-
-You don't need to be a software engineer to use Tauro—just a data professional who wants reliable, repeatable pipelines.
+- Install Tauro
+- Create your first project
+- Run a sample pipeline
+- Understand how configuration works
+- Customize the pipeline for your own data
 
 Prerequisites
-~~~~~~~~~~~~~
+--------------
 
 - **Python 3.10 or higher** (check with ``python --version``)
 - **pip** (usually comes with Python)
-- **5 minutes** of your time
 
 Installation
 ~~~~~~~~~~~~
