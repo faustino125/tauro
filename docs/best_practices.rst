@@ -48,6 +48,43 @@ Project Organization
 Writing Good Node Functions
 -----------------------------
 
+**Specifying Node Function Paths**
+
+Node functions are referenced via Python import paths. Two formats are supported:
+
+.. code-block:: yaml
+
+   # Option 1: Module path (recommended for single function per module)
+   nodes:
+     extract:
+       function: "src.nodes.extract"  # Calls extract() function inside src/nodes/extract.py
+
+   # Option 2: Full function path (explicit, recommended for clarity)
+   nodes:
+     extract:
+       function: "src.nodes.extract.extract_sales"  # Calls extract_sales() in src/nodes/extract.py
+
+**How Tauro resolves paths:**
+
+1. Attempts to import the module
+2. If module is callable, uses it
+3. If not, searches for a function named after the last path component
+4. If explicit function name given, imports module and gets that function
+
+**Best practice:** Use full function paths for clarity, especially in shared projects:
+
+.. code-block:: yaml
+
+   nodes:
+     extract_sales:
+       function: "src.nodes.extract.get_sales"  # Crystal clear which function
+     
+     extract_customers:
+       function: "src.nodes.extract.get_customers"  # Different from above
+     
+     clean_data:
+       function: "src.nodes.transform.clean"
+
 **Simple and Clear**
 
 Each node function should do one thing well:

@@ -748,16 +748,16 @@ Edit the configuration files under `./config/` and update:
 
 ```bash
 # Show available pipelines
-tauro --env dev --list-pipelines
+tauro config list-pipelines --env dev
 
 # Run the complete pipeline
-tauro --env dev --pipeline load
+tauro run --env dev --pipeline load
 
 # Run a specific node
-tauro --env dev --pipeline load --node load_raw_data
+tauro run --env dev --pipeline load --node load_raw_data
 
 # Run with date range
-tauro --env dev --pipeline transform --start-date 2025-01-01 --end-date 2025-01-31
+tauro run --env dev --pipeline transform --start-date 2025-01-01 --end-date 2025-01-31
 ```
 
 ## Project structure
@@ -808,25 +808,25 @@ raw_data_source
 ### List available pipelines
 
 ```bash
-tauro --env dev --list-pipelines
+tauro config list-pipelines --env dev
 ```
 
 ### Validate configuration
 
 ```bash
-tauro --env dev --validate-config
+tauro run --env dev --pipeline load --validate-only
 ```
 
 ### Run with debug logging
 
 ```bash
-tauro --env dev --pipeline load --log-level DEBUG
+tauro run --env dev --pipeline load --log-level DEBUG
 ```
 
 ### Dry run (don't execute)
 
 ```bash
-tauro --env dev --pipeline load --dry-run
+tauro run --env dev --pipeline load --dry-run
 ```
 
 ## Tauro features used
@@ -1060,11 +1060,13 @@ class TemplateCommand:
             logger.info("")
 
         logger.info("Usage:")
-        logger.info("  tauro --template <type> --project-name <name> [options]")
+        logger.info("  tauro template --template <type> --project-name <name> [options]")
         logger.info("")
         logger.info("Examples:")
-        logger.info("  tauro --template medallion_basic --project-name my_pipeline")
-        logger.info("  tauro --template medallion_basic --project-name my_pipeline --format json")
+        logger.info("  tauro template --template medallion_basic --project-name my_pipeline")
+        logger.info(
+            "  tauro template --template medallion_basic --project-name my_pipeline --format json"
+        )
 
         return ExitCode.SUCCESS.value
 
@@ -1204,18 +1206,18 @@ class TemplateCommand:
 
         logger.info("\n🚀 Quick start commands:")
         logger.info("   # List pipelines")
-        logger.info("   tauro --env dev --list-pipelines")
+        logger.info("   tauro config list-pipelines --env dev")
         logger.info("")
         logger.info("   # Run the load pipeline")
-        logger.info("   tauro --env dev --pipeline load")
+        logger.info("   tauro run --env dev --pipeline load")
         logger.info("")
         logger.info("   # Run with specific date range")
         logger.info(
-            "   tauro --env dev --pipeline load --start-date 2025-01-01 --end-date 2025-01-31"
+            "   tauro run --env dev --pipeline load --start-date 2025-01-01 --end-date 2025-01-31"
         )
         logger.info("")
         logger.info("   # Run with debug logging")
-        logger.info("   tauro --env dev --pipeline load --log-level DEBUG")
+        logger.info("   tauro run --env dev --pipeline load --log-level DEBUG")
 
         logger.info("\n� Features already configured:")
         logger.info("   ✓ Multi-environment support (dev, sandbox, prod)")

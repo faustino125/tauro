@@ -27,7 +27,7 @@ Create a new project:
 
 .. code-block:: bash
 
-   tauro --template medallion_basic --project-name sales_etl
+  tauro template --template medallion_basic --project-name sales_etl
    cd sales_etl
 
 This creates:

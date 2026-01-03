@@ -10,13 +10,13 @@ Command-Line Basics
 
 .. code-block:: bash
 
-   tauro --list-pipelines
+   tauro config list-pipelines --env dev
 
 **Run a pipeline**
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline my_pipeline
+   tauro run --env dev --pipeline my_pipeline
 
 **Run with date range**
 

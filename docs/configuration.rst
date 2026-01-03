@@ -6,13 +6,42 @@ This guide explains how to configure your Tauro pipelines. Don't worry—it's ju
 The Big Picture
 ---------------
 
-A Tauro project has 5 key configuration files:
+A Tauro project has five core configuration files plus a small descriptor that maps environments to them.
 
-1. **global.yaml** - General settings (paths, Spark config)
-2. **pipelines.yaml** - What pipelines you have
-3. **nodes.yaml** - What each step does
-4. **inputs.yaml** - Where data comes from
-5. **outputs.yaml** - Where results go
+1. **global_settings.* (yaml/json/dsl)** - General settings (paths, Spark config, hyperparameters)
+2. **pipelines.* (yaml/json/dsl)** - Which pipelines you have and how they link to nodes
+3. **nodes.* (yaml/json/dsl)** - What each node does, which module to import, and its dependencies
+4. **input.* (yaml/json/dsl)** - Data sources tied to logical input names
+5. **output.* (yaml/json/dsl)** - Output targets and write modes
+
+The CLI templates generate a single **settings_<format>.json** file (``settings_json.json`` by default) that tells Tauro where to find each of those five files for every environment (``base``, ``dev``, ``sandbox``, ``prod``). That descriptor drives both the CLI and the Python API, so keep it in your project root alongside the ``settings_*`` variants.
+
+Environment Descriptor (``settings_json.json``)
+----------------------------------------------
+
+Tauro keeps the environment-to-file mapping in a JSON file with the suffix that matches your chosen format (``settings_json.json``, ``settings_yml.json``, or ``settings_dsl.json``). Each entry lists absolute or relative paths to the five configuration files used by that environment. The template generator produces something like the following:
+
+.. code-block:: json
+
+   {
+     "base_path": ".",
+     "env_config": {
+       "base": {
+         "global_settings_path": "config/global_settings.yaml",
+         "pipelines_config_path": "config/pipelines.yaml",
+         "nodes_config_path": "config/nodes.yaml",
+         "input_config_path": "config/input.yaml",
+         "output_config_path": "config/output.yaml"
+       },
+       "dev": {
+         "global_settings_path": "config/dev/global_settings.yaml",
+         "input_config_path": "config/dev/input.yaml",
+         "output_config_path": "config/dev/output.yaml"
+       }
+     }
+   }
+
+Tauro expects the descriptor to expose at least the five main files, but you can add more keys if you have service-specific configs.
 
 Each file has a simple purpose. Let's look at each one.
 
@@ -21,7 +50,7 @@ Getting Started: The Basics
 
 Here's the simplest possible configuration:
 
-**config/global.yaml** - Paths and Settings
+**config/global_settings.yaml** - Paths and Settings
 
 .. code-block:: yaml
 
@@ -44,18 +73,24 @@ Here's the simplest possible configuration:
 
    nodes:
      extract:
-       function: "src.nodes.extract"
+       function: "src.nodes.extract"        # Python module path
        description: "Read data from file"
+       dependencies: []                      # No dependencies
 
      transform:
-       function: "src.nodes.transform"
+       function: "src.nodes.transform"      # Python module path
        description: "Clean the data"
+       dependencies: [extract]               # Depends on extract node
 
      load:
-       function: "src.nodes.load"
+       function: "src.nodes.load"           # Python module path
        description: "Save results"
+       dependencies: [transform]             # Depends on transform node
 
-**config/inputs.yaml** - Data Sources
+**Note:** Dependencies determine execution order. Nodes run in parallel when possible,
+but respect dependency chains. See the "Node Dependencies" section below.
+
+**config/input.yaml** - Data Sources
 
 .. code-block:: yaml
 
@@ -64,7 +99,7 @@ Here's the simplest possible configuration:
        path: data/input/sample.csv
        format: csv
 
-**config/outputs.yaml** - Save Results
+**config/output.yaml** - Save Results
 
 .. code-block:: yaml
 
@@ -78,8 +113,8 @@ That's a complete working pipeline! Now let's dive deeper.
 Detailed Configuration
 ----------------------
 
-Global Settings (global.yaml)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Global Settings (global_settings.*)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This file controls overall behavior:
 
@@ -293,7 +328,7 @@ Using Environment Variables
 
 Never hardcode secrets or paths. Use environment variables:
 
-**config/global.yaml**
+**config/global_settings.yaml**
 
 .. code-block:: yaml
 
@@ -304,18 +339,120 @@ Never hardcode secrets or paths. Use environment variables:
 
 .. code-block:: bash
 
-   INPUT_PATH=/data/input
-   OUTPUT_PATH=/data/output
-   DB_PASSWORD=secret123
+  INPUT_PATH=/data/input
+  OUTPUT_PATH=/data/output
+  DB_PASSWORD=secret123
 
-Tauro automatically loads ``.env`` before running.
+Tauro does not load ``.env`` by default. Source the file yourself (for example ``source .env`` on Unix or ``python -m dotenv run --``) before invoking the CLI or library calls.
 
 **Run it:**
 
 .. code-block:: bash
 
-   # .env is loaded automatically
-   tauro --env dev --pipeline my_pipeline
+  source .env
+  tauro --env dev --pipeline my_pipeline
+
+Node Dependencies
+------------------
+
+Each node can depend on other nodes. Dependencies define execution order and form a DAG (Directed Acyclic Graph).
+
+**Single dependency (linear chain):**
+
+.. code-block:: yaml
+
+   nodes:
+     extract:
+       function: "src.nodes.extract"
+       dependencies: []                  # No dependencies, runs first
+     
+     transform:
+       function: "src.nodes.transform"
+       dependencies: [extract]           # Waits for extract to finish
+     
+     load:
+       function: "src.nodes.load"
+       dependencies: [transform]         # Waits for transform to finish
+
+Execution order: extract → transform → load
+
+**Multiple dependencies (merge):**
+
+.. code-block:: yaml
+
+   nodes:
+     extract_sales:
+       function: "src.nodes.extract_sales"
+       dependencies: []                  # Runs first
+     
+     extract_customers:
+       function: "src.nodes.extract_customers"
+       dependencies: []                  # Runs first (parallel with extract_sales)
+     
+     merge:
+       function: "src.nodes.merge"
+       dependencies: [extract_sales, extract_customers]  # Waits for both to finish
+     
+     load:
+       function: "src.nodes.load"
+       dependencies: [merge]             # Runs last
+
+Execution: extract_sales and extract_customers run in parallel, then merge, then load
+
+**Important:**
+
+- Dependencies are optional. Nodes without dependencies run immediately.
+- Circular dependencies cause errors. Tauro detects and rejects them early.
+- Parallel execution respects the dependency graph.
+
+Variable Interpolation
+-----------------------
+
+Tauro supports environment variables and configuration variable references:
+
+**Environment variables:**
+
+.. code-block:: yaml
+
+   database:
+     password: ${DB_PASSWORD}        # Must be set, error if missing
+     timeout: ${TIMEOUT|3600}        # With default value
+
+**Configuration variables:**
+
+.. code-block:: yaml
+
+   base_path: /data/project
+   paths:
+     input: ${base_path}/raw         # Resolves to /data/project/raw
+     output: ${base_path}/processed  # Resolves to /data/project/processed
+
+**Default values:**
+
+.. code-block:: yaml
+
+   timeout_seconds: ${TIMEOUT|3600}      # Use TIMEOUT or default to 3600
+   log_level: ${LOG_LEVEL|INFO}          # Use LOG_LEVEL or default to INFO
+
+**Setting environment variables:**
+
+.. code-block:: bash
+
+   export DB_PASSWORD="my_secret_password"
+   export TIMEOUT="5000"
+   tauro --env prod --pipeline my_pipeline
+
+Or use a ``.env`` file:
+
+.. code-block:: bash
+
+   # .env (add to .gitignore)
+   DB_PASSWORD=my_secret_password
+   TIMEOUT=5000
+
+.. note::
+
+   Tauro does **not** automatically load .env files. Use ``python-dotenv`` or load manually.
 
 Different Configurations per Environment
 -----------------------------------------
@@ -326,32 +463,32 @@ It's common to have dev, staging, and production environments with different set
 
 .. code-block:: text
 
-   config/
-   ├── global.yaml              # Base (used by all)
-   ├── inputs.yaml
-   ├── outputs.yaml
-   ├── pipelines.yaml
-   ├── nodes.yaml
-   ├── dev/
-   │   └── global.yaml          # Override for dev
-   ├── staging/
-   │   └── global.yaml          # Override for staging
-   └── prod/
-       └── global.yaml          # Override for production
+     config/
+     ├── global_settings.yaml     # Base (used by all)
+     ├── input.yaml
+     ├── output.yaml
+     ├── pipelines.yaml
+     ├── nodes.yaml
+     ├── dev/
+     │   └── global_settings.yaml # Override for dev
+     ├── staging/
+     │   └── global_settings.yaml # Override for staging
+     └── prod/
+       └── global_settings.yaml # Override for production
 
 When you run ``tauro --env prod``, Tauro loads:
-   1. Base config files (config/global.yaml)
-   2. Environment overrides (config/prod/global.yaml)
+  1. Base config files (config/global_settings.yaml)
+  2. Environment overrides (config/prod/global_settings.yaml)
 
 **Example:**
 
-Base config/global.yaml:
+Base config/global_settings.yaml:
 .. code-block:: yaml
 
    log_level: INFO
    max_workers: 4
 
-Override config/prod/global.yaml:
+Override config/prod/global_settings.yaml:
 .. code-block:: yaml
 
    log_level: WARNING        # Less logging in prod
@@ -422,7 +559,7 @@ Make sure files are in the right place:
 .. code-block:: bash
 
    ls -la config/
-   # Should show: global.yaml, pipelines.yaml, nodes.yaml, etc.
+  # Should show: global_settings.yaml, pipelines.yaml, nodes.yaml, input.yaml, output.yaml, settings_json.json.
 
 **"Invalid YAML"**
 

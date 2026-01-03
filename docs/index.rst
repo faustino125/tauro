@@ -1,6 +1,135 @@
 .. Tauro documentation master file
 
 =============================
+Tauro – Data Pipeline Framework
+=============================
+
+Tauro is a Python-first framework that streamlines the lifecycle of data engineering workloads. Define deterministic pipelines, validate inputs, and execute batch or streaming jobs with the same operational controls you expect in production.
+
+.. image:: https://img.shields.io/badge/python-3.10%2B-blue.svg
+   :target: https://www.python.org/downloads/
+   :alt: Supported Python versions
+
+.. image:: https://img.shields.io/badge/license-MIT-green.svg
+   :target: https://github.com/faustino125/tauro/blob/main/LICENSE
+   :alt: MIT License
+
+.. image:: https://img.shields.io/badge/pypi-v0.1.4-orange.svg
+   :target: https://pypi.org/project/tauro/
+   :alt: PyPI release
+
+.. contents:: **Documentation Overview**
+   :local:
+   :depth: 2
+
+Why Tauro?
+===========
+
+**Build reliable pipelines** through composable, YAML-driven definitions that pair well with CI/CD workflows.
+
+**Switch between batch, streaming, and ML workloads** without changing the way you organize code or configuration.
+
+**Operate safely in production** thanks to built-in validation, retries, and observability hooks.
+
+**Deploy anywhere**—local development, Databricks, Kubernetes, or traditional Spark clusters—without rewriting the pipeline logic.
+
+What Can Tauro Help You Do?
+===========================
+
+- **Batch Processing**: Schedule ETL jobs, incrementally load data, and emit artifacts to lakes or warehouses.
+- **Streaming Pipelines**: Consume Kafka or file streams with backpressure-aware executors.
+- **Machine Learning Workflows**: Prepare data, orchestrate training runs, and track metadata through MLflow or similar tools.
+- **Feature Stores**: Define materialized, virtualized, and hybrid feature stores with governance baked in.
+- **Feature Store Materialization**: Keep features fresh and consistent for production and experimentation.
+
+Quick Start
+===========
+
+1. Install Tauro:
+
+   .. code-block:: bash
+
+      pip install tauro
+
+2. Generate a starter project:
+
+   .. code-block:: bash
+
+      tauro template --template medallion_basic --project-name my_project
+      cd my_project
+
+3. Run a pipeline:
+
+   .. code-block:: bash
+
+      tauro run --env dev --pipeline sample_pipeline
+
+Documentation Organization
+==========================
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Getting Started
+
+   installation
+   getting_started
+   how_tauro_works
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Using Tauro
+
+   quick_reference
+   cli_usage
+   library_usage
+   migration_guide
+   configuration
+   best_practices
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Integration & Advanced Topics
+
+   databricks_setup
+   feature_store
+   advanced/architecture
+   advanced/security
+   advanced/performance
+   advanced/testing
+   advanced/troubleshooting
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Tutorials
+
+   tutorials/batch_etl
+   tutorials/streaming
+   tutorials/mlops
+   tutorials/airflow_integration
+   tutorials/fastapi_integration
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API & Reference
+
+   api/reference
+   glossary
+   changelog
+   contributing
+   license
+
+Getting Help
+============
+
+- **New to Tauro?** Start with :doc:`getting_started`
+- **Running batch pipelines?** Follow :doc:`tutorials/batch_etl`
+- **Streaming data?** Use :doc:`tutorials/streaming`
+- **Building ML pipelines?** Check :doc:`tutorials/mlops`
+- **Deployment questions?** Review :doc:`advanced/architecture`
+- **Facing issues?** See :doc:`advanced/troubleshooting`
+- **Still stuck?** File an issue on `GitHub <https://github.com/faustino125/tauro/issues>`_.. Tauro documentation master file
+
+=============================
 Tauro - Data Pipeline Framework
 =============================
 
@@ -79,14 +208,14 @@ Quick Start
 
 .. code-block:: bash
 
-   tauro --template medallion_basic --project-name my_project
+   tauro template --template medallion_basic --project-name my_project
    cd my_project
 
 **3. Run Your First Pipeline**
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline sample_pipeline
+   tauro run --env dev --pipeline sample_pipeline
 
 Done! Your pipeline is running.
 

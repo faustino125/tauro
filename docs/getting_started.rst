@@ -51,7 +51,7 @@ Tauro comes with project templates that set up everything you need. Let's create
 
 .. code-block:: bash
 
-   tauro --template medallion_basic --project-name my_first_project
+   tauro template --template medallion_basic --project-name my_first_project
    cd my_first_project
    ls
 
@@ -85,7 +85,7 @@ Now let's run the included pipeline:
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline sample_pipeline
+   tauro run --env dev --pipeline sample_pipeline
 
 You should see:
 
@@ -195,7 +195,7 @@ Edit ``src/nodes/transform.py``:
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline sample_pipeline
+   tauro run --env dev --pipeline sample_pipeline
 
 You'll see your custom logic executed!
 
@@ -218,9 +218,9 @@ Next: What's Next?
 
 💡 **Pro Tips:**
 
-- Use ``tauro --list-pipelines`` to see all available pipelines
+- Use ``tauro config list-pipelines --env dev`` to see all available pipelines
 - Add ``--log-level DEBUG`` to see detailed execution logs
-- Use ``--validate`` to check your configuration without running it
+- Use ``tauro run --env dev --pipeline sample_pipeline --validate-only`` to check your configuration without executing nodes
 
 Got stuck? Check :doc:`guides/troubleshooting` for solutions to common problems.
 
@@ -248,7 +248,7 @@ Tauro includes project templates to get you started quickly. We'll use the `meda
 
 .. code-block:: bash
 
-   tauro --template medallion_basic --project-name my_first_pipeline
+   tauro template --template medallion_basic --project-name my_first_pipeline
    cd my_first_pipeline
 
 This command generates a directory with sample data, configuration, and placeholder pipeline scripts. The structure looks like this:
@@ -281,7 +281,7 @@ Your project's pipelines are defined in `config/base/pipelines.yaml`. You can li
 
 .. code-block:: bash
 
-   tauro --list-pipelines
+   tauro config list-pipelines --env dev
 
 The output shows the three pipelines defined in the template:
 
@@ -298,7 +298,7 @@ Now, let's run the first pipeline, `load`. This pipeline reads the sample CSV fi
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline load
+   tauro run --env dev --pipeline load
 
 You will see log messages as Tauro executes the nodes defined for this pipeline.
 
@@ -313,45 +313,35 @@ Your First Pipeline (Library)
 
 For integration with other Python applications or for more complex orchestration, you can use Tauro as a library.
 
-**The Goal:** We will replicate the CLI command `tauro --env dev --pipeline load` using a Python script.
+**The Goal:** We will replicate the CLI command `tauro run --env dev --pipeline load` using a Python script.
 
 Create a Python script named `run_pipeline.py` in the root of your `my_first_pipeline` project.
 
 .. code-block:: python
-   :emphasize-lines: 7
+   :emphasize-lines: 5,9,13
 
-   from tauro import PipelineExecutor, ContextLoader
+   from tauro import ContextLoader, PipelineExecutor
+   from tauro.cli.config import AppConfigManager
 
-   # Define the project's root directory.
-   # Tauro needs to know where your `settings.json` and `config` directory are located.
-   # For this script, it's the current directory.
-   project_path = "." 
-
-   # 1. Load the context
-   # This loads the 'dev' environment configuration by finding and reading settings.json.
-   # The `project_path` tells Tauro where to start looking.
-   context = ContextLoader(project_path).load_from_env("dev")
-
-   # 2. Create a pipeline executor
-   # The executor is responsible for running pipelines using the loaded context.
+   settings = AppConfigManager("settings_json.json")
+   config_paths = settings.get_env_config("dev")
+   context = ContextLoader().load_from_paths(config_paths, "dev")
    executor = PipelineExecutor(context)
 
-   # 3. Execute the 'load' pipeline
-   result = executor.execute("load")
-
-   # 4. Print the results
-   if result.success:
-       print(f"✅ Pipeline '{result.pipeline_name}' completed successfully!")
-       print(f"   Nodes executed: {result.nodes_executed}")
-       print(f"   Execution time: {result.execution_time_seconds:.2f}s")
-   else:
-       print(f"❌ Pipeline failed: {result.error_message}")
+   try:
+      executor.run_pipeline("load")
+      print("✅ Pipeline 'load' completed successfully!")
+   except Exception as exc:
+      print(f"❌ Pipeline failed: {exc}")
 
 **Run the Script**
 
 .. code-block:: bash
 
    python run_pipeline.py
+
+.. note::
+   ``run_pipeline`` returns ``None`` for batch executions, so success is simply the absence of an exception. Streaming pipelines return an execution ID, and hybrid pipelines respond with a dictionary containing both ``batch_execution`` and ``streaming_execution_ids``.
 
 The output confirms the successful execution:
 
@@ -380,7 +370,8 @@ Congratulations on running your first pipeline! Here’s what you can do next:
 
 - **Follow a Tutorial**: Work through a real-world example.
   - The :doc:`tutorials/batch_etl` tutorial is a great place to start.
-
+- **Enable MLOps (Optional)**: Track experiments and models automatically.
+  - **Important:** MLOps is NOT automatically enabled. See the :doc:`tutorials/mlops` guide to set up experiment tracking and model management.
 Troubleshooting and Help
 ------------------------
 
@@ -396,19 +387,26 @@ If your shell cannot find the `tauro` command, it's likely that the installation
 2.  **Add the directory to your PATH**:
     Find the directory with `pip show tauro` (look for `Location`) and add the `scripts` or `bin` subdirectory to your `PATH`.
 
-**Configuration not found error**
+**"Configuration not found error"**
 
-Tauro needs to be run from your project's root directory (the one containing `settings.json`) to find its configuration. If you can't run it from there, you must specify the path to your configuration.
+Tauro needs to run from your project's root (the directory that contains ``settings_json.json`` or the equivalent ``settings_yml.json`` / ``settings_dsl.json`` file). If you must run from elsewhere, point Tauro at the directory that owns those files.
 
-- **CLI**: Use the `--project-dir` flag:
-  .. code-block:: bash
+- **CLI**: Use the ``run`` subcommand with ``--base-path``:
+    .. code-block:: bash
 
-     tauro --project-dir /path/to/my_first_pipeline --env dev --pipeline load
+          tauro run --base-path /path/to/my_first_pipeline --env dev --pipeline load
 
-- **Library**: Pass the path to `ContextLoader`:
-  .. code-block:: python
+- **Library**: Load the configuration descriptor explicitly:
+   .. code-block:: python
 
-     context = ContextLoader("/path/to/my_first_pipeline").load_from_env("dev")
+       from tauro import ContextLoader
+       from tauro.cli.config import AppConfigManager
+
+       descriptor = AppConfigManager(
+             "/path/to/my_first_pipeline/settings_json.json"
+       )
+       config_paths = descriptor.get_env_config("dev")
+       context = ContextLoader().load_from_paths(config_paths, "dev")
 
 **Get Community Support**
 

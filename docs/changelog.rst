@@ -241,8 +241,8 @@ Template syntax changed:
    # Before (0.1.0)
    tauro --create-project my_project
 
-   # After (0.1.1)
-   tauro --template medallion_basic --project-name my_project
+  # After (0.1.1)
+  tauro template --template medallion_basic --project-name my_project
 
 Deprecation Notices
 -------------------

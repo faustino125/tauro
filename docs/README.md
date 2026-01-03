@@ -1,4 +1,102 @@
-# Tauro Documentation
+# Tauro Documentation Hub
+
+Everything you need to know about exploring, building, and contributing to the Tauro documentation lives in this folder. It is powered by Sphinx and synchronized with Read the Docs so that readers always see the latest information about the Tauro data pipeline framework.
+
+## Getting Started
+
+- **Official site**: https://tauro.readthedocs.io
+- **Local preview**: Run the build steps below and open `_build/html/index.html` with your preferred browser.
+- **New to Tauro?** Begin with `getting_started.rst` for a guided setup experience.
+
+## Building the Docs Locally
+
+1. Activate the Python environment that contains Sphinx and Tauro (install dependencies if needed):
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Generate HTML output:
+
+   ```bash
+   # Linux/macOS
+   make html
+
+   # Windows
+   make.bat html
+   ```
+
+3. Open the polished output in your browser:
+
+   ```bash
+   # macOS
+   open _build/html/index.html
+
+   # Linux
+   xdg-open _build/html/index.html
+
+   # Windows
+   start _build/html/index.html
+   ```
+
+4. For other formats, extend the same workflow:
+
+   ```bash
+   make latexpdf  # PDF
+   make epub      # EPUB
+   make text      # Plain text dump
+   make clean     # Remove build artifacts
+   ```
+
+## Documentation Layout
+
+```
+docs/
+├── index.rst               # Landing page with topic categories
+├── getting_started.rst     # Guided onboarding
+├── quick_reference.rst     # CLI cheatsheet
+├── installation.rst        # Setup instructions
+├── cli_usage.rst           # Command-line reference
+├── library_usage.rst       # Python API guidance
+├── configuration.rst       # Configuration patterns
+├── best_practices.rst      # Recommended approaches
+├── migration_guide.rst     # CLI-to-library migration
+├── glossary.rst            # Terminology definitions
+├── databricks_setup.rst    # Databricks-specific guidance
+├── feature_store.rst       # Feature store workflow tips
+├── tutorials/              # Hands-on walkthroughs
+├── advanced/               # Operational and performance topics
+├── api/                    # API reference generated from code
+├── changelog.rst           # Release notes
+├── contributing.rst        # Documentation contribution policies
+├── license.rst             # MIT license text
+├── conf.py                 # Sphinx configuration
+├── Makefile                # Unix build helper
+├── make.bat                # Windows build helper
+└── requirements.txt        # Build-time dependencies
+```
+
+## Style & Quality Standards
+
+- Write in clear, idiomatic English aimed at practitioners.
+- Prefer actionable guidance and examples over abstract theory.
+- Keep links relative using `:doc:` or `:ref:` roles when referring to other pages.
+- Annotate longer sections with tables of contents or short introductions.
+- Run `make html` before filing a pull request to catch build or link errors.
+
+## Contribution Workflow
+
+1. Add or edit the appropriate `.rst` file inside `docs/`.
+2. Update the relevant `toctree` in `index.rst` so the content is discoverable.
+3. Run the local build (`make html` / `make.bat html`).
+4. Share the change via a pull request—Read the Docs builds automatically once your PR reaches `main`.
+
+## Useful Resources
+
+- Sphinx documentation: https://www.sphinx-doc.org/
+- Read the Docs guide: https://docs.readthedocs.io/
+- reStructuredText primer: https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html
+- MyST parser (Markdown support): https://myst-parser.readthedocs.io/# Tauro Documentation
 
 Welcome to the Tauro documentation. This directory contains all documentation built with Sphinx and hosted on Read the Docs.
 

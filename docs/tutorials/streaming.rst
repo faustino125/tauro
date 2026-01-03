@@ -1,125 +1,181 @@
 Streaming Pipelines Tutorial
-==========================
+=============================
 
-This tutorial provides a hands-on guide to building and running real-time streaming pipelines with Tauro. While batch pipelines run on a fixed dataset, streaming pipelines operate on unbounded data streams, processing records as they arrive.
+This tutorial shows you how to build real-time data pipelines with Tauro. While batch pipelines process fixed datasets on a schedule, streaming pipelines process data continuously as it arrives.
 
-Tauro's streaming capabilities are built on top of Spark Structured Streaming, providing a powerful and scalable engine for real-time processing.
+**Best for**: Real-time data processing, event streams, continuous monitoring, live dashboards.
 
-Core Concepts
--------------
+**Built on**: Apache Spark Structured Streaming for scalable, fault-tolerant processing.
 
-- **Streaming Readers**: These are sources that provide a continuous stream of data, such as Kafka, Kinesis, or even files in a directory.
-- **Streaming Writers**: These are sinks where the processed data is sent, such as the console, another Kafka topic, or files.
-- **Triggers**: A trigger defines when the streaming engine should process the next batch of data (e.g., every 10 seconds).
-- **Checkpointing**: This is a critical concept for resilience. The streaming engine saves its progress (which data it has processed) to a checkpoint location. If the pipeline fails or is restarted, it can resume from where it left off without losing data.
+When to Use Streaming
+---------------------
 
-Example: A File-Based Streaming Pipeline
-----------------------------------------
+Use streaming pipelines when you need:
 
-For this tutorial, we'll create a simple but powerful streaming pipeline that:
-1.  **Watches** a directory for new CSV files.
-2.  **Reads** any new CSV file as a stream of data.
-3.  **Transforms** the data (e.g., adds a new column).
-4.  **Prints** the transformed data to the console.
+- ✅ Real-time data processing (not hourly or daily batches)
+- ✅ Continuous event processing (Kafka, IoT sensors, click streams)
+- ✅ Low-latency results (minutes or seconds, not hours)
+- ✅ Always-on processing (not scheduled jobs)
 
-This pattern is useful for "drop-folder" style integrations, where other systems deposit files to be processed in real-time.
+Use batch pipelines when you need:
 
-**1. Configure the Pipeline**
+- ✅ Scheduled processing (daily ETL, weekly reports)
+- ✅ Processing large historical datasets
+- ✅ Complex data transformations
+- ✅ Simpler setup and testing
 
-First, let's define the pipeline in YAML. This would typically be in your `config/base/pipelines.yaml` and `nodes.yaml` files.
+Key Concepts
+-----------
 
-**`pipelines.yaml`**
+**Data Source** (Input)
+   Where streaming data comes from: Kafka topics, file directories, cloud message queues, databases with change data capture.
+
+**Transformation**
+   Your Python code that processes each record or micro-batch of records as it arrives.
+
+**Output** (Sink)
+   Where processed results go: another Kafka topic, database, files, dashboards, alerts.
+
+**Trigger**
+   How often Tauro processes new data. Options:
+   - Every N seconds (e.g., process every 5 seconds)
+   - As soon as data arrives (micro-batches)
+   - Manual trigger
+
+**Checkpoint**
+   Tauro saves its progress so if the pipeline crashes, it can resume without losing or re-processing data.
+
+Simple Streaming Example: Monitor a Folder
+-------------------------------------------
+
+Let's build a real-time pipeline that watches a folder, processes CSV files as they arrive, and saves results.
+
+**What will happen:**
+1. Tauro watches ``data/input/`` for new CSV files
+2. When a file arrives, it's processed immediately
+3. Results are written to ``data/output/``
+4. Pipeline continues running, waiting for more files
+
+**Step 1: Configure Your Pipeline**
+
+Create ``config/pipelines.yaml``:
+
 .. code-block:: yaml
 
-   file_stream_pipeline:
-     nodes:
-       - watch_and_transform_files
+   real_time_sales:
+     nodes: [process_sales_stream]
 
-**`nodes.yaml`**
+Create ``config/nodes.yaml``:
+
 .. code-block:: yaml
 
-   watch_and_transform_files:
-     module: "pipelines.stream_logic.transform_file_stream"
-     inputs:
-       raw_file_stream: stream_from_input_directory
-     outputs:
-       - console_output
-     runner: spark_streaming # This tells Tauro to use the streaming engine
+   process_sales_stream:
+     function: "src.nodes.process_sales"
 
-**`input.yaml`**
+Create ``config/inputs.yaml``:
+
 .. code-block:: yaml
 
-   stream_from_input_directory:
-     type: file
-     format: csv
-     path: "data/streaming/input" # The directory to watch
-     options:
-       header: "true"
-       inferSchema: "true"
+   inputs:
+     sales_stream:
+       path: data/input/
+       format: csv
+       streaming: true  # Enable streaming mode
 
-**`output.yaml`**
+Create ``config/outputs.yaml``:
+
 .. code-block:: yaml
 
-   console_output:
-     type: console
-     options:
-       truncate: "false"
+   outputs:
+     processed_sales:
+       path: data/output/
+       format: parquet
+       streaming: true
 
-**2. Create the Transformation Logic**
+**Step 2: Write Your Processing Code**
 
-Now, create the Python function that performs the transformation.
+Create ``src/nodes/process_sales.py``:
 
-**`pipelines/stream_logic.py`**
 .. code-block:: python
 
-   from pyspark.sql import DataFrame
-   from pyspark.sql.functions import current_timestamp
+   def process_sales(df):
+       """Process incoming sales data."""
+       # Add processing timestamp
+       import pyspark.sql.functions as F
+       df = df.withColumn(
+           "processed_at",
+           F.current_timestamp()
+       )
+       
+       # Only keep valid sales
+       df = df.filter(df['amount'] > 0)
+       
+       # Add day of week
+       df = df.withColumn(
+           "day_of_week",
+           F.dayofweek(F.col("date"))
+       )
+       
+       return df
 
-   def transform_file_stream(raw_file_stream: DataFrame) -> DataFrame:
-       """
-       Adds a timestamp to the streaming DataFrame.
-       """
-       return raw_file_stream.withColumn("processing_time", current_timestamp())
+**Step 3: Run Your Streaming Pipeline**
 
-**3. Run the Streaming Pipeline**
-
-With the configuration and code in place, you can start the pipeline using the `tauro stream run` command.
+Start the pipeline:
 
 .. code-block:: bash
 
-   tauro stream run --pipeline file_stream_pipeline --checkpoint-dir /tmp/tauro_checkpoints
+   tauro --env dev --pipeline real_time_sales --stream
 
-Tauro will start the streaming query. It is now watching the `data/streaming/input` directory.
+The pipeline will start running and wait for data to arrive.
 
-**4. Test the Stream**
+**Step 4: Test With Sample Data**
 
-Open a new terminal. Now, let's create a sample CSV file and drop it into the input directory.
+Open a new terminal and create a test file:
 
-**`data/streaming/input/test1.csv`**
-.. code-block:: csv
+.. code-block:: bash
 
-   id,value
-   1,A
-   2,B
-   3,C
+   # Create sample sales data
+   mkdir -p data/input
+   cat > data/input/sales_2024_01_15.csv << 'EOF'
+   id,date,amount,customer
+   1,2024-01-15,150.00,Alice
+   2,2024-01-15,200.00,Bob
+   3,2024-01-15,75.50,Charlie
+   EOF
 
-As soon as you save this file, you will see output in the console where your pipeline is running. Tauro will process the file and print the transformed data:
+Within a few seconds, your pipeline will process this file! Check the output:
 
-.. code-block:: text
+.. code-block:: bash
 
-   +---+-----+--------------------+
-   |id |value|processing_time     |
-   +---+-----+--------------------+
-   |1  |A    |2024-10-27 12:30:15 |
-   |2  |B    |2024-10-27 12:30:15 |
-   |3  |C    |2024-10-27 12:30:15 |
-   +---+-----+--------------------+
+   # Check processed files
+   ls data/output/
+   
+   # View the results
+   parquet-tools show data/output/part-*.parquet
 
-If you drop another file into the directory, it will be processed in the next trigger interval.
+**Step 5: Add More Data**
 
-**5. Stopping the Pipeline**
+Create another file while the pipeline is running:
 
-Press `Ctrl+C` in the terminal where the pipeline is running to gracefully shut it down. Because we specified a checkpoint directory, if you restart the pipeline, it will know not to re-process `test1.csv`.
+.. code-block:: bash
+
+   cat > data/input/sales_2024_01_16.csv << 'EOF'
+   id,date,amount,customer
+   4,2024-01-16,300.00,David
+   5,2024-01-16,125.00,Eve
+   EOF
+
+Your pipeline automatically processes it in seconds!
+
+**Step 6: Stop the Pipeline**
+
+Press ``Ctrl+C`` to gracefully shut down the pipeline. Thanks to checkpointing, if you restart it, it won't re-process old files.
+
+.. code-block:: bash
+
+   # Files already processed are tracked
+   # Restarting the pipeline skips them
+   tauro --env dev --pipeline real_time_sales --stream
 
 Next Steps
 ----------

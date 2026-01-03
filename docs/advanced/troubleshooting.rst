@@ -11,7 +11,7 @@ When a pipeline fails, follow these steps:
 .. code-block:: bash
 
    # 1. Run with detailed logging
-   tauro --env dev --pipeline my_pipeline --log-level DEBUG
+   tauro run --env dev --pipeline my_pipeline --log-level DEBUG
 
    # 2. Look for the error message
    # 3. Use the table below to find your error
@@ -36,10 +36,10 @@ Common Problems & Solutions
    .. code-block:: bash
 
       # List all pipelines
-      tauro --list-pipelines
+      tauro config list-pipelines --env dev
 
       # Check that your pipeline name exactly matches
-      tauro --env dev --pipeline correct_name
+      tauro run --env dev --pipeline correct_name
 
 2. **Configuration file not loaded:**
 
@@ -195,7 +195,7 @@ Common Problems & Solutions
 
    .. code-block:: bash
 
-      tauro --env dev --pipeline my_pipeline --log-level DEBUG
+      tauro run --env dev --pipeline my_pipeline --log-level DEBUG
 
       # Look for timestamps to see which step is slow
       # Example output:
@@ -365,7 +365,7 @@ Common Problems & Solutions
    .. code-block:: bash
 
       export DATABASE_URL="postgresql://localhost/mydb"
-      tauro --env dev --pipeline my_pipeline
+      tauro run --env dev --pipeline my_pipeline
 
 3. **Or set in config:**
 
@@ -417,7 +417,7 @@ Common Problems & Solutions
    .. code-block:: bash
 
       # Test in staging before prod
-      tauro --env staging --pipeline my_pipeline
+      tauro run --env staging --pipeline my_pipeline
 
 2. **Use same data:**
 
@@ -469,7 +469,7 @@ Debugging Techniques
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline my_pipeline --log-level DEBUG
+   tauro run --env dev --pipeline my_pipeline --log-level DEBUG
 
 **Test Node Independently**
 
@@ -498,7 +498,7 @@ Debugging Techniques
 .. code-block:: bash
 
    # Before running, validate everything
-   tauro --env dev --pipeline my_pipeline --validate
+   tauro run --env dev --pipeline my_pipeline --validate-only
 
 Getting More Help
 -----------------
@@ -510,7 +510,7 @@ If none of these solutions work:
    .. code-block:: bash
 
       # Save full log
-      tauro --env dev --pipeline my_pipeline --log-level DEBUG > debug.log 2>&1
+      tauro run --env dev --pipeline my_pipeline --log-level DEBUG > debug.log 2>&1
       cat debug.log | grep ERROR
 
 2. **Search GitHub issues:**
@@ -539,7 +539,7 @@ Summary Table
 
 | Problem | Check This First |
 |---------|------------------|
-| Pipeline not found | ``tauro --list-pipelines`` |
+| Pipeline not found | ``tauro config list-pipelines --env dev`` |
 | Config error | YAML indentation and syntax |
 | Node not found | File exists and function name is correct |
 | Data not found | File path is correct and file exists |
@@ -556,13 +556,13 @@ Prevention Tips
 
 .. code-block:: bash
 
-   tauro --env dev --pipeline my_pipeline
+   tauro run --env dev --pipeline my_pipeline
 
 ✅ **Validate configuration before deploying**
 
 .. code-block:: bash
 
-   tauro --env prod --pipeline my_pipeline --validate
+   tauro run --env prod --pipeline my_pipeline --validate-only
 
 ✅ **Use version control**
 
@@ -586,7 +586,7 @@ Prevention Tips
 .. code-block:: bash
 
    # Save logs
-   tauro --env prod --pipeline my_pipeline 2>&1 | tee logs/run.log
+   tauro run --env prod --pipeline my_pipeline 2>&1 | tee logs/run.log
 
    # Check for errors
    grep ERROR logs/run.log

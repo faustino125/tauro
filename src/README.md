@@ -18,11 +18,11 @@
 pip install tauro
 
 # Create a project
-tauro --template medallion_basic --project-name my_project
+tauro template --template medallion_basic --project-name my_project
 cd my_project
 
 # Run a pipeline
-tauro --env dev --pipeline sales_etl
+tauro run --env dev --pipeline sales_etl
 ```
 
 ### Library Mode
@@ -88,47 +88,47 @@ pip install tauro[all]
 
 ```bash
 # List available pipelines
-tauro --list-pipelines
+tauro config list-pipelines --env dev
 
 # Execute pipeline
-tauro --env dev --pipeline sales_etl
+tauro run --env dev --pipeline sales_etl
 
 # With date range
-tauro --env dev --pipeline sales_etl \
+tauro run --env dev --pipeline sales_etl \
   --start-date 2024-01-01 \
   --end-date 2024-01-31
 
 # Validate configuration
-tauro --env prod --pipeline sales_etl --validate-only
+tauro run --env prod --pipeline sales_etl --validate-only
 
 # Execute specific node
-tauro --env dev --pipeline sales_etl --node load_data
+tauro run --env dev --pipeline sales_etl --node load_data
 ```
 
 ### Streaming Pipelines
 
 ```bash
 # Start streaming pipeline
-tauro stream run --config ./config --pipeline kafka_events
+tauro stream run --config ./config/streaming/settings.py --pipeline kafka_events
 
 # Check status
-tauro stream status --execution-id abc123
+tauro stream status --config ./config/streaming/settings.py --execution-id abc123
 
 # Stop pipeline
-tauro stream stop --execution-id abc123
+tauro stream stop --config ./config/streaming/settings.py --execution-id abc123
 ```
 
 ### Template Generation
 
 ```bash
 # List available templates
-tauro --list-templates
+tauro template --list-templates
 
 # Generate project from template
-tauro --template medallion_basic --project-name my_project
+tauro template --template medallion_basic --project-name my_project
 
 # With specific format (yaml, json, dsl)
-tauro --template medallion_basic --project-name my_project --format json
+tauro template --template medallion_basic --project-name my_project --format json
 ```
 
 ---
@@ -391,14 +391,14 @@ output.write(
 
 | Command | Description |
 |---------|-------------|
-| `tauro --list-pipelines` | List all available pipelines |
-| `tauro --pipeline-info <name>` | Show pipeline details |
-| `tauro --env <env> --pipeline <name>` | Execute pipeline |
-| `tauro --validate-only` | Validate without executing |
-| `tauro --template <type> --project-name <name>` | Generate new project |
-| `tauro stream run --pipeline <name>` | Start streaming pipeline |
-| `tauro stream status --execution-id <id>` | Check streaming status |
-| `tauro stream stop --execution-id <id>` | Stop streaming pipeline |
+| `tauro config list-pipelines --env <env>` | List all available pipelines |
+| `tauro config pipeline-info --pipeline <name> --env <env>` | Show pipeline details |
+| `tauro run --env <env> --pipeline <name>` | Execute pipeline |
+| `tauro run --env <env> --pipeline <name> --validate-only` | Validate without executing |
+| `tauro template --template <type> --project-name <name>` | Generate new project |
+| `tauro stream run --config <path> --pipeline <name>` | Start streaming pipeline |
+| `tauro stream status --config <path> --execution-id <id>` | Check streaming status |
+| `tauro stream stop --config <path> --execution-id <id>` | Stop streaming pipeline |
 
 ---
 
@@ -549,13 +549,13 @@ result = executor.execute("pipeline")  # Will show detailed import diagnostics
 **Verbose logging**
 ```bash
 # Enable detailed logs
-tauro --env dev --pipeline my_pipeline --verbose
+tauro run --env dev --pipeline my_pipeline --verbose
 ```
 
 **Dry-run mode**
 ```bash
 # See what will execute without running
-tauro --env dev --pipeline my_pipeline --dry-run
+tauro run --env dev --pipeline my_pipeline --dry-run
 ```
 
 ## 📄 License

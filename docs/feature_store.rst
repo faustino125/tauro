@@ -6,25 +6,33 @@ Tauro provides flexible feature store capabilities that work with your data pipe
 Feature Store Modes
 -------------------
 
-Tauro supports three modes of operation:
+.. warning::
 
-**Materialized** (Default)
+   Feature Store is in **BETA**. Only **Materialized** mode is production-ready.
+   Virtualized and Hybrid modes are planned for Q1 2025. See roadmap below.
+
+Tauro supports three modes of operation (with production readiness shown):
+
+**Materialized** (Default) ✅ PRODUCTION READY
    - Pre-computed features stored in dedicated storage
    - Best for: High-speed reads, stable features
    - Trade-off: Requires storage, may become stale
    - Use when: You need fast access to computed features
+   - Status: Fully implemented and tested
 
-**Virtualized**
+**Virtualized** (Coming Q1 2025) 🔄 PLANNED
    - Features computed on-demand from source layers (Silver/Gold)
    - Best for: Fresh data, low storage requirements
    - Trade-off: Higher latency, load on source
    - Use when: Data freshness is critical
+   - Status: Under development
 
-**Hybrid** (Recommended)
-   - Automatically switches between materialized and virtualized
+**Hybrid** (Coming Q2 2025) 🔄 PLANNED
+   - Would automatically switch between materialized and virtualized
    - Best for: Optimal balance of performance and freshness
    - Trade-off: More complex configuration
    - Use when: You want automatic optimization
+   - Status: Design phase
 
 Configuration
 --------------
@@ -33,26 +41,14 @@ Set your mode in ``config/global.yaml``:
 
 .. code-block:: yaml
 
-   # Choose mode: materialized, virtualized, or hybrid
-   feature_store:
-     mode: hybrid
-
-For materialized mode, specify storage:
-
-.. code-block:: yaml
-
+   # Currently only materialized is available
    feature_store:
      mode: materialized
      storage_path: /data/feature_store
-     storage_format: parquet  # parquet, delta, orc
+     storage_format: parquet  # parquet, delta, or orc
+     cache_ttl_hours: 24     # How long to keep cache in memory
 
-For virtualized mode, specify source:
-
-.. code-block:: yaml
-
-   feature_store:
-     mode: virtualized
-     source_schema: silver  # or gold
+**Important:** Virtualized and Hybrid modes are not yet available. Please use Materialized mode for production deployments.
 
 Using Features in Pipelines
 ----------------------------
@@ -79,25 +75,23 @@ Using Features in Pipelines
        })
        return features
 
-When to Use Each Mode
----------------------
+Current Recommendations
+------------------------
 
 .. code-block:: text
 
-   Use Materialized If:
+   Use Materialized Mode When:
    ├─ You need sub-second response times
    ├─ Features are expensive to compute
-   └─ Data freshness of hours/days is acceptable
+   ├─ Data freshness of hours/days is acceptable
+   └─ You want production-ready feature storage
 
-   Use Virtualized If:
-   ├─ You need always-fresh data
-   ├─ Storage is limited
-   └─ You can afford latency
+   Planned Modes (Q1-Q2 2025):
+   ├─ Virtualized: On-demand computation from source layers
+   └─ Hybrid: Automatic optimization between modes
 
-   Use Hybrid If:
-   ├─ You want automatic optimization
-   ├─ You have variable workload patterns
-   └─ You want production reliability
+**Current Status:** Only Materialized mode is available in production.
+For roadmap updates, see the main README.md
 
 Next Steps
 ----------
