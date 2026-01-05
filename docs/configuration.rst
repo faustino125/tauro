@@ -605,7 +605,7 @@ Next Steps
 
    deduplicate_customers:
      type: "transform"
-     module: "core.exec.node_executor"
+     module: "tauro.exec.node_executor"
      class: "SparkSQLNode"
      params:
        sql: |
@@ -623,7 +623,7 @@ Next Steps
    # Gold Nodes
    calculate_daily_sales:
      type: "aggregation"
-     module: "core.exec.node_executor"
+     module: "tauro.exec.node_executor"
      class: "AggregationNode"
      params:
        input: "silver_sales"

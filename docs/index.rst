@@ -1,71 +1,87 @@
-.. Tauro documentation master file
-
 =============================
 Tauro – Data Pipeline Framework
 =============================
 
-Tauro is a Python-first framework that streamlines the lifecycle of data engineering workloads. Define deterministic pipelines, validate inputs, and execute batch or streaming jobs with the same operational controls you expect in production.
+Tauro is a production-ready Python framework for building, deploying, and managing data pipelines at scale. 
+Whether you're processing batch data, handling real-time streams, or building machine learning workflows, 
+Tauro provides a complete, unified solution.
 
-.. image:: https://img.shields.io/badge/python-3.10%2B-blue.svg
-   :target: https://www.python.org/downloads/
-   :alt: Supported Python versions
+**Requirements**: Python 3.10+ | **License**: MIT | **Status**: Production Ready
 
-.. image:: https://img.shields.io/badge/license-MIT-green.svg
-   :target: https://github.com/faustino125/tauro/blob/main/LICENSE
-   :alt: MIT License
-
-.. image:: https://img.shields.io/badge/pypi-v0.1.4-orange.svg
-   :target: https://pypi.org/project/tauro/
-   :alt: PyPI release
-
-.. contents:: **Documentation Overview**
+.. contents:: Contents
    :local:
    :depth: 2
 
-Why Tauro?
-===========
+Core Capabilities
+==================
 
-**Build reliable pipelines** through composable, YAML-driven definitions that pair well with CI/CD workflows.
+**Batch Processing**
+   Define and execute daily or periodic ETL jobs with simple YAML configuration. 
+   Automatically parallelize processing of millions of rows.
 
-**Switch between batch, streaming, and ML workloads** without changing the way you organize code or configuration.
+**Real-Time Streaming**
+   Consume data from Kafka, cloud streams, or files and process events in real time. 
+   Built-in backpressure handling ensures system stability.
 
-**Operate safely in production** thanks to built-in validation, retries, and observability hooks.
+**Machine Learning Pipelines**
+   Prepare data, train models, and automatically track experiments with integrated MLflow support. 
+   Ensure reproducible results across environments.
 
-**Deploy anywhere**—local development, Databricks, Kubernetes, or traditional Spark clusters—without rewriting the pipeline logic.
+**Feature Management**
+   Define, version, and manage features for ML pipelines with built-in governance. 
+   Keep feature data fresh and consistent for production models.
 
-What Can Tauro Help You Do?
-===========================
+**Multi-Environment Deployment**
+   Develop locally and deploy to production without code changes. 
+   Works with Databricks, Spark, Kubernetes, and cloud platforms.
 
-- **Batch Processing**: Schedule ETL jobs, incrementally load data, and emit artifacts to lakes or warehouses.
-- **Streaming Pipelines**: Consume Kafka or file streams with backpressure-aware executors.
-- **Machine Learning Workflows**: Prepare data, orchestrate training runs, and track metadata through MLflow or similar tools.
-- **Feature Stores**: Define materialized, virtualized, and hybrid feature stores with governance baked in.
-- **Feature Store Materialization**: Keep features fresh and consistent for production and experimentation.
+Key Features
+============
+
+**Simple Configuration**
+   Define pipelines using clear, readable YAML configuration. No complex code required.
+
+**Write Once, Deploy Anywhere**
+   Run the same pipeline locally for development and in production on Databricks or Spark clusters.
+
+**Production-Ready**
+   Built-in validation, error handling, automatic retries, and comprehensive logging out of the box.
+
+**Enterprise-Grade Reliability**
+   Designed for real-world data engineering with monitoring integration and observability.
+
+**Multi-Cloud & Multi-Platform**
+   Compatible with AWS, Azure, GCP, Databricks, and traditional Spark environments.
+
+**Complete Solution**
+   Covers batch processing, streaming, ML tracking, feature management, and deployment—all integrated.
 
 Quick Start
 ===========
 
-1. Install Tauro:
+1. **Install Tauro:**
 
    .. code-block:: bash
 
       pip install tauro
 
-2. Generate a starter project:
+2. **Create a project:**
 
    .. code-block:: bash
 
       tauro template --template medallion_basic --project-name my_project
       cd my_project
 
-3. Run a pipeline:
+3. **Run your first pipeline:**
 
    .. code-block:: bash
 
       tauro run --env dev --pipeline sample_pipeline
 
-Documentation Organization
-==========================
+Your pipeline is now running. See :doc:`getting_started` for a complete walkthrough.
+
+Documentation
+==============
 
 .. toctree::
    :maxdepth: 2
@@ -77,26 +93,13 @@ Documentation Organization
 
 .. toctree::
    :maxdepth: 2
-   :caption: Using Tauro
+   :caption: User Guides
 
    quick_reference
    cli_usage
-   library_usage
-   migration_guide
    configuration
    best_practices
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Integration & Advanced Topics
-
-   databricks_setup
-   feature_store
-   advanced/architecture
-   advanced/security
-   advanced/performance
-   advanced/testing
-   advanced/troubleshooting
+   library_usage
 
 .. toctree::
    :maxdepth: 2
@@ -110,180 +113,37 @@ Documentation Organization
 
 .. toctree::
    :maxdepth: 2
-   :caption: API & Reference
-
-   api/reference
-   glossary
-   changelog
-   contributing
-   license
-
-Getting Help
-============
-
-- **New to Tauro?** Start with :doc:`getting_started`
-- **Running batch pipelines?** Follow :doc:`tutorials/batch_etl`
-- **Streaming data?** Use :doc:`tutorials/streaming`
-- **Building ML pipelines?** Check :doc:`tutorials/mlops`
-- **Deployment questions?** Review :doc:`advanced/architecture`
-- **Facing issues?** See :doc:`advanced/troubleshooting`
-- **Still stuck?** File an issue on `GitHub <https://github.com/faustino125/tauro/issues>`_.. Tauro documentation master file
-
-=============================
-Tauro - Data Pipeline Framework
-=============================
-
-**Tauro** is a Python framework that makes it simple to build, test, and manage data pipelines. Whether you're processing data in batch, handling real-time streams, or training machine learning models, Tauro provides the tools you need with minimal overhead.
-
-.. image:: https://img.shields.io/badge/python-3.10%2B-blue.svg
-   :target: https://www.python.org/downloads/
-   :alt: Python Version
-
-.. image:: https://img.shields.io/badge/license-MIT-green.svg
-   :target: https://github.com/faustino125/tauro/blob/main/LICENSE
-   :alt: License
-
-.. image:: https://img.shields.io/badge/pypi-v0.1.4-orange.svg
-   :target: https://pypi.org/project/tauro/
-   :alt: PyPI version
-
-.. contents:: **Table of Contents**
-   :local:
-   :depth: 2
-
-What Can You Do With Tauro?
-============================
-
-✅ **Process Data in Batches**
-   - Daily or periodic ETL jobs that transform data from one format to another
-   - Incremental loading with date ranges
-   - Scheduled workflows
-
-✅ **Handle Real-Time Data**
-   - Stream data from Kafka, files, or other sources
-   - Process events as they arrive
-   - Write results to data lakes or warehouses
-
-✅ **Build ML Pipelines**
-   - Prepare data for training
-   - Automatically track experiments and models
-   - Reproduce results consistently
-
-✅ **Flexible Deployment Options**
-   - Run locally during development
-   - Deploy to Databricks or Spark clusters for scale
-   - Same code works everywhere
-
-Why Choose Tauro?
-==================
-
-**Simple Configuration** 
-   Define your pipelines using clear YAML files—no complex code needed
-
-**Local & Production Ready**
-   Develop on your laptop, deploy to production without changes
-
-**Production Safe**
-   Input validation, error handling, and automatic retries built-in
-
-**Enterprise Grade**
-   Designed for real-world data engineering with monitoring and logging
-
-**Multi-Cloud Support**
-   Works with AWS, Azure, GCP, and Databricks
-
-**Complete Solution**
-   Handles batch processing, streaming, ML tracking, and feature management
-
-Quick Start
-===========
-
-**1. Install**
-
-.. code-block:: bash
-
-   pip install tauro
-
-**2. Create a Project**
-
-.. code-block:: bash
-
-   tauro template --template medallion_basic --project-name my_project
-   cd my_project
-
-**3. Run Your First Pipeline**
-
-.. code-block:: bash
-
-   tauro run --env dev --pipeline sample_pipeline
-
-Done! Your pipeline is running.
-
-Documentation Structure
-=======================
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Getting Started
-
-   installation
-   getting_started
-   how_tauro_works
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Using Tauro
-
-   quick_reference
-   cli_usage
-   library_usage
-   migration_guide
-   configuration
-   best_practices
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Integration & Advanced
+   :caption: Production & Operations
 
    databricks_setup
    feature_store
-   advanced/architecture
-   advanced/security
    advanced/performance
-   advanced/testing
+   advanced/security
    advanced/troubleshooting
 
 .. toctree::
    :maxdepth: 2
-   :caption: Learning by Example
-
-   tutorials/batch_etl
-   tutorials/streaming
-   tutorials/mlops
-   tutorials/airflow_integration
-   tutorials/fastapi_integration
-
-.. toctree::
-   :maxdepth: 2
-   :caption: API Reference
-
-   api/reference
-
-.. toctree::
-   :maxdepth: 1
    :caption: Reference
 
    glossary
+   api/reference
+   migration_guide
    changelog
-   contributing
-   license
 
 Getting Help
 ============
 
-- **New to Tauro?** Start with :doc:`getting_started`
-- **Build batch pipelines?** Check out :doc:`tutorials/batch_etl`
-- **Real-time data?** See :doc:`tutorials/streaming`
-- **ML pipelines?** Read :doc:`tutorials/mlops`
-- **Something broken?** Visit :doc:`advanced/troubleshooting`
-- **Questions?** Open an issue on `GitHub <https://github.com/faustino125/tauro>`_
+**First time with Tauro?**
+   Start with :doc:`installation` and :doc:`getting_started`.
+
+**Building a specific type of pipeline?**
+   See the tutorials: :doc:`tutorials/batch_etl`, :doc:`tutorials/streaming`, or :doc:`tutorials/mlops`.
+
+**Deploying to production?**
+   Read :doc:`databricks_setup`, :doc:`advanced/security`, and :doc:`advanced/performance`.
+
+**Troubleshooting issues?**
+   Check :doc:`advanced/troubleshooting` and :doc:`glossary`.
+
+**Questions or issues?**
+   Open an issue on `GitHub <https://github.com/faustino125/tauro/issues>`_.

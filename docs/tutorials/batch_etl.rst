@@ -118,7 +118,7 @@ Edit ``config/base/nodes.yaml``:
    # Bronze: Load raw data
    load_raw_sales:
      type: "input"
-     module: "core.io.readers"
+     module: "tauro.io.readers"
      class: "CSVReader"
      params:
        input_key: "raw_sales"
@@ -128,7 +128,7 @@ Edit ``config/base/nodes.yaml``:
    # Silver: Clean and validate
    clean_sales:
      type: "transform"
-     module: "core.exec.node_executor"
+     module: "tauro.exec.node_executor"
      class: "PythonNode"
      params:
        function: "transformations.clean_sales_data"
@@ -140,7 +140,7 @@ Edit ``config/base/nodes.yaml``:
    # Silver: Enrich with customer data
    enrich_sales:
      type: "transform"
-     module: "core.exec.node_executor"
+     module: "tauro.exec.node_executor"
      class: "SparkSQLNode"
      params:
        sql: |
@@ -158,7 +158,7 @@ Edit ``config/base/nodes.yaml``:
    # Gold: Calculate daily metrics
    calculate_daily_metrics:
      type: "aggregation"
-     module: "core.exec.node_executor"
+     module: "tauro.exec.node_executor"
      class: "AggregationNode"
      params:
        input: "enriched_sales_df"
